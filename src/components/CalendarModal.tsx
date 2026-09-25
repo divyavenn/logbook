@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { CircleAlert } from 'lucide-react';
-import { api, errorMessage } from '../api';
+import { addCalendarSubscription, deleteCalendarSubscription, errorMessage, getCalendarSubscriptions } from '../api';
 import { Field } from '../styles';
+import type { CalendarSubscription } from '../types';
 import { Modal } from './Modal';
-
-type Subscription = {
-  id: number; name: string; host: string; status: 'connecting' | 'connected' | 'error'; error: string | null; created_at: string;
-};
 
 const Content = styled.div`
   display: grid; gap: 10px; padding: 8px 8px 8px 16px;
@@ -54,7 +51,7 @@ const ExplanationText = styled.p<{ $error?: boolean }>`
 `;
 
 export function CalendarModal({ open, onClose, onChange }: { open: boolean; onClose: () => void; onChange: () => Promise<void> }) {
-  const [calendars, setCalendars] = useState<Subscription[]>([]);
+  const [calendars, setCalendars] = useState<CalendarSubscription[]>([]);
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -68,12 +65,12 @@ export function CalendarModal({ open, onClose, onChange }: { open: boolean; onCl
   useEffect(() => {
     if (!open) return;
     setError(''); setSelectedErrorId(null); setHelpOpen(false);
-    void api<Subscription[]>('/calendars').then(setCalendars).catch(value => setError(errorMessage(value)));
+    void getCalendarSubscriptions().then(setCalendars).catch(value => setError(errorMessage(value)));
   }, [open]);
   useEffect(() => {
     if (!open || !calendars.some(calendar => calendar.status === 'connecting')) return;
     const timeout = setTimeout(() => {
-      void api<Subscription[]>('/calendars').then(next => {
+      void getCalendarSubscriptions().then(next => {
         const connected = calendars.some(calendar => calendar.status === 'connecting' && next.some(item => item.id === calendar.id && item.status === 'connected'));
         setCalendars(next);
         if (connected) void onChange().catch(value => setError(errorMessage(value)));
@@ -89,7 +86,7 @@ export function CalendarModal({ open, onClose, onChange }: { open: boolean; onCl
     const version = ++requestVersion.current;
     request.current = controller;
     try {
-      const calendar = await api<Subscription>('/calendars', 'POST', { url }, controller.signal);
+      const calendar = await addCalendarSubscription(url, controller.signal);
       if (version !== requestVersion.current) return;
       setCalendars(current => [...current, calendar]); setUrl('');
     } catch (value) {
@@ -107,11 +104,11 @@ export function CalendarModal({ open, onClose, onChange }: { open: boolean; onCl
     request.current = null;
     setBusy(false);
   };
-  const remove = async (calendar: Subscription) => {
+  const remove = async (calendar: CalendarSubscription) => {
     if (busy) return;
     setBusy(true); setError(''); setSelectedErrorId(null);
     try {
-      await api(`/calendars/${calendar.id}`, 'DELETE');
+      await deleteCalendarSubscription(calendar.id);
       setCalendars(current => current.filter(item => item.id !== calendar.id));
       void onChange().catch(value => setError(errorMessage(value)));
     } catch (value) { setError(errorMessage(value)); }

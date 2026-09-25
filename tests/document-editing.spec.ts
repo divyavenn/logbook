@@ -216,6 +216,32 @@ for (const kind of ['notes', 'tasks'] as const) {
   });
 }
 
+test('mobile insertParagraph advances from a saved entry without losing its text', async ({ browser, baseURL, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const row = await (await request.post('/api/notes', { data: { date: today, content: 'Mobile saved entry' } })).json();
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  const mobile = await context.newPage();
+  try {
+    await mobile.goto('/');
+    await mobile.locator(`[data-kind="notes"][data-item-id="${row.id}"] [role="group"]`).click();
+    const editor = mobile.getByRole('textbox', { name: 'Edit note', exact: true });
+    await expect(editor).toBeFocused();
+    await editor.pressSequentially(' with more text');
+    const result = await editor.evaluate(element => {
+      const event = new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertParagraph' });
+      return { dispatched: element.dispatchEvent(event), prevented: event.defaultPrevented };
+    });
+    expect(result).toEqual({ dispatched: false, prevented: true });
+    const next = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
+    await expect(next).toBeFocused();
+    await expect(next.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
+    await expect(mobile.getByRole('group', { name: 'Mobile saved entry with more text', exact: true })).toBeVisible();
+    await expect(mobile.getByText('Retry saving', { exact: true })).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
 for (const kind of ['notes', 'tasks'] as const) {
   test(`Tab indents an empty new ${kind} entry under the previous entry`, async ({ page, request }) => {
     const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();

@@ -22,7 +22,8 @@ from .hierarchy import descendants, next_position, place, remove_preserving_chil
 from .tasks import visible_tasks
 from .history import snapshot, record, restore
 from .agent import AgentJournal, AgentQuery, DISCOVERY_LINKS, READ_HEADERS, markdown_journal, read_journal
-from .calendars import CalendarLoadError, calendar_content, calendar_host, calendar_name, drop_calendar, events_by_day, load_calendar, normalize_calendar_url, seed_calendar
+from .calendars import CalendarLoadError, calendar_content, calendar_host, calendar_name, drop_calendar, load_calendar, normalize_calendar_url
+from .calendar_store import events_from_subscriptions
 
 
 def utcnow():
@@ -245,28 +246,39 @@ class CalendarSubscriptionInput(BaseModel):
 
     @field_validator('url')
     @classmethod
-    def clean_url(cls, value):
+    def clean_url(cls, value: str) -> str:
         try:
             return normalize_calendar_url(value)
         except ValueError as error:
             raise ValueError(str(error)) from error
 
 
-def calendar_subscription(row):
-    return {'id': row['id'], 'name': row['name'] or calendar_host(row['url']), 'host': calendar_host(row['url']),
-            'status': row['status'], 'error': row['error'], 'created_at': row['created_at']}
+class CalendarSubscriptionOutput(BaseModel):
+    id: int
+    name: str
+    host: str
+    status: Literal['connecting', 'connected', 'error']
+    error: str | None
+    created_at: str
+
+
+def calendar_subscription(row: sqlite3.Row) -> CalendarSubscriptionOutput:
+    return CalendarSubscriptionOutput(
+        id=row['id'], name=row['name'] or calendar_host(row['url']), host=calendar_host(row['url']),
+        status=row['status'], error=row['error'], created_at=row['created_at'],
+    )
 
 
 MAX_CALENDAR_SUBSCRIPTIONS = 5
 
 
 @app.get('/api/calendars')
-def list_calendars():
+def list_calendars() -> list[CalendarSubscriptionOutput]:
     with connection() as db:
         return [calendar_subscription(row) for row in db.execute('SELECT * FROM calendar_subscriptions ORDER BY id')]
 
 
-def connect_calendar(calendar_id: int, url: str):
+def connect_calendar(calendar_id: int, url: str) -> None:
     try:
         calendar = load_calendar(url, force=True)
         name, status, error, feed_cache = calendar_name(calendar, url), 'connected', None, calendar_content(url)
@@ -278,7 +290,7 @@ def connect_calendar(calendar_id: int, url: str):
 
 
 @app.post('/api/calendars', status_code=201)
-def add_calendar(body: CalendarSubscriptionInput, background_tasks: BackgroundTasks):
+def add_calendar(body: CalendarSubscriptionInput, background_tasks: BackgroundTasks) -> CalendarSubscriptionOutput:
     with connection() as db:
         existing = db.execute('SELECT * FROM calendar_subscriptions WHERE url = ?', (body.url,)).fetchone()
         if existing:
@@ -303,7 +315,7 @@ def add_calendar(body: CalendarSubscriptionInput, background_tasks: BackgroundTa
 
 
 @app.delete('/api/calendars/{calendar_id}', status_code=204)
-def delete_calendar(calendar_id: int):
+def delete_calendar(calendar_id: int) -> Response:
     with connection() as db:
         row = db.execute('SELECT * FROM calendar_subscriptions WHERE id = ?', (calendar_id,)).fetchone()
         if row:
@@ -324,23 +336,13 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
     today_date = now.astimezone(zone).date()
     today = today_date.isoformat()
     with connection() as db:
-        calendar_rows = [dict(row) for row in db.execute("SELECT id, url, feed_cache FROM calendar_subscriptions WHERE status = 'connected' ORDER BY id")]
         first_entry_date = db.execute(
             "SELECT MIN(days.date) FROM entries JOIN days ON entries.day_id = days.id"
         ).fetchone()[0]
-    for row in calendar_rows:
-        seed_calendar(row['url'], row['feed_cache'])
-    calendar_urls = [row['url'] for row in calendar_rows]
     calendar_floor = CalendarDate.fromisoformat(first_entry_date) if first_entry_date else today_date
     calendar_end = on + timedelta(days=1) if on else before or today_date + timedelta(days=1)
     calendar_start = max(on or calendar_floor, calendar_floor)
-    calendar_days = events_by_day(calendar_urls, calendar_start, calendar_end, zone)
-    refreshed_feeds = [(calendar_content(row['url']), row['id'], row['feed_cache']) for row in calendar_rows]
-    if any(content is not None and content != previous for content, _calendar_id, previous in refreshed_feeds):
-        with connection() as db:
-            for content, calendar_id, previous in refreshed_feeds:
-                if content is not None and content != previous:
-                    db.execute('UPDATE calendar_subscriptions SET feed_cache = ? WHERE id = ?', (content, calendar_id))
+    calendar_days = events_from_subscriptions(calendar_start, calendar_end, zone)
     with connection() as db:
         sessions = [dict(r) for r in db.execute("SELECT * FROM sessions ORDER BY started_at")]
         totals = daily_totals(sessions, zone, now)
@@ -369,6 +371,7 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
         days = []
         for d in selected:
             day_entries = entries.get(d, [])
+            # `entries` is canonical. Keep these projections only for older API consumers.
             day_notes = [row for row in day_entries if row['kind'] == 'notes']
             day_tasks = [row for row in day_entries if row['kind'] == 'tasks']
             days.append({"date": d, "notes": day_notes, "tasks": day_tasks,

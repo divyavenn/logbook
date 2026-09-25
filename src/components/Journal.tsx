@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import styled, { css } from 'styled-components';
 import { dateObject, duration, errorMessage } from '../api';
-import type { CalendarEvent, Day, Task } from '../types';
+import type { CalendarEvent, JournalDay, Task } from '../types';
 import { TextButton } from '../styles';
 import { Outline } from './Outline';
 import { useJournalContext } from '../JournalContext';
@@ -135,7 +135,7 @@ export function Todos({ tasks, refresh, notify }: { tasks: Task[] } & Actions) {
 }
 
 export function Journal({ days, today, refresh, notify, openSessions, sessionsEnabled = true, showHistory = false, secondsForDay, loadMore, hasMore, scrollRoot }: {
-  days: Day[]; today: string; openSessions: (date: string) => void; secondsForDay: (day: Day) => number;
+  days: JournalDay[]; today: string; openSessions: (date: string) => void; secondsForDay: (day: JournalDay) => number;
   sessionsEnabled?: boolean; showHistory?: boolean; loadMore: () => Promise<void>; hasMore: boolean; scrollRoot: RefObject<HTMLDivElement | null>;
 } & Actions) {
   const [loadingMore, setLoadingMore] = useState(false);
@@ -166,10 +166,7 @@ export function Journal({ days, today, refresh, notify, openSessions, sessionsEn
       const date = dateObject(day.date);
       const seconds = secondsForDay(day);
       const title = isToday ? 'Today' : date.toDateString() === yesterday.toDateString() ? 'Yesterday' : date.toLocaleDateString(undefined, { weekday: 'long' });
-      const entries = day.entries?.length ? day.entries : [
-        ...day.notes.map(note => ({ ...note, kind: 'notes' as const })),
-        ...(day.tasks ?? []).map(task => ({ ...task, kind: 'tasks' as const })),
-      ];
+      const entries = day.entries;
       const targeted = target && entries.some(entry => entry.kind === target.kind && entry.id === target.id);
       return <DayBlock key={day.date} $today={isToday || !!targeted} $showHistory={showHistory} aria-label={`${title}, ${day.date}`}
         onClick={event => {
@@ -185,7 +182,7 @@ export function Journal({ days, today, refresh, notify, openSessions, sessionsEn
           {day.events.map(event => {
             const text = eventText(event);
             const content = <><EventTitle data-calendar-event-title>{event.title}</EventTitle> <EventMeta data-calendar-event-meta>{eventDetail(event)}</EventMeta></>;
-            const links = [...new Set(event.links ?? (event.url ? [event.url] : []))];
+            const links = event.links;
             const location = event.location?.trim() || '';
             const description = event.description?.trim() || '';
             const extraLinks = links.filter(link => !location.includes(link) && !description.includes(link));

@@ -765,6 +765,42 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     }
     return toggle ?? <Marker data-focus-chrome $task={rowKind === 'tasks'} aria-hidden="true" />;
   };
+  const advance = () => {
+    if (!current.current.content.trim() && !current.current.tags.length && current.current.id !== null) {
+      persist({ ...current.current, content: '', tags: [] });
+    }
+    if (!current.current.content.trim() && !current.current.tags.length && current.current.id === null) {
+      if (current.current.parentId !== null) void run(() => move(true));
+      return;
+    }
+    void run(async () => {
+      const split = input.current?.splitAtSelection();
+      const hiddenTag = current.current.hiddenTag ?? (activeTag && current.current.savedTags.includes(activeTag) ? activeTag : null);
+      const keepHiddenTag = (content: string, tags: string[], value = hiddenTag) =>
+        [...new Set([...tags, ...(value && (content.trim() || tags.length) ? [value] : [])])];
+      if (split) persist({ ...current.current, content: split.before.content, tags: keepHiddenTag(split.before.content, split.before.tags) });
+      const snapshot = current.current;
+      let id = await save();
+      // The editor stays responsive while a request is in flight. If the
+      // user typed more, acknowledge that newer revision before Enter
+      // advances to the next row; never clear unacknowledged text.
+      if (current.current.clientId === snapshot.clientId &&
+          (current.current.content !== current.current.saved || JSON.stringify(current.current.tags) !== JSON.stringify(current.current.savedTags))) {
+        id = await save();
+      }
+      const parent = snapshot.parentId === null ? null : records.current.find(item => item.id === snapshot.parentId);
+      const nextKind = parent ? entryKind(parent) : defaultKind;
+      const next = id ? blank(records.current, true, snapshot.parentId, id, nextKind) : blank(records.current, composer);
+      const splitDraft = split?.after.content || split?.after.tags.length
+        ? { ...next, content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags, next.hiddenTag) }
+        : next;
+      if (split?.after.content || split?.after.tags.length) pendingSelection.current = { anchor: 0, head: 0 };
+      // Make the next rendered row interactive immediately. Otherwise a
+      // very fast click can land between this render and run()'s finally.
+      lock.current = false;
+      flushSync(() => persist(splitDraft));
+    });
+  };
   const renderDraft = (depth: number): ReactNode => <DraftItem key="draft" data-depth={depth}
     data-outline-key={key} data-kind={draft.kind} data-item-id={draft.id ?? 'draft'}
     onPointerLeave={() => clearPreview(draft.id)}
@@ -773,6 +809,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     $leaving={completing === draft.id && completing !== null}>
     <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed subtask' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
       onBoundary={boundary} onVerticalBoundary={verticalBoundary} onSelectDocument={selectDocument}
+      onEnter={advance}
       onChange={(content, tags) => {
         verticalX.current = null;
         const hiddenTag = current.current.hiddenTag ?? (activeTag && current.current.savedTags.includes(activeTag) ? activeTag : null);
@@ -804,9 +841,6 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
           restoringFocus.current = false;
         }
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') verticalX.current = null;
-        if (event.key === 'Enter' && !(event.currentTarget as HTMLElement).textContent?.trim() && current.current.id !== null) {
-          persist({ ...current.current, content: '', tags: [] });
-        }
         if (event.key === 'Tab') {
           if (event.shiftKey && current.current.parentId === null) return;
           event.preventDefault();
@@ -842,37 +876,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
           }
         } else if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
-          if (!current.current.content.trim() && !current.current.tags.length && !current.current.id) {
-            if (current.current.parentId !== null) void run(() => move(true));
-            return;
-          }
-          void run(async () => {
-            const split = input.current?.splitAtSelection();
-            const hiddenTag = current.current.hiddenTag ?? (activeTag && current.current.savedTags.includes(activeTag) ? activeTag : null);
-            const keepHiddenTag = (content: string, tags: string[], value = hiddenTag) =>
-              [...new Set([...tags, ...(value && (content.trim() || tags.length) ? [value] : [])])];
-            if (split) persist({ ...current.current, content: split.before.content, tags: keepHiddenTag(split.before.content, split.before.tags) });
-            const snapshot = current.current;
-            let id = await save();
-            // The editor stays responsive while a request is in flight. If the
-            // user typed more, acknowledge that newer revision before Enter
-            // advances to the next row; never clear unacknowledged text.
-            if (current.current.clientId === snapshot.clientId &&
-                (current.current.content !== current.current.saved || JSON.stringify(current.current.tags) !== JSON.stringify(current.current.savedTags))) {
-              id = await save();
-            }
-            const parent = snapshot.parentId === null ? null : records.current.find(item => item.id === snapshot.parentId);
-            const nextKind = parent ? entryKind(parent) : defaultKind;
-            const next = id ? blank(records.current, true, snapshot.parentId, id, nextKind) : blank(records.current, composer);
-            const splitDraft = split?.after.content || split?.after.tags.length
-              ? { ...next, content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags, next.hiddenTag) }
-              : next;
-            if (split?.after.content || split?.after.tags.length) pendingSelection.current = { anchor: 0, head: 0 };
-            // Make the next rendered row interactive immediately. Otherwise a
-            // very fast click can land between this render and run()'s finally.
-            lock.current = false;
-            flushSync(() => persist(splitDraft));
-          });
+          advance();
         } else if (event.key === 'Backspace' && current.current.mode === 'new' && !current.current.content && !current.current.tags.length && !current.current.id) {
           event.preventDefault(); dismissEmptyDraft();
         } else if (event.key === 'Escape' && draft.mode === 'edit') {

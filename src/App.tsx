@@ -1,9 +1,9 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import styled, { css, keyframes } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
-import { api, errorMessage, localDate, recoverEarlierDrafts, timerDuration } from './api';
+import { api, errorMessage, getJournal, localDate, recoverEarlierDrafts, timerDuration } from './api';
 import { FocusSound } from './audio';
-import type { Day, JournalData, Session } from './types';
+import type { JournalData, JournalDay, Session } from './types';
 import { Button, Muted, TextButton, press } from './styles';
 import { Journal, Todos } from './components/Journal';
 import { TagTabs } from './components/TagTabs';
@@ -12,11 +12,10 @@ import { Modal } from './components/Modal';
 import type { SearchHit } from './components/SearchModal';
 import { documentUndo, recordCompletion } from './documentHistory';
 import { compactViewport, shortViewport } from './layout';
+import { usePager } from './usePager';
 
 const JOURNAL_PAGE_SIZE = 14;
 const MOBILE_VIEWS = ['todos', 'log', 'tags'] as const;
-type MobileView = typeof MOBILE_VIEWS[number];
-const mobileViewIndex = (view: MobileView) => MOBILE_VIEWS.indexOf(view);
 const REPOSITORY_URL = import.meta.env.VITE_REPOSITORY_URL || 'https://github.com/divyavenn/still';
 const SessionsModal = lazy(() => import('./components/SessionsModal').then(module => ({ default: module.SessionsModal })));
 const StatsModal = lazy(() => import('./components/StatsModal').then(module => ({ default: module.StatsModal })));
@@ -269,10 +268,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paged, setPaged] = useState(() => window.matchMedia(compactViewport).matches);
   const viewportWidth = useRef(window.innerWidth);
-  const [mobileView, setMobileView] = useState<MobileView>('log');
-  const mobileViewRef = useRef<MobileView>('log');
-  const mobilePager = useRef<HTMLDivElement>(null);
-  const mobileScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { pagerRef: mobilePager, selectView: selectMobileView, trackScroll: trackMobileScroll, view: mobileView } = usePager(MOBILE_VIEWS, 'log', paged);
   const quietStatus = useRef<HTMLDivElement>(null);
   const quietStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
@@ -287,26 +283,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
   const notify = useCallback((text: string) => setMessage(text), []);
-  const commitMobileView = useCallback((next: MobileView) => {
-    mobileViewRef.current = next;
-    setMobileView(previous => previous === next ? previous : next);
-  }, []);
-  const selectMobileView = useCallback((next: MobileView) => {
-    commitMobileView(next);
-    const pager = mobilePager.current;
-    if (!pager) return;
-    pager.scrollTo({
-      left: mobileViewIndex(next) * pager.clientWidth,
-      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-    });
-  }, [commitMobileView]);
-  const trackMobileScroll = useCallback((pager: HTMLDivElement) => {
-    if (mobileScrollTimer.current) clearTimeout(mobileScrollTimer.current);
-    mobileScrollTimer.current = setTimeout(() => {
-      const index = Math.max(0, Math.min(MOBILE_VIEWS.length - 1, Math.round(pager.scrollLeft / pager.clientWidth)));
-      commitMobileView(MOBILE_VIEWS[index]);
-    }, 80);
-  }, [commitMobileView]);
   useEffect(() => {
     const media = window.matchMedia(compactViewport);
     const coarse = window.matchMedia('(pointer: coarse)');
@@ -320,19 +296,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     media.addEventListener('change', resize);
     window.addEventListener('resize', resize);
     return () => { media.removeEventListener('change', resize); window.removeEventListener('resize', resize); };
-  }, []);
-  useLayoutEffect(() => {
-    if (!paged) return;
-    const align = () => {
-      const pager = mobilePager.current;
-      if (pager) pager.scrollLeft = mobileViewIndex(mobileViewRef.current) * pager.clientWidth;
-    };
-    align();
-    window.addEventListener('resize', align);
-    return () => window.removeEventListener('resize', align);
-  }, [paged]);
-  useEffect(() => () => {
-    if (mobileScrollTimer.current) clearTimeout(mobileScrollTimer.current);
   }, []);
   useEffect(() => {
     if (locked) return;
@@ -364,13 +327,13 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   }, []);
   const refresh = useCallback(async (includeHistory = true) => {
     const sequence = ++generation.current;
-    const tagQuery = tagRef.current ? '&tag=' + encodeURIComponent(tagRef.current) : '';
-    let response = await api<JournalData>(`/journal?limit=${JOURNAL_PAGE_SIZE}${tagQuery}`);
+    const tag = tagRef.current;
+    let response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag });
     try {
-      if (await recoverEarlierDrafts(response.today)) response = await api<JournalData>(`/journal?limit=${JOURNAL_PAGE_SIZE}${tagQuery}`);
+      if (await recoverEarlierDrafts(response.today)) response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag });
     } catch { notify('Could not save an earlier draft. Retrying automatically.'); }
     while (includeHistory && loadedThrough.current && response.next_cursor && response.next_cursor > loadedThrough.current) {
-      const more = await api<JournalData>(`/journal?before=${response.next_cursor}&limit=${JOURNAL_PAGE_SIZE}${tagQuery}`);
+      const more = await getJournal({ before: response.next_cursor, limit: JOURNAL_PAGE_SIZE, tag });
       response.days.push(...more.days);
       response.next_cursor = more.next_cursor;
     }
@@ -467,7 +430,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     if (audible) { sound.current.stop(); setAudible(false); localStorage.setItem('still-muted', 'true'); }
     else { try { await sound.current.start(volume); setAudible(true); localStorage.setItem('still-muted', 'false'); } catch { notify('Your browser couldn’t start audio. The timer is still tracking your focus.'); } }
   };
-  const secondsForDay = (day: Day) => {
+  const secondsForDay = (day: JournalDay) => {
     if (!active || !data || day.date !== data.today) return day.focused_seconds;
     return day.focused_seconds + Math.max(0, (adjustedNow - new Date(data.server_time).getTime()) / 1000);
   };
@@ -485,7 +448,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     const cursor = data?.next_cursor;
     if (!cursor) return;
     const filter = tagRef.current;
-    const more = await api<JournalData>(`/journal?before=${cursor}&limit=${JOURNAL_PAGE_SIZE}${filter ? '&tag=' + encodeURIComponent(filter) : ''}`);
+    const more = await getJournal({ before: cursor, limit: JOURNAL_PAGE_SIZE, tag: filter });
     if (filter !== tagRef.current) return;
     loadedThrough.current = more.days.at(-1)?.date ?? loadedThrough.current;
     setData(current => current ? { ...current, days: [...current.days, ...more.days.filter(day => !current.days.some(existing => existing.date === day.date))], next_cursor: more.next_cursor } : current);
@@ -497,7 +460,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       tagRef.current = null; loadedThrough.current = null; setActiveTag(null); setTarget(null);
       await refresh();
       if (hit.date) {
-        const result = await api<JournalData>(`/journal?on=${hit.date}`);
+        const result = await getJournal({ on: hit.date });
         setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== hit.date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
       }
       setSearchOpen(false);

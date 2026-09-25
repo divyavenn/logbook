@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import styled from 'styled-components';
-import type { Tag } from '../JournalContext';
+import type { Tag } from '../types';
 import { narrowViewport } from '../layout';
 
 const Backdrop = styled.div<{ $open: boolean }>`

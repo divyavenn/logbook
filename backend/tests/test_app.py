@@ -132,13 +132,12 @@ END:VCALENDAR\r
     assert [event['title'] for event in today['events']] == ['Company offsite', 'Cancelled standup', 'Planning', 'Daily sync']
     assert today['events'][0]['all_day'] is True
     assert today['events'][1]['cancelled'] is True
-    assert today['events'][2]['url'] == 'https://zoom.us/j/12345'
     assert today['events'][2]['location'] == 'Studio 4, North Wing'
     assert today['events'][2]['description'] == 'Bring the launch brief\nNotes at https://docs.example.com/launch'
     assert today['events'][2]['links'] == [
         'https://zoom.us/j/12345', 'https://files.example.com/agenda.pdf', 'https://docs.example.com/launch'
     ]
-    assert today['events'][3]['url'] == 'https://meet.google.com/abc-defg-hij'
+    assert today['events'][3]['links'] == ['https://meet.google.com/abc-defg-hij']
     assert any(day['date'] == '2026-09-15' and day['events'][0]['title'] == 'Daily sync' for day in journal['days'])
 
     with module.connection() as db:

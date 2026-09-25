@@ -10,7 +10,7 @@ test('calendar events render in start order and expand indented details with wor
       { id: 'all-day', title: 'Company offsite', start: today, end: '2026-09-25', all_day: true, cancelled: false, url: null },
       { id: 'cancelled', title: 'Standup', start: '2026-09-24T08:00:00-07:00', end: '2026-09-24T08:30:00-07:00', all_day: false, cancelled: true, url: null },
       { id: 'planning', title: 'Planning', start: '2026-09-24T09:00:00-07:00', end: '2026-09-24T10:00:00-07:00', all_day: false, cancelled: false,
-        url: 'https://zoom.us/j/12345', location: 'Studio 4, North Wing', description: 'Bring the launch brief\nNotes at https://docs.example.com/launch',
+        location: 'Studio 4, North Wing', description: 'Bring the launch brief\nNotes at https://docs.example.com/launch',
         links: ['https://zoom.us/j/12345', 'https://docs.example.com/launch', 'https://files.example.com/agenda.pdf'] },
     ] }],
   } }));

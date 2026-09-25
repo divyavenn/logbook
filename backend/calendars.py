@@ -9,10 +9,12 @@ import re
 import socket
 from threading import Lock
 from time import monotonic
+from typing import TypedDict
 from urllib.parse import urljoin, urlparse
+from zoneinfo import ZoneInfo
 
 import httpx
-from icalendar import Calendar
+from icalendar import Calendar, Event
 import recurring_ical_events
 
 
@@ -25,15 +27,36 @@ class CalendarLoadError(ValueError):
     pass
 
 
-@dataclass
+class CalendarEvent(TypedDict):
+    id: str
+    title: str
+    start: str
+    end: str
+    all_day: bool
+    cancelled: bool
+    location: str | None
+    description: str | None
+    links: list[str]
+
+
+CalendarEventsByDay = dict[str, list[CalendarEvent]]
+
+
+@dataclass(frozen=True, slots=True)
 class CachedCalendar:
     calendar: Calendar
     loaded_at: float
     content: bytes
 
 
+@dataclass(frozen=True, slots=True)
+class CachedFailure:
+    message: str
+    failed_at: float
+
+
 _cache: dict[str, CachedCalendar] = {}
-_failures: dict[str, tuple[str, float]] = {}
+_failures: dict[str, CachedFailure] = {}
 _cache_lock = Lock()
 
 
@@ -118,16 +141,16 @@ def load_calendar(value: str, *, force: bool = False) -> Calendar:
         if cached and not force and monotonic() - cached.loaded_at < _ttl():
             return cached.calendar
         failed = _failures.get(value)
-        if not force and failed and monotonic() - failed[1] < _ttl():
+        if not force and failed and monotonic() - failed.failed_at < _ttl():
             if cached:
                 return cached.calendar
-            raise CalendarLoadError(failed[0])
+            raise CalendarLoadError(failed.message)
     try:
         content = _download(value)
         calendar = Calendar.from_ical(content)
     except CalendarLoadError as error:
         with _cache_lock:
-            _failures[value] = (str(error), monotonic())
+            _failures[value] = CachedFailure(str(error), monotonic())
         if cached:
             return cached.calendar
         raise
@@ -175,7 +198,7 @@ def drop_calendar(value: str | None = None) -> None:
             _failures.pop(value, None)
 
 
-def _property_text(component, name: str) -> list[str]:
+def _property_text(component: Event, name: str) -> list[str]:
     value = component.get(name)
     if value is None:
         return []
@@ -183,7 +206,7 @@ def _property_text(component, name: str) -> list[str]:
     return [item.decode(errors='replace') if isinstance(item, bytes) else str(item) for item in values]
 
 
-def _event_links(component) -> list[str]:
+def _event_links(component: Event) -> list[str]:
     values: list[str] = []
     for name in ('URL', 'CONFERENCE', 'X-GOOGLE-CONFERENCE', 'X-GOOGLE-HANGOUT',
                  'X-MICROSOFT-SKYPETEAMSMEETINGURL', 'ATTACH', 'LOCATION', 'DESCRIPTION'):
@@ -201,13 +224,13 @@ def _event_links(component) -> list[str]:
     return links
 
 
-def _event_text(component, name: str, limit: int) -> str | None:
+def _event_text(component: Event, name: str, limit: int) -> str | None:
     values = _property_text(component, name)
     text = unescape(values[0]).strip() if values else ''
     return text[:limit] or None
 
 
-def _local_datetime(value: date | datetime, zone) -> tuple[datetime, bool]:
+def _local_datetime(value: date | datetime, zone: ZoneInfo) -> tuple[datetime, bool]:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=zone)
@@ -215,13 +238,38 @@ def _local_datetime(value: date | datetime, zone) -> tuple[datetime, bool]:
     return datetime.combine(value, time.min, tzinfo=zone), True
 
 
-def events_by_day(urls: list[str], start_day: date, end_day: date, zone) -> dict[str, list[dict]]:
+def _calendar_event(component: Event, feed_index: int, calendar_cancelled: bool, zone: ZoneInfo) -> tuple[str, CalendarEvent]:
+    start_value = component.decoded('DTSTART')
+    local_start, all_day = _local_datetime(start_value, zone)
+    if component.get('DTEND') is not None:
+        local_end, _ = _local_datetime(component.decoded('DTEND'), zone)
+    else:
+        fallback = timedelta(days=1) if all_day else timedelta(0)
+        duration = component.decoded('DURATION') if component.get('DURATION') is not None else fallback
+        local_end = local_start + duration
+    day = local_start.date().isoformat()
+    uid = str(component.get('UID', 'event'))
+    links = _event_links(component)
+    return day, {
+        'id': sha256(f'{feed_index}|{uid}|{local_start.isoformat()}'.encode()).hexdigest()[:20],
+        'title': str(component.get('SUMMARY') or 'Untitled event'),
+        'start': local_start.date().isoformat() if all_day else local_start.isoformat(),
+        'end': local_end.date().isoformat() if all_day else local_end.isoformat(),
+        'all_day': all_day,
+        'cancelled': calendar_cancelled or str(component.get('STATUS', '')).upper() == 'CANCELLED',
+        'location': _event_text(component, 'LOCATION', 1000),
+        'description': _event_text(component, 'DESCRIPTION', 10000),
+        'links': links,
+    }
+
+
+def events_by_day(urls: list[str], start_day: date, end_day: date, zone: ZoneInfo) -> CalendarEventsByDay:
     """Expand configured feeds for the half-open local date range."""
     if not urls or start_day >= end_day:
         return {}
     start = datetime.combine(start_day, time.min, tzinfo=zone)
     end = datetime.combine(end_day, time.min, tzinfo=zone)
-    result: dict[str, list[dict]] = {}
+    result: CalendarEventsByDay = {}
     for feed_index, url in enumerate(urls):
         try:
             calendar = load_calendar(url)
@@ -231,30 +279,7 @@ def events_by_day(urls: list[str], start_day: date, end_day: date, zone) -> dict
         calendar_cancelled = str(calendar.get('METHOD', '')).upper() == 'CANCEL'
         for component in occurrences:
             try:
-                start_value = component.decoded('DTSTART')
-                local_start, all_day = _local_datetime(start_value, zone)
-                end_property = component.get('DTEND')
-                if end_property is not None:
-                    local_end, _ = _local_datetime(component.decoded('DTEND'), zone)
-                else:
-                    duration = component.decoded('DURATION') if component.get('DURATION') is not None else timedelta(days=1) if all_day else timedelta(0)
-                    local_end = local_start + duration
-                day = local_start.date().isoformat()
-                uid = str(component.get('UID', 'event'))
-                identity = sha256(f'{feed_index}|{uid}|{local_start.isoformat()}'.encode()).hexdigest()[:20]
-                links = _event_links(component)
-                event = {
-                    'id': identity,
-                    'title': str(component.get('SUMMARY') or 'Untitled event'),
-                    'start': local_start.date().isoformat() if all_day else local_start.isoformat(),
-                    'end': local_end.date().isoformat() if all_day else local_end.isoformat(),
-                    'all_day': all_day,
-                    'cancelled': calendar_cancelled or str(component.get('STATUS', '')).upper() == 'CANCELLED',
-                    'url': links[0] if links else None,
-                    'location': _event_text(component, 'LOCATION', 1000),
-                    'description': _event_text(component, 'DESCRIPTION', 10000),
-                    'links': links,
-                }
+                day, event = _calendar_event(component, feed_index, calendar_cancelled, zone)
                 result.setdefault(day, []).append(event)
             except (KeyError, TypeError, ValueError, AttributeError):
                 continue

@@ -90,18 +90,19 @@ export type RichTextHandle = {
 type Props = {
   ref?: Ref<RichTextHandle>; value: string; tags: string[]; label: string; readOnly: boolean;
   onChange: (markdown: string, tags: string[]) => void; onBlur: (event?: FocusEvent) => void; onKeyDown: (event: KeyboardEvent) => void;
+  onEnter: () => void;
   onBoundary?: (direction: 'backspace' | 'delete') => void;
   onVerticalBoundary?: (direction: VerticalDirection, x: number) => boolean;
   onSelectDocument?: () => void;
 };
 
-export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onBoundary, onVerticalBoundary, onSelectDocument }: Props) {
+export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument }: Props) {
   const { tags } = useJournalContext();
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
-  const callbacks = useRef({ onChange, onBlur, onKeyDown, onBoundary, onVerticalBoundary, onSelectDocument });
-  callbacks.current = { onChange, onBlur, onKeyDown, onBoundary, onVerticalBoundary, onSelectDocument };
+  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument });
+  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument };
   const lastSnapshot = useRef(JSON.stringify([value, bulletTags]));
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
@@ -115,6 +116,12 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
   const previousSelectAll = useRef(false);
   const linkPrefix = useRef<{ from: number; to: number; mark: Mark; doc: DocumentNode } | null>(null);
   const linkReplacement = useRef<{ to: number; mark: Mark; doc: DocumentNode } | null>(null);
+  const publishEditorValue = (currentEditor: Editor) => {
+    commitTypedTags(currentEditor, true);
+    const visiblyEmpty = !currentEditor.view.dom.textContent?.trim() && !currentEditor.view.dom.querySelector('[data-tag]');
+    const bullet = visiblyEmpty ? { content: '', tags: [] as string[] } : serializeBullet(currentEditor.getJSON());
+    callbacks.current.onChange(bullet.content, bullet.tags);
+  };
   const editor: Editor | null = useEditor({
     extensions: [...formattingExtensions(), Markdown, TagDecorations],
     content: documentWithTags(value, bulletTags), injectCSS: false, immediatelyRender: true,
@@ -124,6 +131,24 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     editorProps: {
       attributes: { role: 'textbox', 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'true' },
       handleDOMEvents: {
+        beforeinput(view, event) {
+          const inputEvent = event as InputEvent;
+          if (!view.editable || view.composing || inputEvent.isComposing || inputEvent.inputType !== 'insertParagraph') return false;
+          const pending = suggestionRef.current;
+          if (pending) {
+            event.preventDefault();
+            chooseTag(pending.names[pending.index]);
+            return true;
+          }
+          // Some virtual keyboards emit insertParagraph without a usable Enter
+          // keydown. Treat it as the same semantic action while preserving
+          // paragraphs inside code blocks and insertLineBreak for soft returns.
+          if (editor?.isActive('codeBlock')) return false;
+          event.preventDefault();
+          if (editor) publishEditorValue(editor);
+          callbacks.current.onEnter();
+          return true;
+        },
         mousedown(_view, event) {
           if (event.button !== 0 || !(event.target instanceof Element)) return false;
           const anchor = event.target.closest<HTMLAnchorElement>('a');
@@ -282,15 +307,10 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
           return true;
         }
         if (event.key === 'Enter' && !mod && editor?.isActive('codeBlock')) return false;
-        if (event.key === 'Enter' && editor) {
-          commitTypedTags(editor, true);
-          // The parent may save immediately in this same key event. Read the
-          // editor document synchronously so a just-cleared entry is deleted
-          // even if React has not delivered the last onUpdate render yet.
-          const visiblyEmpty = !editor.view.dom.textContent?.trim() && !editor.view.dom.querySelector('[data-tag]');
-          const bullet = visiblyEmpty ? { content: '', tags: [] as string[] } : serializeBullet(editor.getJSON());
-          callbacks.current.onChange(bullet.content, bullet.tags);
-        }
+        // The parent may save immediately in this same key event. Read the
+        // editor document synchronously so a just-cleared entry is deleted
+        // even if React has not delivered the last onUpdate render yet.
+        if (event.key === 'Enter' && editor) publishEditorValue(editor);
         callbacks.current.onKeyDown(event);
         return event.defaultPrevented;
       },
