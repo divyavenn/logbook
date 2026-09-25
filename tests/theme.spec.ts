@@ -154,7 +154,9 @@ test('reference typography, wider margins and persistent night mode', async ({ p
   await expect(compactTime).toHaveText('00:00:00');
   expect(compactTimeBox.x + compactTimeBox.width).toBeLessThan(smallTimer.x);
   expect(compactTimeBox.y + compactTimeBox.height / 2).toBeCloseTo(smallTimer.y + smallTimer.height / 2, 0);
-  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(0);
+  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
+  await page.getByRole('tab', { name: 'to do', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Review the draft', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: 'log', exact: true }).click();
   await expect(page.getByRole('link', { name: 'project notes', exact: true })).toBeVisible();
 });

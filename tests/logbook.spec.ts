@@ -230,21 +230,27 @@ test('recovers a failed autosave without losing the draft', async ({ page }) => 
   await expect(page.getByRole('group', { name: 'This thought stays safe through a connection failure.', exact: true })).toBeVisible();
 });
 
-test('tall narrow screens stack to-dos over notes and short screens switch to tabs', async ({ page }) => {
+test('narrow screens use the same three-pane journal as short screens', async ({ page, request }) => {
+  const journal = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const previous = new Date(`${journal.today}T00:00:00Z`);
+  previous.setUTCDate(previous.getUTCDate() - 1);
+  await request.post('/api/notes', { data: { date: previous.toISOString().slice(0, 10), content: 'Older narrow note' } });
   await page.goto('/');
   await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeFocused();
   await page.screenshot({ path: 'test-results/journal-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 440, height: 700 });
+  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
   await expect(page.getByRole('region', { name: /^Today,/ })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Older narrow note', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeVisible();
+  await page.getByRole('tab', { name: 'to do', exact: true }).click();
   await expect(page.getByRole('region', { name: 'to do', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add to-do', exact: true })).toBeVisible();
-  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: /^Yesterday,/ })).toBeHidden();
+  await page.getByRole('tab', { name: 'log', exact: true }).click();
   await page.screenshot({ path: 'test-results/compact-notes.png' });
   await page.setViewportSize({ width: 260, height: 180 });
   await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeVisible();
+  await expect(page.getByRole('region', { name: /^Today,/ }).getByRole('button', { name: 'Add journal bullet', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start focus timer' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open focus statistics' })).toBeHidden();
   expect(await page.locator('body').evaluate(el => el.scrollWidth)).toBeLessThanOrEqual(260);

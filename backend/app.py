@@ -22,7 +22,7 @@ from .hierarchy import descendants, next_position, place, remove_preserving_chil
 from .tasks import visible_tasks
 from .history import snapshot, record, restore
 from .agent import AgentJournal, AgentQuery, DISCOVERY_LINKS, READ_HEADERS, markdown_journal, read_journal
-from .calendars import CalendarLoadError, calendar_host, calendar_name, drop_calendar, events_by_day, load_calendar, normalize_calendar_url
+from .calendars import CalendarLoadError, calendar_content, calendar_host, calendar_name, drop_calendar, events_by_day, load_calendar, normalize_calendar_url, seed_calendar
 
 
 def utcnow():
@@ -269,12 +269,12 @@ def list_calendars():
 def connect_calendar(calendar_id: int, url: str):
     try:
         calendar = load_calendar(url, force=True)
-        name, status, error = calendar_name(calendar, url), 'connected', None
+        name, status, error, feed_cache = calendar_name(calendar, url), 'connected', None, calendar_content(url)
     except CalendarLoadError as failure:
-        name, status, error = calendar_host(url), 'error', str(failure)
+        name, status, error, feed_cache = calendar_host(url), 'error', str(failure), None
     with connection() as db:
-        db.execute('UPDATE calendar_subscriptions SET name = ?, status = ?, error = ? WHERE id = ?',
-                   (name, status, error, calendar_id))
+        db.execute('UPDATE calendar_subscriptions SET name = ?, status = ?, error = ?, feed_cache = COALESCE(?, feed_cache) WHERE id = ?',
+                   (name, status, error, feed_cache, calendar_id))
 
 
 @app.post('/api/calendars', status_code=201)
@@ -324,10 +324,23 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
     today_date = now.astimezone(zone).date()
     today = today_date.isoformat()
     with connection() as db:
-        calendar_urls = [row['url'] for row in db.execute("SELECT url FROM calendar_subscriptions WHERE status = 'connected' ORDER BY id")]
+        calendar_rows = [dict(row) for row in db.execute("SELECT id, url, feed_cache FROM calendar_subscriptions WHERE status = 'connected' ORDER BY id")]
+        first_entry_date = db.execute(
+            "SELECT MIN(days.date) FROM entries JOIN days ON entries.day_id = days.id"
+        ).fetchone()[0]
+    for row in calendar_rows:
+        seed_calendar(row['url'], row['feed_cache'])
+    calendar_urls = [row['url'] for row in calendar_rows]
+    calendar_floor = CalendarDate.fromisoformat(first_entry_date) if first_entry_date else today_date
     calendar_end = on + timedelta(days=1) if on else before or today_date + timedelta(days=1)
-    calendar_start = on if on else calendar_end - timedelta(days=366 * 5)
+    calendar_start = max(on or calendar_floor, calendar_floor)
     calendar_days = events_by_day(calendar_urls, calendar_start, calendar_end, zone)
+    refreshed_feeds = [(calendar_content(row['url']), row['id'], row['feed_cache']) for row in calendar_rows]
+    if any(content is not None and content != previous for content, _calendar_id, previous in refreshed_feeds):
+        with connection() as db:
+            for content, calendar_id, previous in refreshed_feeds:
+                if content is not None and content != previous:
+                    db.execute('UPDATE calendar_subscriptions SET feed_cache = ? WHERE id = ?', (content, calendar_id))
     with connection() as db:
         sessions = [dict(r) for r in db.execute("SELECT * FROM sessions ORDER BY started_at")]
         totals = daily_totals(sessions, zone, now)

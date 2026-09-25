@@ -3,20 +3,22 @@ import AxeBuilder from '@axe-core/playwright';
 
 const today = '2026-09-24';
 
-test('calendar events render beneath their date in start order and retain links and cancellations', async ({ page }) => {
+test('calendar events render in start order and expand indented details with working links', async ({ page }) => {
   await page.route('**/api/journal?*', route => route.fulfill({ json: {
     today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null, tasks: [],
     days: [{ date: today, focused_seconds: 0, longest_session_seconds: 0, session_count: 0, notes: [], tasks: [], entries: [], events: [
       { id: 'all-day', title: 'Company offsite', start: today, end: '2026-09-25', all_day: true, cancelled: false, url: null },
       { id: 'cancelled', title: 'Standup', start: '2026-09-24T08:00:00-07:00', end: '2026-09-24T08:30:00-07:00', all_day: false, cancelled: true, url: null },
-      { id: 'planning', title: 'Planning', start: '2026-09-24T09:00:00-07:00', end: '2026-09-24T10:00:00-07:00', all_day: false, cancelled: false, url: 'https://zoom.us/j/12345' },
+      { id: 'planning', title: 'Planning', start: '2026-09-24T09:00:00-07:00', end: '2026-09-24T10:00:00-07:00', all_day: false, cancelled: false,
+        url: 'https://zoom.us/j/12345', location: 'Studio 4, North Wing', description: 'Bring the launch brief\nNotes at https://docs.example.com/launch',
+        links: ['https://zoom.us/j/12345', 'https://docs.example.com/launch', 'https://files.example.com/agenda.pdf'] },
     ] }],
   } }));
   await page.goto('/');
 
   const allDay = page.getByText('Company offsite (all day)', { exact: true });
   const cancelled = page.getByText('Standup (8 AM – 8:30 AM)', { exact: true });
-  const planning = page.getByRole('link', { name: 'Planning (9 AM – 10 AM)', exact: true });
+  const planning = page.getByRole('button', { name: 'Planning (9 AM – 10 AM)', exact: true });
   await expect(allDay).toBeVisible();
   await expect(allDay).toHaveCSS('font-size', '15px');
   await expect(page.locator('[data-calendar-marker]')).toHaveCount(3);
@@ -45,7 +47,17 @@ test('calendar events render beneath their date in start order and retain links 
     .toBe(await planning.evaluate(element => getComputedStyle(element).color));
   await page.evaluate(() => { document.documentElement.dataset.theme = 'day'; });
   await expect(cancelled).toHaveCSS('text-decoration-line', 'line-through');
-  await expect(planning).toHaveAttribute('href', 'https://zoom.us/j/12345');
+  await expect(planning).toHaveAttribute('aria-expanded', 'false');
+  await planning.click();
+  await expect(planning).toHaveAttribute('aria-expanded', 'true');
+  const details = page.getByRole('group', { name: 'Details for Planning', exact: true });
+  await expect(details.getByText('Studio 4, North Wing', { exact: true })).toBeVisible();
+  await expect(details.getByText(/Bring the launch brief/)).toBeVisible();
+  await expect(details.getByRole('link', { name: 'https://docs.example.com/launch', exact: true })).toHaveAttribute('href', 'https://docs.example.com/launch');
+  await expect(details.getByRole('link', { name: 'zoom.us', exact: true })).toHaveAttribute('href', 'https://zoom.us/j/12345');
+  await expect(details.getByRole('link', { name: 'files.example.com', exact: true })).toHaveAttribute('href', 'https://files.example.com/agenda.pdf');
+  await expect(details.locator('li')).toHaveCount(0);
+  await expect(details).toHaveCSS('padding-left', '12px');
   await expect(allDay).not.toHaveAttribute('contenteditable');
   const positions = await Promise.all([allDay.boundingBox(), cancelled.boundingBox(), planning.boundingBox()]);
   expect(positions[0]!.y).toBeLessThan(positions[1]!.y);

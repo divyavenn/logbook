@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import styled, { css } from 'styled-components';
 import { dateObject, duration, errorMessage } from '../api';
 import type { CalendarEvent, Day, Task } from '../types';
@@ -42,6 +42,7 @@ const EventRow = styled.li`
   @media(pointer: coarse) { min-height: 44px; }
   @media ${compactViewport} { min-height: 36px; }
 `;
+const EventContent = styled.div`min-width: 0; flex: 1;`;
 const EventMarker = styled.span<{ $cancelled: boolean }>`
   display: flex; width: 40px; min-width: 40px; height: 28px; align-items: center; justify-content: center;
   color: color-mix(in srgb, var(--link), var(--paper) 38%);
@@ -55,19 +56,26 @@ const EventMarker = styled.span<{ $cancelled: boolean }>`
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
 const eventEntry = css<{ $cancelled: boolean }>`
-  position: relative; min-width: 0; min-height: 28px; padding: 4px 0; border: 0; background: transparent;
+  position: relative; display: block; min-width: 0; min-height: 28px; padding: 4px 0; border: 0; background: transparent;
   color: var(--ink); font-size: 15px; line-height: 1.2; overflow-wrap: anywhere;
   text-decoration: ${({ $cancelled }) => $cancelled ? 'line-through' : 'none'};
   @media(pointer: coarse) { min-height: 44px; padding: 10px 0; font-size: 16px; line-height: 1.35; }
   @media ${compactViewport} { min-height: 36px; padding: 6px 0; line-height: 1.3; }
 `;
 const EventText = styled.span<{ $cancelled: boolean }>`${eventEntry};`;
-const EventLink = styled.a<{ $cancelled: boolean }>`
-  ${eventEntry}; color: color-mix(in srgb, var(--link), #000 12%);
+const EventToggle = styled.button<{ $cancelled: boolean; $linked: boolean }>`
+  ${eventEntry}; width: 100%; text-align: left; cursor: pointer;
+  color: ${({ $linked }) => $linked ? 'color-mix(in srgb, var(--link), #000 12%)' : 'var(--ink)'};
   &:hover { text-decoration: ${({ $cancelled }) => $cancelled ? 'line-through underline' : 'underline'}; text-underline-offset: 2px; }
 `;
 const EventTitle = styled.span`font-weight: 400;`;
 const EventMeta = styled.span`color: inherit; font-weight: 300; font-variant-numeric: tabular-nums;`;
+const EventDetails = styled.div`
+  display: grid; gap: 3px; padding: 0 0 8px 12px; color: var(--muted); font-size: 13px; line-height: 1.45;
+  overflow-wrap: anywhere;
+`;
+const EventDetail = styled.div`min-width: 0; white-space: pre-wrap;`;
+const EventDetailLink = styled.a`color: var(--link); text-decoration: none; text-underline-offset: 2px; &:hover { text-decoration: underline; }`;
 const Body = styled.div`
   min-width: 0; padding-left: 20px; flex: 1; display: flex; flex-direction: column;
   > [data-outline-kind='tasks'] { flex: 1; display: flex; flex-direction: column; }
@@ -93,6 +101,29 @@ function eventDetail(event: CalendarEvent) {
   return `(${format(event.start)} – ${format(event.end)})`;
 }
 
+const detailUrlPattern = /https?:\/\/[^\s<>"']+/gi;
+
+function linkedText(value: string): ReactNode[] {
+  const content: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of value.matchAll(detailUrlPattern)) {
+    const start = match.index ?? 0;
+    const raw = match[0];
+    const url = raw.replace(/[.,;:!?\])}]+$/, '');
+    if (start > cursor) content.push(value.slice(cursor, start));
+    content.push(<EventDetailLink key={`${start}-${url}`} href={url} target="_blank" rel="noopener noreferrer">{url}</EventDetailLink>);
+    if (url.length < raw.length) content.push(raw.slice(url.length));
+    cursor = start + raw.length;
+  }
+  if (cursor < value.length) content.push(value.slice(cursor));
+  return content;
+}
+
+function linkLabel(value: string) {
+  try { return new URL(value).hostname.replace(/^www\./, ''); }
+  catch { return value; }
+}
+
 export function Todos({ tasks, refresh, notify }: { tasks: Task[] } & Actions) {
   const [folded, setFolded] = useState(false);
   const { target } = useJournalContext();
@@ -108,6 +139,7 @@ export function Journal({ days, today, refresh, notify, openSessions, sessionsEn
   sessionsEnabled?: boolean; showHistory?: boolean; loadMore: () => Promise<void>; hasMore: boolean; scrollRoot: RefObject<HTMLDivElement | null>;
 } & Actions) {
   const [loadingMore, setLoadingMore] = useState(false);
+  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
   const { target } = useJournalContext();
   const historyEnd = useRef<HTMLDivElement>(null);
   const loadingLock = useRef(false);
@@ -153,13 +185,33 @@ export function Journal({ days, today, refresh, notify, openSessions, sessionsEn
           {day.events.map(event => {
             const text = eventText(event);
             const content = <><EventTitle data-calendar-event-title>{event.title}</EventTitle> <EventMeta data-calendar-event-meta>{eventDetail(event)}</EventMeta></>;
+            const links = [...new Set(event.links ?? (event.url ? [event.url] : []))];
+            const location = event.location?.trim() || '';
+            const description = event.description?.trim() || '';
+            const extraLinks = links.filter(link => !location.includes(link) && !description.includes(link));
+            const hasDetails = !!(location || description || links.length);
+            const eventKey = `${day.date}-${event.id}`;
+            const expanded = expandedEvents.has(eventKey);
+            const detailsId = `calendar-event-${event.id}-details`;
             return <EventRow key={event.id} data-calendar-event>
               <EventMarker $cancelled={event.cancelled} data-calendar-marker aria-hidden="true" />
-              {event.url
-                ? <EventLink $cancelled={event.cancelled} href={event.url} target="_blank" rel="noopener noreferrer"
-                    aria-label={event.cancelled ? `${text}, cancelled` : text}>{content}</EventLink>
-                : <EventText $cancelled={event.cancelled} role="group"
-                    aria-label={event.cancelled ? `${text}, cancelled` : text}>{content}</EventText>}
+              <EventContent>
+                {hasDetails
+                  ? <EventToggle $cancelled={event.cancelled} $linked={links.length > 0} aria-expanded={expanded} aria-controls={detailsId}
+                      aria-label={event.cancelled ? `${text}, cancelled` : text}
+                      onClick={() => setExpandedEvents(current => {
+                        const next = new Set(current);
+                        if (next.has(eventKey)) next.delete(eventKey); else next.add(eventKey);
+                        return next;
+                      })}>{content}</EventToggle>
+                  : <EventText $cancelled={event.cancelled} role="group"
+                      aria-label={event.cancelled ? `${text}, cancelled` : text}>{content}</EventText>}
+                {expanded && <EventDetails id={detailsId} data-calendar-event-details role="group" aria-label={`Details for ${event.title}`}>
+                  {location && <EventDetail>{linkedText(location)}</EventDetail>}
+                  {description && <EventDetail>{linkedText(description)}</EventDetail>}
+                  {extraLinks.map(link => <EventDetail key={link}><EventDetailLink href={link} target="_blank" rel="noopener noreferrer">{linkLabel(link)}</EventDetailLink></EventDetail>)}
+                </EventDetails>}
+              </EventContent>
             </EventRow>;
           })}
         </EventList>}

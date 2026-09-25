@@ -153,7 +153,7 @@ def test_migration_preserves_existing_content_and_order(tmp_path, monkeypatch):
         """)
     initialize(); initialize()
     with connection() as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
         notes = [dict(row) for row in db.execute("SELECT * FROM entries WHERE kind = 'note' ORDER BY position")]
         assert [row["content"] for row in notes] == ["First", "Second"]
         assert all(row["parent_id"] is None for row in notes)
@@ -185,7 +185,7 @@ def test_interrupted_legacy_migration_rolls_back_and_retries(tmp_path, monkeypat
     monkeypatch.setattr(storage, '_migrate_entries', original)
     storage.initialize()
     with storage.connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 11
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
         assert db.execute('SELECT content FROM entries').fetchone()[0] == 'Survives interruption'
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes'").fetchone()
 

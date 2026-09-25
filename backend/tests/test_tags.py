@@ -122,4 +122,4 @@ def test_migration_keeps_content_ids_and_hierarchy_while_allowing_tag_only_rows(
         assert tasks[1]['parent_id'] == tasks[0]['id']
         assert db.execute('PRAGMA foreign_key_check').fetchall() == []
         db.execute("INSERT INTO entries(kind, day_id, content, tags, created_at) VALUES ('note', 1, '', '[\"tag-only\"]', 'created')")
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 11
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 12

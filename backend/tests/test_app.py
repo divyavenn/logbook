@@ -81,6 +81,9 @@ DTSTART:20260916T160000Z\r
 DTEND:20260916T170000Z\r
 SUMMARY:Planning\r
 URL:https://zoom.us/j/12345\r
+LOCATION:Studio 4\\, North Wing\r
+DESCRIPTION:Bring the launch brief\\nNotes at https://docs.example.com/launch\r
+ATTACH:https://files.example.com/agenda.pdf\r
 END:VEVENT\r
 END:VCALENDAR\r
 '''}
@@ -109,7 +112,9 @@ END:VCALENDAR\r
 
     monkeypatch.setenv('STILL_CALENDAR_REFRESH_SECONDS', '0')
     monkeypatch.setattr(calendar_module, '_assert_public_destination', lambda _url: None)
-    monkeypatch.setattr(calendar_module.httpx, 'get', lambda url, **_kwargs: FeedResponse(first_feed['value'] if url == first_url else second_feed))
+    def feed_get(url, **_kwargs):
+        return FeedResponse(first_feed['value'] if url == first_url else second_feed)
+    monkeypatch.setattr(calendar_module.httpx, 'get', feed_get)
     calendar_module.drop_calendar()
 
     first = client.post('/api/calendars', json={'url': first_url})
@@ -119,16 +124,43 @@ END:VCALENDAR\r
     accounts = client.get('/api/calendars').json()
     assert [(item['name'], item['status']) for item in accounts] == [('Work calendar', 'connected'), ('calendar.example', 'connected')]
 
+    without_history = client.get('/api/journal?timezone=America/Los_Angeles').json()
+    assert not any(day['date'] == '2026-09-15' and day['events'] for day in without_history['days'])
+    assert client.post('/api/notes', json={'date': '2026-09-15', 'content': 'First journal entry'}).status_code == 201
     journal = client.get('/api/journal?timezone=America/Los_Angeles').json()
     today = next(day for day in journal['days'] if day['date'] == '2026-09-16')
     assert [event['title'] for event in today['events']] == ['Company offsite', 'Cancelled standup', 'Planning', 'Daily sync']
     assert today['events'][0]['all_day'] is True
     assert today['events'][1]['cancelled'] is True
     assert today['events'][2]['url'] == 'https://zoom.us/j/12345'
+    assert today['events'][2]['location'] == 'Studio 4, North Wing'
+    assert today['events'][2]['description'] == 'Bring the launch brief\nNotes at https://docs.example.com/launch'
+    assert today['events'][2]['links'] == [
+        'https://zoom.us/j/12345', 'https://files.example.com/agenda.pdf', 'https://docs.example.com/launch'
+    ]
     assert today['events'][3]['url'] == 'https://meet.google.com/abc-defg-hij'
     assert any(day['date'] == '2026-09-15' and day['events'][0]['title'] == 'Daily sync' for day in journal['days'])
 
+    with module.connection() as db:
+        assert all(row['feed_cache'] for row in db.execute('SELECT feed_cache FROM calendar_subscriptions'))
+
+    class RateLimitedResponse:
+        status_code = 429
+        headers = {}
+        content = b''
+
+    monkeypatch.setenv('STILL_CALENDAR_REFRESH_SECONDS', '600')
+    monkeypatch.setattr(calendar_module.httpx, 'get', lambda *_args, **_kwargs: RateLimitedResponse())
+    calendar_module.drop_calendar()  # Simulate a fresh process with no in-memory feed.
+    for _ in range(2):
+        stale = client.get('/api/journal?timezone=America/Los_Angeles').json()
+        stale_today = next(day for day in stale['days'] if day['date'] == '2026-09-16')
+        assert [event['title'] for event in stale_today['events']] == ['Company offsite', 'Cancelled standup', 'Planning', 'Daily sync']
+
+    monkeypatch.setenv('STILL_CALENDAR_REFRESH_SECONDS', '0')
+    monkeypatch.setattr(calendar_module.httpx, 'get', feed_get)
     first_feed['value'] = b'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n'
+    calendar_module.drop_calendar()
     refreshed = client.get('/api/journal?timezone=America/Los_Angeles').json()
     refreshed_today = next(day for day in refreshed['days'] if day['date'] == '2026-09-16')
     assert [event['title'] for event in refreshed_today['events']] == ['Daily sync']
@@ -220,7 +252,7 @@ def test_backup_download_is_a_complete_consistent_sqlite_file(client, tmp_path, 
     downloaded.write_bytes(response.content)
     with sqlite3.connect(downloaded) as db:
         assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 11
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
         assert db.execute('SELECT content FROM entries WHERE id = ?', (note['id'],)).fetchone()[0] == 'Back me up'
         assert db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0] == 1
 

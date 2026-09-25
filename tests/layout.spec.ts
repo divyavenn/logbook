@@ -71,33 +71,14 @@ test('stacked to-dos keep a generous creation area and wrap within the document'
   expect(wordTask.x + wordTask.width).toBeLessThanOrEqual(main.x + main.width);
 });
 
-test('height chooses stacked or swipe mode while width only controls sidebar chrome', async ({ page }) => {
+test('narrow or short viewports use three swipe panes with the timer always visible', async ({ page }) => {
   await page.goto('/');
   const timer = page.getByRole('button', { name: 'Start focus timer', exact: true });
   const timerReadout = page.getByTestId('compact-timer-time');
-  for (const size of [{ width: 640, height: 800 }, { width: 440, height: 700 }, { width: 260, height: 700 }]) {
-    await page.setViewportSize(size);
-    await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = 0; });
-    await expect(page.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(0);
-    await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
-    await expect(page.getByRole('navigation', { name: 'Tags' })).toBeHidden();
-    await expect(page.getByRole('group', { name: 'Older note', exact: true })).toBeHidden();
-    await expect(page.getByRole('group', { name: 'First to-do', exact: true })).toBeVisible();
-    await expect(page.getByRole('group', { name: 'Current note 0', exact: true })).toBeVisible();
-    const todo = (await page.getByRole('region', { name: 'to do', exact: true }).boundingBox())!;
-    const main = (await page.getByRole('main').boundingBox())!;
-    const date = (await page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true }).boundingBox())!;
-    const datePill = (await page.locator(`time[datetime="${today}"]`).boundingBox())!;
-    await expect(timerReadout).toHaveText('00:00:00');
-    await expect(page.getByRole('switch', { name: 'Night mode', exact: true })).toBeHidden();
-    expect(todo.y + todo.height).toBeLessThanOrEqual(date.y);
-    expect(main.x).toBe(24);
-    expect(size.width - main.x - main.width).toBe(16);
-    expect(datePill.x).toBeGreaterThanOrEqual(main.x);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(size.width);
-    if (size.width === 440) await page.screenshot({ path: '/tmp/still-layout-tall-thin.png' });
-  }
-  for (const size of [{ width: 440, height: 400 }, { width: 260, height: 180 }, { width: 1000, height: 400 }]) {
+  for (const size of [
+    { width: 640, height: 800 }, { width: 440, height: 700 }, { width: 260, height: 700 },
+    { width: 440, height: 400 }, { width: 260, height: 180 }, { width: 1000, height: 400 },
+  ]) {
     await page.setViewportSize(size);
     const tabs = page.getByRole('tablist', { name: 'Mobile views' });
     await expect(tabs).toBeVisible();
@@ -112,6 +93,19 @@ test('height chooses stacked or swipe mode while width only controls sidebar chr
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveCSS('font-size', '0px');
     await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(0);
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
+    const pager = page.getByTestId('mobile-pager');
+    await expect(pager).toHaveCSS('scrollbar-width', 'none');
+    await expect(pager).toHaveCSS('scroll-snap-type', 'x mandatory');
+    await expect(pager).toHaveCSS('overscroll-behavior-x', 'none');
+    await expect(pager.locator(':scope > section').first()).toHaveCSS('scroll-snap-stop', 'always');
+    await expect(page.getByTestId('log-scroll')).toHaveCSS('scrollbar-width', 'none');
+    const paneGeometry = await pager.evaluate(element => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      panes: [...element.children].map(child => ({ clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth })),
+    }));
+    expect(paneGeometry.scrollWidth).toBe(paneGeometry.clientWidth * 3);
+    expect(paneGeometry.panes.every(pane => pane.clientWidth === paneGeometry.clientWidth && pane.scrollWidth <= pane.clientWidth), JSON.stringify(paneGeometry)).toBe(true);
     if (size.width <= 640) {
       const main = (await page.getByRole('main').boundingBox())!;
       expect(main.x).toBe(24);
@@ -130,7 +124,8 @@ test('height chooses stacked or swipe mode while width only controls sidebar chr
     await expect(page.getByRole('group', { name: 'Current note 0', exact: true })).toBeInViewport();
     await expect(page.getByRole('group', { name: 'Older note', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(size.width);
-    if (size.width === 440) await page.screenshot({ path: '/tmp/still-layout-short-thin.png' });
+    if (size.width === 440 && size.height === 700) await page.screenshot({ path: '/tmp/still-layout-tall-thin.png' });
+    if (size.width === 440 && size.height === 400) await page.screenshot({ path: '/tmp/still-layout-short-thin.png' });
   }
   await page.setViewportSize({ width: 440, height: 700 });
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
@@ -147,7 +142,7 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
     await composer.fill('Mobile typing');
 
     await mobile.setViewportSize({ width: 440, height: 360 });
-    await expect(mobile.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(0);
+    await expect(mobile.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
     await expect(composer).toBeFocused();
     await composer.pressSequentially(' stays put');
     await expect(composer).toHaveText('Mobile typing stays put');
@@ -158,6 +153,32 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
   } finally {
     await context.close();
   }
+});
+
+test('a touch swipe always advances the narrow pager by one tab', async ({ page }) => {
+  await page.setViewportSize({ width: 440, height: 700 });
+  await page.goto('/');
+  const tabs = page.getByRole('tablist', { name: 'Mobile views' });
+  const pager = page.getByTestId('mobile-pager');
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const box = (await pager.boundingBox())!;
+  const session = await page.context().newCDPSession(page);
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const swipe = async (from: number, to: number) => {
+    const y = box.y + Math.min(160, box.height / 2);
+    const point = (x: number) => ({ x, y, id: 0, radiusX: 1, radiusY: 1, force: 1 });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(from)] });
+    for (let step = 1; step <= 5; step++) {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(from + (to - from) * step / 5)] });
+    }
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  await swipe(box.x + box.width * .82, box.x + box.width * .18);
+  await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
+  expect(await pager.evaluate(element => element.scrollLeft)).toBeCloseTo(box.width * 2, 0);
+  await swipe(box.x + box.width * .18, box.x + box.width * .82);
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  expect(await pager.evaluate(element => element.scrollLeft)).toBeCloseTo(box.width, 0);
 });
 
 test('swipe log loads earlier dates infinitely and preserves its active tag filter', async ({ page }) => {

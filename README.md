@@ -164,7 +164,7 @@ The normalized tables are:
 | `days` | Unique journal date and creation timestamp |
 | `entries` | Note/task kind, optional day, Markdown content, JSON tags, parent entry, shared sibling position, timestamps, retry ID |
 | `sessions` | UTC start and end timestamps; a null end means running |
-| `calendar_subscriptions` | Public/private ICS URLs, feed-provided names, and background connection status |
+| `calendar_subscriptions` | Public/private ICS URLs, feed-provided names, connection status, and the last successful feed for throttle-safe display |
 | `document_operations` | IDs, timestamps, and undo/redo state for document transactions |
 | `document_changes` | Relational before/after row images for each changed bullet; Markdown and tag arrays retain their normal representation |
 

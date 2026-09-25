@@ -27,11 +27,12 @@ CREATE TABLE IF NOT EXISTS calendar_subscriptions (
     name TEXT,
     status TEXT NOT NULL DEFAULT 'connected' CHECK(status IN ('connecting', 'connected', 'error')),
     error TEXT,
+    feed_cache BLOB,
     created_at TEXT NOT NULL
 );
 """
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 ENTRY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -305,6 +306,8 @@ def initialize():
             db.execute("ALTER TABLE calendar_subscriptions ADD COLUMN status TEXT NOT NULL DEFAULT 'connected'")
         if 'error' not in calendar_columns:
             db.execute('ALTER TABLE calendar_subscriptions ADD COLUMN error TEXT')
+        if 'feed_cache' not in calendar_columns:
+            db.execute('ALTER TABLE calendar_subscriptions ADD COLUMN feed_cache BLOB')
         db.execute("UPDATE calendar_subscriptions SET status = 'error', error = 'Connection was interrupted. Remove and add this calendar again.' WHERE status = 'connecting'")
         version = db.execute('PRAGMA user_version').fetchone()[0]
         entries = db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'entries'").fetchone()

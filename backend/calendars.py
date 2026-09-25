@@ -29,6 +29,7 @@ class CalendarLoadError(ValueError):
 class CachedCalendar:
     calendar: Calendar
     loaded_at: float
+    content: bytes
 
 
 _cache: dict[str, CachedCalendar] = {}
@@ -117,10 +118,13 @@ def load_calendar(value: str, *, force: bool = False) -> Calendar:
         if cached and not force and monotonic() - cached.loaded_at < _ttl():
             return cached.calendar
         failed = _failures.get(value)
-        if failed and monotonic() - failed[1] < _ttl():
+        if not force and failed and monotonic() - failed[1] < _ttl():
+            if cached:
+                return cached.calendar
             raise CalendarLoadError(failed[0])
     try:
-        calendar = Calendar.from_ical(_download(value))
+        content = _download(value)
+        calendar = Calendar.from_ical(content)
     except CalendarLoadError as error:
         with _cache_lock:
             _failures[value] = (str(error), monotonic())
@@ -132,9 +136,33 @@ def load_calendar(value: str, *, force: bool = False) -> Calendar:
             return cached.calendar
         raise CalendarLoadError('That URL did not return a valid ICS calendar.') from error
     with _cache_lock:
-        _cache[value] = CachedCalendar(calendar, monotonic())
+        _cache[value] = CachedCalendar(calendar, monotonic(), content)
         _failures.pop(value, None)
     return calendar
+
+
+def seed_calendar(value: str, content: bytes | None) -> bool:
+    """Restore a persisted last-good feed without treating it as freshly downloaded."""
+    if not content:
+        return False
+    value = normalize_calendar_url(value)
+    with _cache_lock:
+        if value in _cache:
+            return True
+    try:
+        calendar = Calendar.from_ical(content)
+    except (ValueError, TypeError):
+        return False
+    with _cache_lock:
+        _cache.setdefault(value, CachedCalendar(calendar, monotonic() - _ttl(), content))
+    return True
+
+
+def calendar_content(value: str) -> bytes | None:
+    value = normalize_calendar_url(value)
+    with _cache_lock:
+        cached = _cache.get(value)
+        return cached.content if cached else None
 
 
 def drop_calendar(value: str | None = None) -> None:
@@ -155,18 +183,28 @@ def _property_text(component, name: str) -> list[str]:
     return [item.decode(errors='replace') if isinstance(item, bytes) else str(item) for item in values]
 
 
-def _event_url(component) -> str | None:
+def _event_links(component) -> list[str]:
     values: list[str] = []
-    for name in ('URL', 'X-GOOGLE-CONFERENCE', 'ATTACH', 'LOCATION', 'DESCRIPTION'):
+    for name in ('URL', 'CONFERENCE', 'X-GOOGLE-CONFERENCE', 'X-GOOGLE-HANGOUT',
+                 'X-MICROSOFT-SKYPETEAMSMEETINGURL', 'ATTACH', 'LOCATION', 'DESCRIPTION'):
         values.extend(_property_text(component, name))
+    links: list[str] = []
     for raw in values:
         for match in URL_PATTERN.findall(unescape(raw)):
             candidate = match.rstrip('.,;:!?)]}')
             try:
-                return normalize_calendar_url(candidate)
+                candidate = normalize_calendar_url(candidate)
             except ValueError:
                 continue
-    return None
+            if candidate not in links:
+                links.append(candidate)
+    return links
+
+
+def _event_text(component, name: str, limit: int) -> str | None:
+    values = _property_text(component, name)
+    text = unescape(values[0]).strip() if values else ''
+    return text[:limit] or None
 
 
 def _local_datetime(value: date | datetime, zone) -> tuple[datetime, bool]:
@@ -204,6 +242,7 @@ def events_by_day(urls: list[str], start_day: date, end_day: date, zone) -> dict
                 day = local_start.date().isoformat()
                 uid = str(component.get('UID', 'event'))
                 identity = sha256(f'{feed_index}|{uid}|{local_start.isoformat()}'.encode()).hexdigest()[:20]
+                links = _event_links(component)
                 event = {
                     'id': identity,
                     'title': str(component.get('SUMMARY') or 'Untitled event'),
@@ -211,7 +250,10 @@ def events_by_day(urls: list[str], start_day: date, end_day: date, zone) -> dict
                     'end': local_end.date().isoformat() if all_day else local_end.isoformat(),
                     'all_day': all_day,
                     'cancelled': calendar_cancelled or str(component.get('STATUS', '')).upper() == 'CANCELLED',
-                    'url': _event_url(component),
+                    'url': links[0] if links else None,
+                    'location': _event_text(component, 'LOCATION', 1000),
+                    'description': _event_text(component, 'DESCRIPTION', 10000),
+                    'links': links,
                 }
                 result.setdefault(day, []).append(event)
             except (KeyError, TypeError, ValueError, AttributeError):

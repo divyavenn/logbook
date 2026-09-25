@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styled, { css, keyframes } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
 import { api, errorMessage, localDate, recoverEarlierDrafts, timerDuration } from './api';
@@ -14,6 +14,9 @@ import { documentUndo, recordCompletion } from './documentHistory';
 import { compactViewport, shortViewport } from './layout';
 
 const JOURNAL_PAGE_SIZE = 14;
+const MOBILE_VIEWS = ['todos', 'log', 'tags'] as const;
+type MobileView = typeof MOBILE_VIEWS[number];
+const mobileViewIndex = (view: MobileView) => MOBILE_VIEWS.indexOf(view);
 const REPOSITORY_URL = import.meta.env.VITE_REPOSITORY_URL || 'https://github.com/divyavenn/still';
 const SessionsModal = lazy(() => import('./components/SessionsModal').then(module => ({ default: module.SessionsModal })));
 const StatsModal = lazy(() => import('./components/StatsModal').then(module => ({ default: module.StatsModal })));
@@ -62,6 +65,8 @@ const Page = styled.div<{ $focusing: boolean }>`
     --page-top: max(16px, env(safe-area-inset-top)); --todo-heading-height: 36px;
     --left-margin: max(24px, env(safe-area-inset-left), calc((100vw - var(--document-width)) * .54));
     --right-margin: calc(100vw - var(--document-width) - var(--left-margin));
+    scrollbar-width: none;
+    &::-webkit-scrollbar { display: none; }
   }
 `;
 const ringPulse = keyframes`
@@ -131,14 +136,16 @@ const MobileTab = styled.button<{ $active: boolean }>`
   &:last-child::before { translate: calc(-50% - 16px) -50%; }
 `;
 const MobilePager = styled.div`
-  display: flex; flex: 1; min-height: 0; width: 100%; overflow-x: auto; overflow-y: hidden;
-  scroll-snap-type: x mandatory; overscroll-behavior-x: contain; scrollbar-width: none;
+  display: flex; flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  scroll-snap-type: x mandatory; overscroll-behavior-x: none; scrollbar-width: none; -webkit-overflow-scrolling: touch;
   &::-webkit-scrollbar { display: none; }
 `;
 const MobilePane = styled.section`
-  flex: 0 0 100%; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
-  scroll-snap-align: start; scroll-snap-stop: always;
+  flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto;
+  display: flex; flex-direction: column; scrollbar-width: none;
+  scroll-snap-align: start; scroll-snap-stop: always; contain: inline-size;
   padding: 0;
+  &::-webkit-scrollbar { display: none; }
 `;
 const MobileTags = styled.div`
   padding: 0 2px max(12px, env(safe-area-inset-bottom));
@@ -179,15 +186,19 @@ const Demo = styled.span`
 const Main = styled.main`
   width: var(--document-width); margin: var(--page-top) var(--right-margin) 0 var(--left-margin);
   flex: 1; display: flex; flex-direction: column; min-height: 0;
+  @media ${compactViewport} { max-width: 100%; overflow: hidden; }
 `;
 const LogFrame = styled.div`
   position: relative; flex: 1; min-height: min(240px, max(64px, calc(100dvh - 160px))); display: flex;
-  @media ${compactViewport} { min-height: 0; padding: 0 0 max(12px, env(safe-area-inset-bottom)); }
+  @media ${compactViewport} { min-height: 0; padding: 0 0 max(12px, env(safe-area-inset-bottom)); overflow-x: clip; }
 `;
 const LogViewport = styled.div`
   flex: 1; min-height: min(240px, max(64px, calc(100dvh - 160px))); overflow-y: auto; overflow-x: hidden; overscroll-behavior-y: contain;
   padding: 30px 12px 24px 8px; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent;
-  @media ${compactViewport} { min-height: 0; padding: 24px 2px 10px 0; }
+  @media ${compactViewport} {
+    min-height: 0; padding: 24px 2px 10px 0; scrollbar-width: none;
+    &::-webkit-scrollbar { display: none; }
+  }
 `;
 const LogEdgeWash = styled.div`
   position: absolute; z-index: 7; top: -2px; left: -24px; right: -24px; height: 30px; pointer-events: none;
@@ -256,10 +267,12 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [searchOpen, setSearchOpen] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [short, setShort] = useState(() => window.matchMedia(shortViewport).matches);
+  const [paged, setPaged] = useState(() => window.matchMedia(compactViewport).matches);
   const viewportWidth = useRef(window.innerWidth);
-  const [mobileView, setMobileView] = useState<'todos' | 'log' | 'tags'>('log');
+  const [mobileView, setMobileView] = useState<MobileView>('log');
+  const mobileViewRef = useRef<MobileView>('log');
   const mobilePager = useRef<HTMLDivElement>(null);
+  const mobileScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quietStatus = useRef<HTMLDivElement>(null);
   const quietStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
@@ -274,30 +287,53 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
   const notify = useCallback((text: string) => setMessage(text), []);
+  const commitMobileView = useCallback((next: MobileView) => {
+    mobileViewRef.current = next;
+    setMobileView(previous => previous === next ? previous : next);
+  }, []);
+  const selectMobileView = useCallback((next: MobileView) => {
+    commitMobileView(next);
+    const pager = mobilePager.current;
+    if (!pager) return;
+    pager.scrollTo({
+      left: mobileViewIndex(next) * pager.clientWidth,
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }, [commitMobileView]);
+  const trackMobileScroll = useCallback((pager: HTMLDivElement) => {
+    if (mobileScrollTimer.current) clearTimeout(mobileScrollTimer.current);
+    mobileScrollTimer.current = setTimeout(() => {
+      const index = Math.max(0, Math.min(MOBILE_VIEWS.length - 1, Math.round(pager.scrollLeft / pager.clientWidth)));
+      commitMobileView(MOBILE_VIEWS[index]);
+    }, 80);
+  }, [commitMobileView]);
   useEffect(() => {
-    const media = window.matchMedia(shortViewport);
+    const media = window.matchMedia(compactViewport);
     const coarse = window.matchMedia('(pointer: coarse)');
     const resize = () => {
       const widthChanged = Math.abs(window.innerWidth - viewportWidth.current) > 80;
       viewportWidth.current = window.innerWidth;
       const active = document.activeElement;
       const editing = active instanceof HTMLElement && (active.isContentEditable || active.matches('input, textarea'));
-      setShort(previous => coarse.matches && editing && !widthChanged && media.matches !== previous ? previous : media.matches);
+      setPaged(previous => coarse.matches && editing && !widthChanged && media.matches !== previous ? previous : media.matches);
     };
     media.addEventListener('change', resize);
     window.addEventListener('resize', resize);
     return () => { media.removeEventListener('change', resize); window.removeEventListener('resize', resize); };
   }, []);
-  useEffect(() => {
-    if (!short) return;
+  useLayoutEffect(() => {
+    if (!paged) return;
     const align = () => {
       const pager = mobilePager.current;
-      if (pager) pager.scrollTo({ left: ({ todos: 0, log: 1, tags: 2 } as const)[mobileView] * pager.clientWidth });
+      if (pager) pager.scrollLeft = mobileViewIndex(mobileViewRef.current) * pager.clientWidth;
     };
-    const frame = requestAnimationFrame(align);
+    align();
     window.addEventListener('resize', align);
-    return () => { cancelAnimationFrame(frame); window.removeEventListener('resize', align); };
-  }, [short, mobileView]);
+    return () => window.removeEventListener('resize', align);
+  }, [paged]);
+  useEffect(() => () => {
+    if (mobileScrollTimer.current) clearTimeout(mobileScrollTimer.current);
+  }, []);
   useEffect(() => {
     if (locked) return;
     const shortcut = (event: KeyboardEvent) => {
@@ -491,21 +527,17 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); setSoundOpen(true); } }}
         onClick={() => void toggleTimer()}><TimerIcon size={16} aria-hidden="true" /></TimerButton>
     </TimerChrome>
-    {!short && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} />}
+    {!paged && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} />}
     <Main data-focus-surface>
-      {short ? <>
+      {paged ? <>
         <ShortHeader>
           <MobileTabs role="tablist" aria-label="Mobile views">
-            <MobileTab id="mobile-tab-todos" type="button" role="tab" aria-controls="mobile-panel-todos" aria-selected={mobileView === 'todos'} $active={mobileView === 'todos'} onClick={() => setMobileView('todos')}>to do</MobileTab>
-            <MobileTab id="mobile-tab-log" type="button" role="tab" aria-controls="mobile-panel-log" aria-selected={mobileView === 'log'} $active={mobileView === 'log'} onClick={() => setMobileView('log')}>log</MobileTab>
-            <MobileTab id="mobile-tab-tags" type="button" role="tab" aria-controls="mobile-panel-tags" aria-selected={mobileView === 'tags'} $active={mobileView === 'tags'} onClick={() => setMobileView('tags')}>tags</MobileTab>
+            <MobileTab id="mobile-tab-todos" type="button" role="tab" aria-controls="mobile-panel-todos" aria-selected={mobileView === 'todos'} $active={mobileView === 'todos'} onClick={() => selectMobileView('todos')}>to do</MobileTab>
+            <MobileTab id="mobile-tab-log" type="button" role="tab" aria-controls="mobile-panel-log" aria-selected={mobileView === 'log'} $active={mobileView === 'log'} onClick={() => selectMobileView('log')}>log</MobileTab>
+            <MobileTab id="mobile-tab-tags" type="button" role="tab" aria-controls="mobile-panel-tags" aria-selected={mobileView === 'tags'} $active={mobileView === 'tags'} onClick={() => selectMobileView('tags')}>tags</MobileTab>
           </MobileTabs>
         </ShortHeader>
-        <MobilePager ref={mobilePager} data-testid="mobile-pager" onScroll={event => {
-          const pager = event.currentTarget;
-          const next = (['todos', 'log', 'tags'] as const)[Math.max(0, Math.min(2, Math.round(pager.scrollLeft / pager.clientWidth)))];
-          setMobileView(previous => previous === next ? previous : next);
-        }}>
+        <MobilePager ref={mobilePager} data-testid="mobile-pager" onScroll={event => trackMobileScroll(event.currentTarget)}>
           <MobilePane id="mobile-panel-todos" role="tabpanel" aria-labelledby="mobile-tab-todos" aria-hidden={mobileView !== 'todos'} inert={mobileView !== 'todos'}>{data ? <Todos key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} /> : null}</MobilePane>
           <MobilePane id="mobile-panel-log" role="tabpanel" aria-labelledby="mobile-tab-log" aria-hidden={mobileView !== 'log'} inert={mobileView !== 'log'}>{data && <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
             <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate}
