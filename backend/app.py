@@ -54,6 +54,7 @@ def auth_enabled():
 
 
 AUTH_COOKIE = 'still_session'
+AUTH_COOKIE_AGE = int(timedelta(days=30).total_seconds())
 PUBLIC_AUTH_PATHS = {'/api/health', '/api/auth/status', '/api/auth/login'}
 
 
@@ -97,7 +98,8 @@ def authentication_login(body: PasswordLogin, request: Request):
     if not auth_enabled() or not hmac.compare_digest(body.password, password):
         raise HTTPException(401, 'Wrong password.')
     response = Response(status_code=204)
-    response.set_cookie(AUTH_COOKIE, auth_token(password), httponly=True, secure=request.url.scheme == 'https', samesite='strict', path='/')
+    response.set_cookie(AUTH_COOKIE, auth_token(password), max_age=AUTH_COOKIE_AGE, httponly=True,
+                        secure=request.url.scheme == 'https', samesite='strict', path='/')
     return response
 
 

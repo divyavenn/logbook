@@ -9,6 +9,7 @@ import { MarkdownContent, markdownText, richTextStyles, mergeMarkdown, formatMar
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
 import { documentUndo, editDocument, recordEdit } from '../documentHistory';
 import { compactViewport } from '../layout';
+import { haptic } from '../haptics';
 
 const MAX_LEVELS = 8;
 const OutlineSurface = styled.div`
@@ -19,7 +20,7 @@ const OutlineSurface = styled.div`
   --bullet-line-height: 1.2;
   --bullet-paragraph-gap: .2em;
   --bullet-marker-offset: .5px;
-  @media(pointer: coarse) { --bullet-size: 16px; --bullet-line-height: 1.35; }
+  @media(pointer: coarse) { --bullet-size: 16px; --bullet-row-height: 44px; --bullet-padding: 10px 0; --bullet-line-height: 1.35; }
   @media ${compactViewport} { --bullet-row-height: 36px; --bullet-padding: 6px 0; --bullet-line-height: 1.3; --bullet-paragraph-gap: .1em; }
 `;
 const List = styled.ul`list-style: none; padding: 0; margin: 0;`;
@@ -38,8 +39,9 @@ const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $shifting?: 'i
   ${({ $leaving }) => $leaving && css`animation: ${popOut} 180ms ease-out both; pointer-events: none;`}
   ${({ $arriving }) => $arriving && css`animation: ${slideIn} 280ms cubic-bezier(.2,.7,.3,1) both;`}
   ${({ $shifting }) => $shifting && css`animation: ${$shifting === 'in' ? shiftIn : shiftOut} 220ms cubic-bezier(.2, 0, 0, 1) both;`}
+  @media(pointer: coarse) { touch-action: pan-y; }
 `;
-const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height); @media(pointer: coarse) { min-height: 44px; } @media ${compactViewport} { min-height: 36px; }`;
+const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height);`;
 const Branch = styled.div<{ $open: boolean }>`
   display: grid; min-height: 0;
   grid-template-rows: ${({ $open }) => $open ? '1fr' : '0fr'};
@@ -128,14 +130,12 @@ const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
   ${({ $done }) => $done && css`color: var(--muted); text-decoration: line-through; a { color: var(--muted); }`}
   text-align: left; line-height: var(--bullet-line-height); font-size: var(--bullet-size); white-space: pre-wrap; overflow-wrap: anywhere;
   &:focus-visible { outline: none; }
-  @media(pointer: coarse) { min-height: 44px; padding: 10px 0; }
-  @media ${compactViewport} { min-height: 36px; padding: 6px 0; }
 `;
 type Draft = {
   active: boolean; mode: 'new' | 'edit'; id: number | null; content: string; saved: string;
   kind: EntryKind;
   clientId: ReturnType<typeof crypto.randomUUID>; requestId: ReturnType<typeof crypto.randomUUID>; revision: number | null;
-  parentId: number | null; afterId: number | null; hiddenTag: string | null; tags: string[]; savedTags: string[];
+  parentId: number | null; afterId: number | null; placement: 'tail' | 'after'; hiddenTag: string | null; tags: string[]; savedTags: string[];
 };
 type VerticalTarget = { x: number; direction: VerticalDirection };
 type Props = {
@@ -166,6 +166,7 @@ const siblings = (items: OutlineItem[], parentId: number | null) => sorted(items
 const fresh = (items: OutlineItem[], active: boolean, kind: EntryKind, parentId: number | null = null, afterId?: number | null): Draft => ({
   tags: [], savedTags: [], hiddenTag: null, active, mode: 'new', id: null, content: '', saved: '',
   clientId: crypto.randomUUID(), requestId: crypto.randomUUID(), revision: null, parentId,
+  placement: afterId === undefined ? 'tail' : 'after',
   kind,
   afterId: afterId === undefined ? siblings(items, parentId).at(-1)?.id ?? null : afterId,
 });
@@ -191,6 +192,8 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
+  const swipe = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
   const [shifting, setShifting] = useState<'in' | 'out' | null>(null);
   const [, setSelectedAll] = useState(false);
   const selectionActive = useRef(false);
@@ -211,7 +214,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       const stored = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<Draft> | null;
       if (stored && (stored.content !== stored.saved || JSON.stringify(stored.tags ?? []) !== JSON.stringify(stored.savedTags ?? [])) && typeof stored.content === 'string') {
         const row = items.find(item => item.id === stored.id);
-        return { ...blank(items, true), ...stored, requestId: stored.requestId ?? crypto.randomUUID(), revision: stored.revision ?? row?.revision ?? null,
+        return { ...blank(items, true), ...stored, placement: stored.placement ?? 'tail', requestId: stored.requestId ?? crypto.randomUUID(), revision: stored.revision ?? row?.revision ?? null,
           kind: stored.kind ?? (row ? entryKind(row) : defaultKind), active: true, parentId: stored.parentId ?? row?.parent_id ?? null };
       }
       for (const row of items) {
@@ -263,7 +266,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   }, [key]);
   useEffect(() => {
     const value = current.current;
-    if (kind !== 'tasks' || !composer || !value.active || value.mode !== 'new' ||
+    if (kind !== 'tasks' || !composer || !value.active || value.mode !== 'new' || value.placement !== 'tail' ||
         value.id !== null || value.parentId !== null || value.content.trim() || value.tags.length) return;
     const afterId = siblings(items, null).at(-1)?.id ?? null;
     if (value.afterId !== afterId) persist({ ...value, afterId });
@@ -430,7 +433,26 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   const select = (row: OutlineItem, element?: HTMLElement, contextLink?: HTMLElement, offsets?: TextOffsets, vertical?: VerticalTarget) => {
     if (!vertical) verticalX.current = null;
     const selection = offsets ?? selectedTextOffsets(element, contextLink);
-    void run(async () => {
+    const activate = (latest: OutlineItem) => {
+      const group = siblings(records.current, latest.parent_id);
+      const index = group.findIndex(item => item.id === latest.id);
+      const content = latest.content;
+      flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: latest.id, content, saved: content,
+        kind: entryKind(latest), revision: latest.revision, tags: latest.tags ?? [], savedTags: latest.tags ?? [],
+        hiddenTag: activeTag && latest.tags?.includes(activeTag) ? activeTag : null,
+        parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }));
+      if (vertical) input.current?.focusAt(vertical.x, vertical.direction, { preventScroll: false });
+      else input.current?.focus({ preventScroll: true }, selection);
+      if (contextLink) input.current?.editLink();
+    };
+    const value = current.current;
+    const unchanged = !value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags);
+    if (unchanged) {
+      const latest = records.current.find(item => item.id === row.id);
+      if (latest) activate(latest);
+      return Promise.resolve();
+    }
+    return run(async () => {
       await save();
       // Saving the previous draft can insert before this row and advance its
       // revision. Let the refresh commit, then resolve the row again instead
@@ -439,17 +461,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       const latest = records.current.find(item => item.id === row.id);
       if (!latest) return;
-      const group = siblings(records.current, latest.parent_id);
-      const index = group.findIndex(item => item.id === latest.id);
-      const content = latest.content;
-      flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: latest.id, content, saved: content,
-        kind: entryKind(latest),
-        revision: latest.revision,
-        tags: latest.tags ?? [], savedTags: latest.tags ?? [], hiddenTag: activeTag && latest.tags?.includes(activeTag) ? activeTag : null,
-        parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }));
-      if (vertical) input.current?.focusAt(vertical.x, vertical.direction, { preventScroll: false });
-      else input.current?.focus({ preventScroll: false }, selection);
-      if (contextLink) input.current?.editLink();
+      activate(latest);
       if (!surface.current?.contains(document.activeElement)) {
         pendingSelection.current = selection;
         pendingVertical.current = vertical;
@@ -473,7 +485,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (snapshot.id === null) {
       setShifting(outdent ? 'out' : 'in');
       setTimeout(() => { if (mounted.current) setShifting(null); }, 240);
-      flushSync(() => persist({ ...snapshot, kind: targetKind, parentId, afterId }));
+      flushSync(() => persist({ ...snapshot, kind: targetKind, parentId, afterId, placement: 'after' }));
       // A new draft has no server-side position to move yet. Keep indentation
       // immediate and persist the final parent when Enter or blur saves it.
       // Waiting on a create request here makes a quick Tab, Enter sequence lose
@@ -527,11 +539,20 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     } finally { setCompleting(null); }
   }, false);
 
-  const beginBullet = () => void run(async () => {
-    await save();
-    lock.current = false;
-    flushSync(() => { setBusy(false); persist(blank(records.current, true)); });
-  });
+  const beginBullet = () => {
+    const value = current.current;
+    const unchanged = !value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags);
+    if (unchanged) {
+      flushSync(() => persist(blank(records.current, true)));
+      input.current?.focus({ preventScroll: true });
+      return;
+    }
+    void run(async () => {
+      await save();
+      lock.current = false;
+      flushSync(() => { setBusy(false); persist(blank(records.current, true)); });
+    });
+  };
 
   const verticalBoundary = (direction: VerticalDirection, measuredX: number) => {
     const currentElement = surface.current?.querySelector('[contenteditable]')?.closest<HTMLElement>('li[data-outline-key]');
@@ -765,6 +786,53 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     }
     return toggle ?? <Marker data-focus-chrome $task={rowKind === 'tasks'} aria-hidden="true" />;
   };
+  const shiftDraft = (outdent: boolean) => {
+    if (outdent && current.current.parentId === null) return;
+    const indentSelection = input.current?.selection();
+    if (current.current.id === null) {
+      restoringFocus.current = true;
+      const emptyDraft = !current.current.content.trim() && !current.current.tags.length;
+      void move(outdent);
+      if (emptyDraft) {
+        pendingSelection.current = indentSelection;
+        focus();
+      } else {
+        (document.activeElement as HTMLElement | null)?.blur();
+        void queue.current.finally(() => { pendingSelection.current = indentSelection; focus(); });
+      }
+    } else {
+      void run(async () => { await move(outdent); pendingSelection.current = indentSelection; });
+      (document.activeElement as HTMLElement | null)?.blur();
+    }
+  };
+  const startSwipe = (event: React.PointerEvent) => {
+    if (event.pointerType !== 'touch' || !event.isPrimary) return;
+    swipe.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+  };
+  const trackSwipe = (event: React.PointerEvent) => {
+    const start = swipe.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+    if (Math.abs(event.clientX - start.x) >= 12 || Math.abs(event.clientY - start.y) >= 12) start.moved = true;
+  };
+  const swipeDirection = (event: React.PointerEvent): 'in' | 'out' | null => {
+    const start = swipe.current;
+    swipe.current = null;
+    if (!start || !start.moved || start.pointerId !== event.pointerId) return null;
+    const x = event.clientX - start.x, y = event.clientY - start.y;
+    if (Math.abs(x) < 48 || Math.abs(x) < Math.abs(y) * 1.25) return null;
+    event.preventDefault(); event.stopPropagation(); haptic('impact');
+    return x > 0 ? 'in' : 'out';
+  };
+  const finishDraftSwipe = (event: React.PointerEvent) => {
+    const direction = swipeDirection(event);
+    if (direction) shiftDraft(direction === 'out');
+  };
+  const finishSavedSwipe = (event: React.PointerEvent, item: OutlineItem) => {
+    const direction = swipeDirection(event);
+    if (!direction) return;
+    suppressClick.current = true;
+    void select(item).then(() => shiftDraft(direction === 'out'));
+  };
   const advance = () => {
     if (!current.current.content.trim() && !current.current.tags.length && current.current.id !== null) {
       persist({ ...current.current, content: '', tags: [] });
@@ -804,6 +872,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   const renderDraft = (depth: number): ReactNode => <DraftItem key="draft" data-depth={depth}
     data-outline-key={key} data-kind={draft.kind} data-item-id={draft.id ?? 'draft'}
     onPointerLeave={() => clearPreview(draft.id)}
+    onPointerDown={startSwipe} onPointerMove={trackSwipe} onPointerUp={finishDraftSwipe} onPointerCancel={() => { swipe.current = null; }}
     $emptyTask={draft.kind === 'tasks' && draft.id === null && !draft.content.trim() && !draft.tags.length}
     $shifting={shifting}
     $leaving={completing === draft.id && completing !== null}>
@@ -844,36 +913,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
         if (event.key === 'Tab') {
           if (event.shiftKey && current.current.parentId === null) return;
           event.preventDefault();
-          // Read ProseMirror's selection before moving the row. The browser's
-          // DOM selection can briefly point at the remounted editor instead.
-          const indentSelection = input.current?.selection() ?? selectedTextOffsets(event.currentTarget as HTMLElement);
-          // Draft indentation is entirely local and synchronous; it must not
-          // take the async mutation lock because Enter commonly follows Tab in
-          // the same typing cadence.
-          if (current.current.id === null) {
-            // Moving the draft remounts its editor. Protect an empty draft
-            // from being mistaken for an abandoned one during that blur.
-            restoringFocus.current = true;
-            const emptyDraft = !current.current.content.trim() && !current.current.tags.length;
-            void move(event.shiftKey);
-            if (emptyDraft) {
-              // There is no save to reconcile. Restore the remounted editor on
-              // the next frame without an extra blur that could discard it.
-              pendingSelection.current = indentSelection;
-              focus();
-            } else {
-              // A note autosave may already be in flight and reconcile this row
-              // after the immediate local move. Restore once more after that
-              // refresh so it cannot reset the caret to the start.
-              (document.activeElement as HTMLElement | null)?.blur();
-              void queue.current.finally(() => { pendingSelection.current = indentSelection; focus(); });
-            }
-          } else {
-            void run(async () => { await move(event.shiftKey); pendingSelection.current = indentSelection; });
-            // Do not expose the remounted editor as focused until run() can
-            // restore both focus and the saved caret after the server move.
-            (document.activeElement as HTMLElement | null)?.blur();
-          }
+          shiftDraft(event.shiftKey);
         } else if (event.key === 'Enter' && !event.shiftKey) {
           event.preventDefault();
           advance();
@@ -903,9 +943,13 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (!group.length) return null;
     const content = group.map(item => item === null ? renderDraft(depth) : <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={entryKind(item)} data-item-id={item.id} data-depth={depth} $leaving={completing === item.id}
       onPointerLeave={() => clearPreview(item.id)}
+      onPointerDown={startSwipe} onPointerMove={trackSwipe} onPointerUp={event => finishSavedSwipe(event, item)} onPointerCancel={() => { swipe.current = null; }}
       $arriving={entryKind(item) === 'tasks' && (completed.has(item.id) || reopened.has(item.id))}>
       <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && entryKind(item) === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ')}
-        onClick={event => { if ((archived || !item.completed_at) && !(event.target as HTMLElement).closest('a')) select(item, event.currentTarget); }}
+        onClick={event => {
+          if (suppressClick.current) { suppressClick.current = false; return; }
+          if ((archived || !item.completed_at) && !(event.target as HTMLElement).closest('a')) void select(item, event.currentTarget);
+        }}
         onContextMenu={event => {
           const link = (event.target as HTMLElement).closest('a');
           if (link && (archived || !item.completed_at)) { event.preventDefault(); select(item, event.currentTarget, link); }

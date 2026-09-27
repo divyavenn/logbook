@@ -58,3 +58,18 @@ test('tag collection opens only in the outer half-margin, dims the page, and ret
   await expect(panel).toHaveCSS('transform', 'matrix(1, 0, 0, 1, -18, 0)');
   await expect(backdrop).toHaveCSS('opacity', '0');
 });
+
+test('zoom-equivalent compact desktop widths preserve the left gutter and hover sidebar', async ({ page }) => {
+  await page.setViewportSize({ width: 520, height: 800 });
+  await page.goto('/');
+  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
+  const main = (await page.getByRole('main').boundingBox())!;
+  expect(main.x).toBe(48);
+  expect(520 - main.x - main.width).toBe(16);
+
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  const home = rail.getByRole('button', { name: 'logbook', exact: true });
+  expect((await rail.boundingBox())!.width).toBe(40);
+  await page.mouse.move(12, 240);
+  await expect(home).toBeVisible();
+});

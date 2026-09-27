@@ -91,7 +91,8 @@ test('narrow or short viewports use three swipe panes with the timer always visi
     ]);
     expect(activeDot!.y + activeDot!.height / 2).toBeCloseTo(timerBox!.y + timerBox!.height / 2, 0);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveCSS('font-size', '0px');
-    await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(0);
+    expect(await tabs.getByRole('tab').evaluateAll(elements => elements.map(element => getComputedStyle(element, '::before').width))).toEqual(['6px', '6px', '6px']);
+    await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(1);
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
     const pager = page.getByTestId('mobile-pager');
     await expect(pager).toHaveCSS('scrollbar-width', 'none');
@@ -99,6 +100,11 @@ test('narrow or short viewports use three swipe panes with the timer always visi
     await expect(pager).toHaveCSS('overscroll-behavior-x', 'none');
     await expect(pager.locator(':scope > section').first()).toHaveCSS('scroll-snap-stop', 'always');
     await expect(page.getByTestId('log-scroll')).toHaveCSS('scrollbar-width', 'none');
+    const [topWash, bottomWash, logBox] = await Promise.all([
+      page.getByTestId('log-top-ink-wash').boundingBox(), page.getByTestId('log-bottom-ink-wash').boundingBox(), page.getByTestId('log-scroll').boundingBox(),
+    ]);
+    expect(topWash!.y).toBeLessThanOrEqual(logBox!.y);
+    expect(bottomWash!.y + bottomWash!.height).toBeGreaterThanOrEqual(logBox!.y + logBox!.height);
     const paneGeometry = await pager.evaluate(element => ({
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
@@ -108,7 +114,7 @@ test('narrow or short viewports use three swipe panes with the timer always visi
     expect(paneGeometry.panes.every(pane => pane.clientWidth === paneGeometry.clientWidth && pane.scrollWidth <= pane.clientWidth), JSON.stringify(paneGeometry)).toBe(true);
     if (size.width <= 640) {
       const main = (await page.getByRole('main').boundingBox())!;
-      expect(main.x).toBe(24);
+      expect(main.x).toBe(48);
       expect(size.width - main.x - main.width).toBe(16);
     }
     await page.getByRole('tab', { name: 'tags', exact: true }).click();
@@ -137,6 +143,10 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
   try {
     await mobile.goto('/');
     expect(await mobile.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+    const mobileMain = (await mobile.getByRole('main').boundingBox())!;
+    expect(mobileMain.x).toBe(24);
+    expect(440 - mobileMain.x - mobileMain.width).toBe(16);
+    await expect(mobile.getByRole('navigation', { name: 'Tags' })).toHaveCount(0);
     const composer = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
     await expect(composer).toBeFocused();
     await composer.fill('Mobile typing');
@@ -157,15 +167,19 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
 
 test('a touch swipe always advances the narrow pager by one tab', async ({ page }) => {
   await page.setViewportSize({ width: 440, height: 700 });
+  const session = await page.context().newCDPSession(page);
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   await page.goto('/');
   const tabs = page.getByRole('tablist', { name: 'Mobile views' });
   const pager = page.getByTestId('mobile-pager');
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = 0; });
   const box = (await pager.boundingBox())!;
-  const session = await page.context().newCDPSession(page);
-  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const dateHeader = (await page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true }).boundingBox())!;
   const swipe = async (from: number, to: number) => {
-    const y = box.y + Math.min(160, box.height / 2);
+    // Entry rows reserve horizontal gestures for indent/outdent; the open
+    // date header remains a page-navigation gesture surface.
+    const y = dateHeader.y + dateHeader.height / 2;
     const point = (x: number) => ({ x, y, id: 0, radiusX: 1, radiusY: 1, force: 1 });
     await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(from)] });
     for (let step = 1; step <= 5; step++) {
@@ -175,10 +189,10 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   };
   await swipe(box.x + box.width * .82, box.x + box.width * .18);
   await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft)).toBeCloseTo(box.width * 2, 0);
+  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(2, 1);
   await swipe(box.x + box.width * .18, box.x + box.width * .82);
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft)).toBeCloseTo(box.width, 0);
+  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
 });
 
 test('swipe log loads earlier dates infinitely and preserves its active tag filter', async ({ page }) => {

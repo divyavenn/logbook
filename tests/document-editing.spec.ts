@@ -226,6 +226,7 @@ test('mobile insertParagraph advances from a saved entry without losing its text
     await mobile.locator(`[data-kind="notes"][data-item-id="${row.id}"] [role="group"]`).click();
     const editor = mobile.getByRole('textbox', { name: 'Edit note', exact: true });
     await expect(editor).toBeFocused();
+    await editor.press('Meta+ArrowDown');
     await editor.pressSequentially(' with more text');
     const result = await editor.evaluate(element => {
       const event = new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertParagraph' });
@@ -237,6 +238,78 @@ test('mobile insertParagraph advances from a saved entry without losing its text
     await expect(next.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
     await expect(mobile.getByRole('group', { name: 'Mobile saved entry with more text', exact: true })).toBeVisible();
     await expect(mobile.getByText('Retry saving', { exact: true })).toHaveCount(0);
+  } finally {
+    await context.close();
+  }
+});
+
+test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter position', async ({ browser, baseURL, request }) => {
+  const first = await (await request.post('/api/tasks', { data: { content: 'First mobile task' } })).json();
+  const last = await (await request.post('/api/tasks', { data: { content: 'Last mobile task', after_id: first.id } })).json();
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  const mobile = await context.newPage();
+  try {
+    await mobile.goto('/');
+    await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    const rootIds = () => mobile.locator('[data-outline-kind="tasks"] > ul > li[data-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-item-id')));
+    const preview = mobile.getByRole('group', { name: 'First mobile task', exact: true });
+    await expect(preview).toBeInViewport();
+    await expect.poll(rootIds).toEqual([String(first.id), String(last.id), 'draft']);
+    const previewBox = (await preview.boundingBox())!;
+    await preview.click();
+    const editor = mobile.getByRole('textbox', { name: 'Edit to-do', exact: true });
+    await expect(editor).toBeFocused();
+    const editorBox = (await editor.boundingBox())!;
+    expect(editorBox.x).toBeCloseTo(previewBox.x, 0);
+    expect(editorBox.y).toBeCloseTo(previewBox.y, 0);
+    await editor.press('Meta+ArrowDown');
+
+    await editor.evaluate(element => {
+      const event = new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertParagraph' });
+      element.dispatchEvent(event);
+    });
+    const next = mobile.getByRole('textbox', { name: 'New to-do', exact: true });
+    await expect(next).toBeFocused();
+    await expect.poll(rootIds).toEqual([String(first.id), 'draft', String(last.id)]);
+
+    const refreshed = mobile.waitForResponse(response => response.url().includes('/api/journal?') && response.ok());
+    await mobile.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await refreshed;
+    await expect.poll(rootIds).toEqual([String(first.id), 'draft', String(last.id)]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('mobile entry swipes indent and outdent without switching panes', async ({ browser, baseURL, request }) => {
+  const first = await (await request.post('/api/tasks', { data: { content: 'Swipe parent' } })).json();
+  const second = await (await request.post('/api/tasks', { data: { content: 'Swipe child', after_id: first.id } })).json();
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  const mobile = await context.newPage();
+  try {
+    await mobile.goto('/');
+    await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    const row = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
+    await expect(row).toBeInViewport();
+    const swipe = async (element: typeof row, from: number, to: number) => {
+      await element.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: from, clientY: 180 });
+      await element.dispatchEvent('pointermove', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: (from + to) / 2, clientY: 182 });
+      await element.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: to, clientY: 184 });
+    };
+    await swipe(row, 90, 165);
+    await expect.poll(async () => {
+      const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
+      return tasks.find(task => task.id === second.id)?.parent_id;
+    }).toBe(first.id);
+    await expect(mobile.getByRole('tab', { name: 'to do', exact: true })).toHaveAttribute('aria-selected', 'true');
+
+    const editorRow = mobile.getByRole('textbox', { name: 'Edit to-do', exact: true }).locator('xpath=ancestor::li[1]');
+    await swipe(editorRow, 165, 90);
+    await expect.poll(async () => {
+      const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
+      return tasks.find(task => task.id === second.id)?.parent_id;
+    }).toBeNull();
+    await expect(mobile.getByRole('tab', { name: 'to do', exact: true })).toHaveAttribute('aria-selected', 'true');
   } finally {
     await context.close();
   }

@@ -228,6 +228,7 @@ def test_authentication_flag_defaults_off_and_can_protect_the_api(client, monkey
     response = client.post('/api/auth/login', json={'password': 'private-test-password'})
     assert response.status_code == 204
     assert response.headers['set-cookie'].startswith('still_session=')
+    assert f'Max-Age={30 * 24 * 60 * 60}' in response.headers['set-cookie']
     assert 'HttpOnly' in response.headers['set-cookie']
     assert 'SameSite=strict' in response.headers['set-cookie']
     assert client.get('/api/auth/status').json() == {'enabled': True, 'authenticated': True}

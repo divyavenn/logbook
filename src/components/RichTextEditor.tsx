@@ -12,13 +12,12 @@ import { normalizeTag } from '../tagSyntax';
 import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo } from '../documentHistory';
 import { errorMessage } from '../api';
+import { Code2, Link2 } from 'lucide-react';
 
 const Surface = styled.div`
   flex: 1; min-width: 0;
   .tiptap { ${richTextStyles}; min-height: var(--bullet-row-height, 40px); padding: var(--bullet-padding, 7px 0); outline: none; caret-color: var(--ink); }
   .tiptap:focus-visible { outline: none; }
-
-  @media(pointer: coarse) { .tiptap { min-height: 44px; padding: 10px 0; } }
 `;
 const LinkForm = styled.form`display: grid; gap: 8px; margin: 0;`;
 const LinkField = styled(Field)<{ $url?: boolean }>`
@@ -45,6 +44,18 @@ const HiddenTagOption = styled.span`
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 `;
 type TagSuggestion = { from: number; to: number; query: string; names: string[]; index: number; left: number; top: number };
+type MobileFormatState = { left: number; top: number; bold: boolean; italic: boolean; underline: boolean; code: boolean; link: boolean };
+const MobileFormatBar = styled.div<{ $left: number; $top: number }>`
+  position: fixed; z-index: 39; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px;
+  display: none; align-items: center; padding: 2px; border-radius: 10px;
+  color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px #0000000b, 0 5px 18px #20262024;
+  @media(pointer: coarse) { display: flex; }
+`;
+const MobileFormatButton = styled.button<{ $active: boolean }>`
+  width: 40px; height: 40px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center;
+  background: ${({ $active }) => $active ? 'var(--soft)' : 'transparent'}; color: ${({ $active }) => $active ? 'var(--link)' : 'var(--ink)'};
+  font-size: 14px; line-height: 1;
+`;
 
 function linkUrl(value: string): string | null {
   const raw = value.trim();
@@ -99,6 +110,7 @@ type Props = {
 export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument }: Props) {
   const { tags } = useJournalContext();
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
+  const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
   const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument });
@@ -326,9 +338,24 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;
       if (!editor.state.selection.empty || editor.state.selection.from !== linkReplacement.current?.to) linkReplacement.current = null;
       updateSuggestion(editor);
+      updateMobileFormat(editor);
     },
-    onBlur({ event }) { linkPrefix.current = null; linkReplacement.current = null; previousSelectAll.current = false; suggest(null); if (!linkOpen.current) { if (editor) commitTypedTags(editor, true); callbacks.current.onBlur(event); } },
+    onBlur({ event }) { linkPrefix.current = null; linkReplacement.current = null; previousSelectAll.current = false; suggest(null); setMobileFormat(null); if (!linkOpen.current) { if (editor) commitTypedTags(editor, true); callbacks.current.onBlur(event); } },
   });
+
+  const updateMobileFormat = (current: Editor) => {
+    if (!window.matchMedia('(pointer: coarse)').matches || current.state.selection.empty) { setMobileFormat(null); return; }
+    const from = current.view.coordsAtPos(current.state.selection.from);
+    const to = current.view.coordsAtPos(current.state.selection.to);
+    const viewport = window.visualViewport;
+    const viewportTop = viewport?.offsetTop ?? 0;
+    const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
+    const width = 204;
+    const left = Math.max(8, Math.min((from.left + to.right - width) / 2, window.innerWidth - width - 8));
+    const above = Math.min(from.top, to.top) - 48;
+    const top = above >= viewportTop + 8 ? above : Math.min(Math.max(from.bottom, to.bottom) + 8, viewportBottom - 52);
+    setMobileFormat({ left, top, bold: current.isActive('bold'), italic: current.isActive('italic'), underline: current.isActive('underline'), code: current.isActive('code'), link: current.isActive('link') });
+  };
 
   const updateSuggestion = (current: Editor) => {
     const { $from, empty, from } = current.state.selection;
@@ -544,7 +571,25 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     }, 170);
   };
 
+  const formatSelection = (format: 'bold' | 'italic' | 'underline' | 'code') => {
+    if (!editor) return;
+    const chain = editor.chain().focus();
+    if (format === 'bold') chain.toggleBold().run();
+    else if (format === 'italic') chain.toggleItalic().run();
+    else if (format === 'underline') chain.toggleUnderline().run();
+    else chain.toggleCode().run();
+    updateMobileFormat(editor);
+  };
+
   return <Surface><EditorContent editor={editor} />
+    {mobileFormat && <MobileFormatBar role="toolbar" aria-label="Formatting" $left={mobileFormat.left} $top={mobileFormat.top}
+      onPointerDown={event => event.preventDefault()}>
+      <MobileFormatButton type="button" $active={mobileFormat.bold} aria-label="Bold" aria-pressed={mobileFormat.bold} onClick={() => formatSelection('bold')}><strong>B</strong></MobileFormatButton>
+      <MobileFormatButton type="button" $active={mobileFormat.italic} aria-label="Italic" aria-pressed={mobileFormat.italic} onClick={() => formatSelection('italic')}><em>I</em></MobileFormatButton>
+      <MobileFormatButton type="button" $active={mobileFormat.underline} aria-label="Underline" aria-pressed={mobileFormat.underline} onClick={() => formatSelection('underline')}><u>U</u></MobileFormatButton>
+      <MobileFormatButton type="button" $active={mobileFormat.code} aria-label="Code" aria-pressed={mobileFormat.code} onClick={() => formatSelection('code')}><Code2 size={16} aria-hidden="true" /></MobileFormatButton>
+      <MobileFormatButton type="button" $active={mobileFormat.link} aria-label="Add or edit link" aria-pressed={mobileFormat.link} onClick={() => openLink('shortcut')}><Link2 size={16} aria-hidden="true" /></MobileFormatButton>
+    </MobileFormatBar>}
     {suggestion && <TagCompletion id="tag-suggestions" role="listbox" aria-label="Tags" $left={suggestion.left} $top={suggestion.top}>
       <HiddenTagOption id="tag-option-0" role="option" aria-selected={suggestion.index === 0} aria-label={`#${suggestion.names[0]}`}>#{suggestion.names[0]}</HiddenTagOption>
       <TagAlternatives>{suggestion.names.slice(1, 3).map((name, offset) => { const index = offset + 1; return <TagOption $selected={suggestion.index === index} key={name} id={`tag-option-${index}`} role="option" aria-selected={suggestion.index === index}

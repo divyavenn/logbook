@@ -3,7 +3,7 @@ import styled from 'styled-components';
 import type { Tag } from '../types';
 import { narrowViewport } from '../layout';
 
-const Backdrop = styled.div<{ $open: boolean }>`
+const Backdrop = styled.div<{ $open: boolean; $compactHover: boolean }>`
   position: fixed; inset: 0; z-index: 40;
   background: var(--backdrop); backdrop-filter: blur(4px);
   opacity: ${({ $open }) => $open ? 1 : 0};
@@ -11,15 +11,17 @@ const Backdrop = styled.div<{ $open: boolean }>`
   pointer-events: none;
   transition: opacity 140ms ease-out, visibility 140ms;
   body:has(dialog[open]) & { display: none; }
-  @media ${narrowViewport} { display: none; }
+  @media ${narrowViewport} { display: ${({ $compactHover }) => $compactHover ? 'block' : 'none'}; }
 `;
-const Rail = styled.nav<{ $open: boolean }>`
+const Rail = styled.nav<{ $open: boolean; $compactHover: boolean }>`
   --sidebar-width: max(var(--left-margin), min(280px, calc(100vw - 48px)));
   position: fixed; inset: 0 auto 0 0; z-index: 41;
-  width: ${({ $open }) => $open ? 'var(--sidebar-width)' : 'calc(var(--left-margin) / 2)'};
+  width: ${({ $open, $compactHover }) => $open ? 'var(--sidebar-width)'
+    : $compactHover ? 'min(var(--left-margin), max(40px, calc(var(--left-margin) / 2)))'
+    : 'calc(var(--left-margin) / 2)'};
   outline: none;
   body:has(dialog[open]) & { display: none; }
-  @media ${narrowViewport} { display: none; }
+  @media ${narrowViewport} { display: ${({ $compactHover }) => $compactHover ? 'block' : 'none'}; }
 `;
 const Panel = styled.div<{ $open: boolean }>`
   position: absolute; inset: 0 auto 0 0; width: var(--sidebar-width);
@@ -55,8 +57,8 @@ const TagPill = styled.button`
   @media(pointer: coarse) { min-height: 44px; &::before { inset: 0; } }
 `;
 
-export function TagTabs({ tags, active, onSelect, controls }: {
-  tags: Tag[]; active: string | null; onSelect: (tag: string | null) => void; controls?: ReactNode;
+export function TagTabs({ tags, active, onSelect, controls, compactHover = false }: {
+  tags: Tag[]; active: string | null; onSelect: (tag: string | null) => void; controls?: ReactNode; compactHover?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const rail = useRef<HTMLElement>(null);
@@ -76,8 +78,8 @@ export function TagTabs({ tags, active, onSelect, controls }: {
   const select = (tag: string | null) => { close(); onSelect(tag); };
 
   return <>
-    <Backdrop $open={open} aria-hidden="true" data-testid="tag-backdrop" />
-    <Rail ref={rail} $open={open} aria-label="Tags" tabIndex={0} data-open={open} data-focus-surface
+    <Backdrop $open={open} $compactHover={compactHover} aria-hidden="true" data-testid="tag-backdrop" />
+    <Rail ref={rail} $open={open} $compactHover={compactHover} aria-label="Tags" tabIndex={0} data-open={open} data-focus-surface
       onPointerEnter={show}
       onPointerLeave={() => {
         if (!rail.current?.matches(':focus-visible') && !rail.current?.querySelector(':focus-visible')) close();

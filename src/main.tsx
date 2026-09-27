@@ -4,6 +4,7 @@ import styled from 'styled-components';
 import App from './App';
 import { GlobalStyle } from './styles';
 import { PasswordGate } from './components/PasswordGate';
+import { installTouchHaptics } from './haptics';
 
 document.documentElement.dataset.theme = localStorage.getItem('still-theme') === 'night' ? 'night' : 'day';
 
@@ -16,6 +17,7 @@ const AppSurface = styled.div<{ $blurred: boolean; $blocked: boolean }>`
 
 function Root() {
   const [state, setState] = useState<'checking' | 'locked' | 'unlocking' | 'revealing' | 'ready'>('checking');
+  useEffect(() => installTouchHaptics(), []);
   useEffect(() => {
     let cancelled = false;
     fetch('/api/auth/status').then(async response => {

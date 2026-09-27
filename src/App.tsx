@@ -24,6 +24,7 @@ const CalendarModal = lazy(() => import('./components/CalendarModal').then(modul
 
 const Page = styled.div<{ $focusing: boolean }>`
   --current-page-paper: ${({ $focusing }) => $focusing ? 'var(--page-focus-paper)' : 'var(--page-paper)'};
+  --edge-paper: var(--paper);
   --document-width: min(680px, calc(100vw - 64px));
   --left-margin: calc((100vw - var(--document-width)) * .54);
   --right-margin: calc(100vw - var(--document-width) - var(--left-margin));
@@ -32,9 +33,11 @@ const Page = styled.div<{ $focusing: boolean }>`
   @media(pointer: coarse) { --todo-heading-height: 48px; }
   height: 100dvh; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column;
   background-color: var(--current-page-paper);
-  transition: background-color 180ms ease-out;
   [data-focus-chrome] { opacity: ${({ $focusing }) => $focusing ? 'var(--focus-chrome-opacity)' : 'var(--chrome-opacity)'}; transition: opacity 180ms ease-out; }
   ${({ $focusing }) => $focusing && css`
+    & [data-focus-surface] {
+      --edge-paper: color-mix(in srgb, var(--paper), #000 20%);
+    }
     :root:not([data-theme='night']) & [data-focus-surface] {
       --paper: color-mix(in srgb, #f2f1ed, #000 16%);
       --ink: color-mix(in srgb, #242422, #000 16%);
@@ -57,6 +60,7 @@ const Page = styled.div<{ $focusing: boolean }>`
       --url: color-mix(in srgb, #70588f, #000 16%);
       --checkbox: color-mix(in srgb, #747773, #000 16%);
       --scrollbar: color-mix(in srgb, #c0beb7, #000 16%);
+      --edge-paper: var(--paper);
     }
   `}
   @media ${compactViewport} {
@@ -67,10 +71,22 @@ const Page = styled.div<{ $focusing: boolean }>`
     scrollbar-width: none;
     &::-webkit-scrollbar { display: none; }
   }
+  /* Browser zoom can make a desktop viewport match the compact breakpoint.
+     Keep enough physical-feeling gutter for the hover sidebar on devices that
+     still have a precise pointer; touch layouts retain their tighter margins. */
+  @media (hover: hover) and (pointer: fine) {
+    --document-width: min(680px, calc(100vw - 64px));
+    --left-margin: max(48px, calc((100vw - var(--document-width)) * .54));
+    --right-margin: calc(100vw - var(--document-width) - var(--left-margin));
+  }
+  @media (pointer: coarse) {
+    height: 100lvh;
+    overflow-y: hidden;
+  }
 `;
 const ringPulse = keyframes`
-  from { scale: 1; opacity: .65; }
-  to { scale: 1.14; opacity: 0; }
+  from { transform: scale(1); opacity: .65; }
+  to { transform: scale(1.14); opacity: 0; }
 `;
 const pageControl = css`
   ${press}; position: relative; display: grid; place-items: center;
@@ -111,7 +127,7 @@ const TimerButton = styled.button<{ $pulse: boolean; $running: boolean }>`
   padding: 0; border: 0; border-radius: 50%; background: var(--timer); color: var(--timer-ink);
   &::before { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-ring); border-radius: 50%; pointer-events: none; transition: border-color 160ms ease-out; }
   &::after { content: ''; position: absolute; inset: -3px; border: 1px solid ${({ $running }) => $running ? 'var(--timer-running-ring)' : 'var(--timer-ring)'}; border-radius: 50%; pointer-events: none; opacity: 0;
-    ${({ $pulse }) => $pulse && css`animation: ${ringPulse} 360ms ease-out;`} }
+    transform: scale(1); ${({ $pulse }) => $pulse && css`animation: ${ringPulse} 360ms ease-out; will-change: transform, opacity;`} }
   &:hover { background: var(--timer-hover); }
   &[aria-pressed='true'] { background: var(--timer-running); scale: 1.03; }
   &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
@@ -128,9 +144,9 @@ const MobileTab = styled.button<{ $active: boolean }>`
   position: relative; width: 44px; height: 44px; padding: 0; border: 0; background: transparent;
   color: ${({ $active }) => $active ? 'var(--link)' : 'var(--muted)'};
   font-size: 0;
-  &::before { content: ''; position: absolute; left: 50%; top: 50%; width: ${({ $active }) => $active ? '7px' : '5px'}; height: ${({ $active }) => $active ? '7px' : '5px'};
+  &::before { content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
     border-radius: 50%; background: currentColor; opacity: ${({ $active }) => $active ? 1 : .48}; translate: -50% -50%;
-    transition: width 120ms ease-out, height 120ms ease-out, color 120ms ease-out, opacity 120ms ease-out; }
+    transition: color 120ms ease-out, opacity 120ms ease-out; }
   &:first-child::before { translate: calc(-50% + 16px) -50%; }
   &:last-child::before { translate: calc(-50% - 16px) -50%; }
 `;
@@ -199,21 +215,22 @@ const LogViewport = styled.div`
     &::-webkit-scrollbar { display: none; }
   }
 `;
-const LogEdgeWash = styled.div`
-  position: absolute; z-index: 7; top: -2px; left: -24px; right: -24px; height: 30px; pointer-events: none;
+const LogEdgeWash = styled.div<{ $edge?: 'top' | 'bottom' }>`
+  position: absolute; z-index: 7; ${({ $edge = 'top' }) => $edge === 'top' ? 'top: -2px;' : 'bottom: 0;'} left: -24px; right: -24px; height: 30px; pointer-events: none;
   opacity: 1;
-  background: linear-gradient(to bottom, var(--current-page-paper) 0%, color-mix(in srgb, var(--current-page-paper) 72%, transparent) 34%, transparent 82%);
+  background: linear-gradient(to ${({ $edge = 'top' }) => $edge === 'top' ? 'bottom' : 'top'}, var(--edge-paper) 0%, color-mix(in srgb, var(--edge-paper) 72%, transparent) 34%, transparent 82%);
   &::after {
     content: ''; position: absolute; inset: 0;
     background-image:
-      radial-gradient(ellipse 22% 105% at 7% -8%, var(--current-page-paper) 0 48%, transparent 82%),
-      radial-gradient(ellipse 30% 92% at 31% -10%, var(--current-page-paper) 0 44%, transparent 80%),
-      radial-gradient(ellipse 24% 112% at 56% -18%, var(--current-page-paper) 0 50%, transparent 84%),
-      radial-gradient(ellipse 32% 96% at 82% -9%, var(--current-page-paper) 0 42%, transparent 79%),
-      radial-gradient(ellipse 18% 108% at 101% -16%, var(--current-page-paper) 0 49%, transparent 83%);
+      radial-gradient(ellipse 22% 105% at 7% -8%, var(--edge-paper) 0 48%, transparent 82%),
+      radial-gradient(ellipse 30% 92% at 31% -10%, var(--edge-paper) 0 44%, transparent 80%),
+      radial-gradient(ellipse 24% 112% at 56% -18%, var(--edge-paper) 0 50%, transparent 84%),
+      radial-gradient(ellipse 32% 96% at 82% -9%, var(--edge-paper) 0 42%, transparent 79%),
+      radial-gradient(ellipse 18% 108% at 101% -16%, var(--edge-paper) 0 49%, transparent 83%);
     mask-image: linear-gradient(to bottom, #000 0%, #000d 40%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000d 40%, transparent 100%);
     opacity: .88;
+    ${({ $edge = 'top' }) => $edge === 'bottom' && 'transform: rotate(180deg);'}
   }
   @media ${compactViewport} { height: 24px; }
 `;
@@ -267,12 +284,14 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [soundOpen, setSoundOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paged, setPaged] = useState(() => window.matchMedia(compactViewport).matches);
+  const [hasHoverSidebar, setHasHoverSidebar] = useState(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
   const viewportWidth = useRef(window.innerWidth);
   const { pagerRef: mobilePager, selectView: selectMobileView, trackScroll: trackMobileScroll, view: mobileView } = usePager(MOBILE_VIEWS, 'log', paged);
   const quietStatus = useRef<HTMLDivElement>(null);
   const quietStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
   const [timerBusy, setTimerBusy] = useState(false);
+  const [timerIntent, setTimerIntent] = useState<'start' | 'stop' | null>(null);
   const [timerPulse, setTimerPulse] = useState(false);
   const [audible, setAudible] = useState(false);
   const [volume, setVolume] = useState(() => Math.max(0, Math.min(1, Number(localStorage.getItem('still-volume') ?? '0.22') || 0)));
@@ -296,6 +315,12 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     media.addEventListener('change', resize);
     window.addEventListener('resize', resize);
     return () => { media.removeEventListener('change', resize); window.removeEventListener('resize', resize); };
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia('(hover: hover) and (pointer: fine)');
+    const update = () => setHasHoverSidebar(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
   }, []);
   useEffect(() => {
     if (locked) return;
@@ -394,6 +419,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   useEffect(() => { const currentSound = sound.current; return () => currentSound.dispose(); }, []);
 
   const active = data?.active_session;
+  const timerRunning = timerIntent === 'start' || timerIntent === null && !!active;
   useEffect(() => {
     let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
     if (!icon) { icon = document.createElement('link'); icon.rel = 'icon'; document.head.appendChild(icon); }
@@ -404,9 +430,11 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   }, [active, night]);
   const adjustedNow = now + clockOffset.current;
   const elapsed = active ? Math.max(0, (adjustedNow - new Date(active.started_at).getTime()) / 1000) : 0;
+  const visibleElapsed = timerRunning ? elapsed : 0;
   const toggleTimer = async () => {
     if (timerLock.current) return;
-    timerLock.current = true; setTimerBusy(true);
+    const stopping = !!active;
+    timerLock.current = true; setTimerIntent(stopping ? 'stop' : 'start'); setTimerBusy(true);
     try {
       if (active) {
         await api<Session>('/timer/stop', 'POST', { session_id: active.id });
@@ -424,7 +452,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       }
       await refresh();
     } catch (e) { if (!active) { sound.current.stop(); setAudible(false); } notify(errorMessage(e)); }
-    finally { timerLock.current = false; setTimerBusy(false); }
+    finally { timerLock.current = false; setTimerIntent(null); setTimerBusy(false); }
   };
   const toggleSound = async () => {
     if (audible) { sound.current.stop(); setAudible(false); localStorage.setItem('still-muted', 'true'); }
@@ -480,17 +508,17 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     </ThemeToggle>
   </SidebarControls>;
 
-  return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={!!active} data-testid="page" data-focus-running={active ? 'true' : undefined}>
+  return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}>
     <TimerChrome>
-      <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(elapsed)}</TimerTime>
-      <TimerButton $pulse={timerPulse} $running={!!active} type="button" disabled={timerBusy || !data}
-        aria-label={active ? 'Stop focus timer' : 'Start focus timer'} aria-pressed={!!active}
+      <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(visibleElapsed)}</TimerTime>
+      <TimerButton $pulse={timerPulse} $running={timerRunning} type="button" disabled={!data} data-haptic="impact"
+        aria-label={timerRunning ? 'Stop focus timer' : 'Start focus timer'} aria-pressed={timerRunning} aria-disabled={timerBusy || undefined} aria-busy={timerBusy || undefined}
         title="Click to start/stop · right-click for sound"
         onContextMenu={event => { event.preventDefault(); setSoundOpen(true); }}
         onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); setSoundOpen(true); } }}
         onClick={() => void toggleTimer()}><TimerIcon size={16} aria-hidden="true" /></TimerButton>
     </TimerChrome>
-    {!paged && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} />}
+    {(!paged || hasHoverSidebar) && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
     <Main data-focus-surface>
       {paged ? <>
         <ShortHeader>
@@ -505,7 +533,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
           <MobilePane id="mobile-panel-log" role="tabpanel" aria-labelledby="mobile-tab-log" aria-hidden={mobileView !== 'log'} inert={mobileView !== 'log'}>{data && <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
             <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate}
               sessionsEnabled={false} showHistory secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
-          </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /></LogFrame>}</MobilePane>
+          </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame>}</MobilePane>
           <MobilePane id="mobile-panel-tags" role="tabpanel" aria-labelledby="mobile-tab-tags" aria-hidden={mobileView !== 'tags'} inert={mobileView !== 'tags'}>
             <MobileTags>
               <MobileTagCollection aria-label="Filter by tag">
@@ -524,7 +552,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
         <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate} secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
         {error && <TextButton onClick={() => void refresh().catch(e => notify(errorMessage(e)))}>Connection lost · retry</TextButton>}
-        </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /></LogFrame>
+        </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame>
       }
       </>}
     </Main>

@@ -20,6 +20,28 @@ async function rows(page: Page, kind: 'notes' | 'tasks') {
   return (await (await page.request.get('/api/export')).json())[kind] as { id: number; content: string; parent_id: number | null; source_task_id?: number }[];
 }
 
+test('mobile text selection exposes a compact formatting toolbar', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  const mobile = await context.newPage();
+  try {
+    await mobile.goto('/');
+    const editor = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
+    await editor.fill('Mobile formatting');
+    await editor.press('Meta+a');
+    const toolbar = mobile.getByRole('toolbar', { name: 'Formatting', exact: true });
+    await expect(toolbar).toBeVisible();
+    await expect(toolbar.getByRole('button')).toHaveCount(5);
+    await expect(toolbar.getByRole('button', { name: 'Code', exact: true })).toBeVisible();
+    await toolbar.getByRole('button', { name: 'Bold', exact: true }).click();
+    await expect(editor.locator('strong')).toHaveText('Mobile formatting');
+    await toolbar.getByRole('button', { name: 'Code', exact: true }).click();
+    await expect(editor.locator('code')).toHaveText('Mobile formatting');
+    await expect(editor).toBeFocused();
+  } finally {
+    await context.close();
+  }
+});
+
 for (const kind of ['notes', 'tasks'] as const) {
   test(`link boundaries follow words while interior spaces stay linked in ${kind}`, async ({ page, request }) => {
     const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
