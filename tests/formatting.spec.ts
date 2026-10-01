@@ -25,17 +25,28 @@ test('mobile text selection exposes a compact formatting toolbar', async ({ brow
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
+    await mobile.evaluate(() => {
+      Object.defineProperty(window, 'visualViewport', { configurable: true, value: {
+        offsetLeft: 32, offsetTop: 0, width: 376, height: 700,
+      } });
+    });
+    expect(await mobile.evaluate(() => [window.visualViewport?.offsetLeft, window.visualViewport?.width])).toEqual([32, 376]);
     const editor = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
-    await editor.fill('Mobile formatting');
-    await editor.press('Meta+a');
+    await editor.fill('Mobile formatting reaches the right edge');
+    await editor.press('Meta+ArrowRight');
+    await editor.press('Shift+ArrowLeft');
     const toolbar = mobile.getByRole('toolbar', { name: 'Formatting', exact: true });
     await expect(toolbar).toBeVisible();
     await expect(toolbar.getByRole('button')).toHaveCount(5);
     await expect(toolbar.getByRole('button', { name: 'Code', exact: true })).toBeVisible();
+    const bounds = (await toolbar.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(40);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(400);
+    await editor.press('Meta+a');
     await toolbar.getByRole('button', { name: 'Bold', exact: true }).click();
-    await expect(editor.locator('strong')).toHaveText('Mobile formatting');
+    await expect(editor.locator('strong')).toHaveText('Mobile formatting reaches the right edge');
     await toolbar.getByRole('button', { name: 'Code', exact: true }).click();
-    await expect(editor.locator('code')).toHaveText('Mobile formatting');
+    await expect(editor.locator('code')).toHaveText('Mobile formatting reaches the right edge');
     await expect(editor).toBeFocused();
   } finally {
     await context.close();

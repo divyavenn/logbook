@@ -10,7 +10,7 @@ import { Modal } from './Modal';
 import { useJournalContext } from '../JournalContext';
 import { normalizeTag } from '../tagSyntax';
 import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
-import { documentUndo } from '../documentHistory';
+import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { errorMessage } from '../api';
 import { Code2, Link2 } from 'lucide-react';
 
@@ -44,15 +44,15 @@ const HiddenTagOption = styled.span`
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 `;
 type TagSuggestion = { from: number; to: number; query: string; names: string[]; index: number; left: number; top: number };
-type MobileFormatState = { left: number; top: number; bold: boolean; italic: boolean; underline: boolean; code: boolean; link: boolean };
-const MobileFormatBar = styled.div<{ $left: number; $top: number }>`
-  position: fixed; z-index: 39; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px;
+type MobileFormatState = { left: number; top: number; width: number; bold: boolean; italic: boolean; underline: boolean; code: boolean; link: boolean };
+const MobileFormatBar = styled.div<{ $left: number; $top: number; $width: number }>`
+  position: fixed; z-index: 39; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px; width: ${({ $width }) => $width}px;
   display: none; align-items: center; padding: 2px; border-radius: 10px;
   color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px #0000000b, 0 5px 18px #20262024;
   @media(pointer: coarse) { display: flex; }
 `;
 const MobileFormatButton = styled.button<{ $active: boolean }>`
-  width: 40px; height: 40px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center;
+  flex: 1 1 40px; min-width: 0; height: 40px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center;
   background: ${({ $active }) => $active ? 'var(--soft)' : 'transparent'}; color: ${({ $active }) => $active ? 'var(--link)' : 'var(--ink)'};
   font-size: 14px; line-height: 1;
 `;
@@ -265,6 +265,9 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         }
         if (pending && event.key === 'Escape') { event.preventDefault(); suggest(null); return true; }
         const mod = event.metaKey || event.ctrlKey;
+        const historyKey = mod && !event.altKey && ['z', 'y'].includes(event.key.toLowerCase());
+        if (historyKey && event.repeat) { event.preventDefault(); return true; }
+        const historyDirection = historyShortcutDirection(event);
         if (!mod && !event.shiftKey && editor && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
             selectTypedTag(editor, event.key === 'ArrowLeft' ? 'left' : 'right')) {
           event.preventDefault(); return true;
@@ -282,11 +285,10 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
             return true;
           }
         }
-        if (mod && ['z', 'y'].includes(event.key.toLowerCase())) {
+        if (historyDirection !== null) {
           event.preventDefault();
-          const forward = event.shiftKey || event.key.toLowerCase() === 'y';
-          const handled = forward ? editor?.commands.redo() : editor?.commands.undo();
-          if (!handled) void documentUndo(forward).catch(error => window.dispatchEvent(new CustomEvent('still-history-error', { detail: errorMessage(error) })));
+          const handled = historyDirection ? editor?.commands.redo() : editor?.commands.undo();
+          if (!handled) void documentUndo(historyDirection).catch(error => window.dispatchEvent(new CustomEvent('still-history-error', { detail: errorMessage(error) })));
           return true;
         }
         if (mod && event.key.toLowerCase() === 'a') {
@@ -348,13 +350,17 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     const from = current.view.coordsAtPos(current.state.selection.from);
     const to = current.view.coordsAtPos(current.state.selection.to);
     const viewport = window.visualViewport;
+    const viewportLeft = viewport?.offsetLeft ?? 0;
+    const viewportWidth = viewport?.width ?? window.innerWidth;
     const viewportTop = viewport?.offsetTop ?? 0;
     const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
-    const width = 204;
-    const left = Math.max(8, Math.min((from.left + to.right - width) / 2, window.innerWidth - width - 8));
+    const width = Math.max(0, Math.min(204, viewportWidth - 16));
+    const minLeft = viewportLeft + 8;
+    const maxLeft = viewportLeft + viewportWidth - width - 8;
+    const left = Math.max(minLeft, Math.min((from.left + to.right - width) / 2, maxLeft));
     const above = Math.min(from.top, to.top) - 48;
     const top = above >= viewportTop + 8 ? above : Math.min(Math.max(from.bottom, to.bottom) + 8, viewportBottom - 52);
-    setMobileFormat({ left, top, bold: current.isActive('bold'), italic: current.isActive('italic'), underline: current.isActive('underline'), code: current.isActive('code'), link: current.isActive('link') });
+    setMobileFormat({ left, top, width, bold: current.isActive('bold'), italic: current.isActive('italic'), underline: current.isActive('underline'), code: current.isActive('code'), link: current.isActive('link') });
   };
 
   const updateSuggestion = (current: Editor) => {
@@ -582,7 +588,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
   };
 
   return <Surface><EditorContent editor={editor} />
-    {mobileFormat && <MobileFormatBar role="toolbar" aria-label="Formatting" $left={mobileFormat.left} $top={mobileFormat.top}
+    {mobileFormat && <MobileFormatBar role="toolbar" aria-label="Formatting" $left={mobileFormat.left} $top={mobileFormat.top} $width={mobileFormat.width}
       onPointerDown={event => event.preventDefault()}>
       <MobileFormatButton type="button" $active={mobileFormat.bold} aria-label="Bold" aria-pressed={mobileFormat.bold} onClick={() => formatSelection('bold')}><strong>B</strong></MobileFormatButton>
       <MobileFormatButton type="button" $active={mobileFormat.italic} aria-label="Italic" aria-pressed={mobileFormat.italic} onClick={() => formatSelection('italic')}><em>I</em></MobileFormatButton>

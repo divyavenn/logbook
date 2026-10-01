@@ -281,7 +281,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
   }
 });
 
-test('mobile entry swipes indent and outdent without switching panes', async ({ browser, baseURL, request }) => {
+test('mobile entry swipes change panes until a hold selects the entry for indenting', async ({ browser, baseURL, request }) => {
   const first = await (await request.post('/api/tasks', { data: { content: 'Swipe parent' } })).json();
   const second = await (await request.post('/api/tasks', { data: { content: 'Swipe child', after_id: first.id } })).json();
   const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
@@ -291,20 +291,35 @@ test('mobile entry swipes indent and outdent without switching panes', async ({ 
     await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
     const row = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
     await expect(row).toBeInViewport();
-    const swipe = async (element: typeof row, from: number, to: number) => {
-      await element.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: from, clientY: 180 });
-      await element.dispatchEvent('pointermove', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: (from + to) / 2, clientY: 182 });
-      await element.dispatchEvent('pointerup', { pointerType: 'touch', pointerId: 7, isPrimary: true, clientX: to, clientY: 184 });
+    let pointerId = 7;
+    const swipe = async (element: typeof row, from: number, to: number, hold = false) => {
+      pointerId += 1;
+      await element.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId, isPrimary: true, clientX: from, clientY: 180 });
+      if (hold) {
+        await mobile.waitForTimeout(400);
+        await expect(element).toHaveAttribute('data-gesture-selected', 'true');
+      }
+      await element.dispatchEvent('pointermove', { pointerType: 'touch', pointerId, isPrimary: true, clientX: (from + to) / 2, clientY: 182 });
+      await element.dispatchEvent('pointerup', { pointerType: 'touch', pointerId, isPrimary: true, clientX: to, clientY: 184 });
     };
-    await swipe(row, 90, 165);
+    await swipe(row, 340, 90);
+    await expect(mobile.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+    expect(((await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>).find(task => task.id === second.id)?.parent_id).toBeNull();
+
+    await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    await swipe(row, 90, 165, true);
     await expect.poll(async () => {
       const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
       return tasks.find(task => task.id === second.id)?.parent_id;
     }).toBe(first.id);
     await expect(mobile.getByRole('tab', { name: 'to do', exact: true })).toHaveAttribute('aria-selected', 'true');
 
-    const editorRow = mobile.getByRole('textbox', { name: 'Edit to-do', exact: true }).locator('xpath=ancestor::li[1]');
-    await swipe(editorRow, 165, 90);
+    const expandParent = mobile.getByRole('button', { name: 'Expand Swipe parent', exact: true });
+    await expect(expandParent).toBeVisible();
+    await expandParent.click();
+    const nestedRow = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
+    await expect(nestedRow).toBeVisible();
+    await swipe(nestedRow, 165, 90, true);
     await expect.poll(async () => {
       const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
       return tasks.find(task => task.id === second.id)?.parent_id;

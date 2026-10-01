@@ -7,11 +7,13 @@ import type { EntryKind, OutlineItem } from '../types';
 import { TextButton, VisuallyHidden } from '../styles';
 import { MarkdownContent, markdownText, richTextStyles, mergeMarkdown, formatMarkdown, pastedBullet } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
-import { documentUndo, editDocument, recordEdit } from '../documentHistory';
+import { documentUndo, editDocument, historyShortcutDirection, recordEdit } from '../documentHistory';
 import { compactViewport } from '../layout';
 import { haptic } from '../haptics';
 
 const MAX_LEVELS = 8;
+const ENTRY_HOLD_MS = 360;
+const ENTRY_MOVE_THRESHOLD = 48;
 const OutlineSurface = styled.div`
   position: relative; outline: none;
   --bullet-size: 15px;
@@ -34,14 +36,19 @@ const popOut = keyframes`0% { opacity: 1; transform: scale(1); } 40% { opacity: 
 const slideIn = keyframes`from { opacity: 0; transform: translateY(-7px); } to { opacity: 1; transform: translateY(0); }`;
 const shiftIn = keyframes`from { opacity: .72; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); }`;
 const shiftOut = keyframes`from { opacity: .72; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); }`;
-const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $shifting?: 'in' | 'out' | null }>`
-  min-width: 0; transform-origin: left center;
+const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height);`;
+const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $shifting?: 'in' | 'out' | null; $gestureSelected?: boolean; $dragX?: number }>`
+  min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
   ${({ $leaving }) => $leaving && css`animation: ${popOut} 180ms ease-out both; pointer-events: none;`}
   ${({ $arriving }) => $arriving && css`animation: ${slideIn} 280ms cubic-bezier(.2,.7,.3,1) both;`}
   ${({ $shifting }) => $shifting && css`animation: ${$shifting === 'in' ? shiftIn : shiftOut} 220ms cubic-bezier(.2, 0, 0, 1) both;`}
+  > ${Row} { transition: background-color 120ms ease-out; }
+  ${({ $gestureSelected }) => $gestureSelected && css`
+    user-select: none; -webkit-user-select: none;
+    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
+  `}
   @media(pointer: coarse) { touch-action: pan-y; }
 `;
-const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height);`;
 const Branch = styled.div<{ $open: boolean }>`
   display: grid; min-height: 0;
   grid-template-rows: ${({ $open }) => $open ? '1fr' : '0fr'};
@@ -138,6 +145,11 @@ type Draft = {
   parentId: number | null; afterId: number | null; placement: 'tail' | 'after'; hiddenTag: string | null; tags: string[]; savedTags: string[];
 };
 type VerticalTarget = { x: number; direction: VerticalDirection };
+type EntrySelection = { key: string; dragX: number };
+type EntryGesture = {
+  pointerId: number; key: string; element: HTMLElement; x: number; y: number; pager: HTMLElement | null; pagerLeft: number;
+  armed: boolean; paging: boolean; cancelled: boolean; timer: ReturnType<typeof setTimeout> | null;
+};
 type Props = {
   kind: EntryKind | 'mixed'; items: OutlineItem[]; day?: string; composer?: boolean;
   archived?: boolean; scope?: string;
@@ -192,7 +204,13 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
-  const swipe = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
+  const entryGesture = useRef<EntryGesture | null>(null);
+  const [entrySelection, setEntrySelection] = useState<EntrySelection | null>(null);
+  const entrySelectionRef = useRef<EntrySelection | null>(null);
+  const updateEntrySelection = (next: EntrySelection | null) => {
+    entrySelectionRef.current = next;
+    setEntrySelection(next);
+  };
   const suppressClick = useRef(false);
   const [shifting, setShifting] = useState<'in' | 'out' | null>(null);
   const [, setSelectedAll] = useState(false);
@@ -411,6 +429,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     window.addEventListener('focus', onFocus); window.addEventListener('pagehide', flush);
     return () => {
       mounted.current = false; cancelAnimationFrame(frame);
+      if (entryGesture.current?.timer) clearTimeout(entryGesture.current.timer);
       window.removeEventListener('focus', onFocus); window.removeEventListener('pagehide', flush);
       void save().catch(() => {});
     };
@@ -469,12 +488,11 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       }
     }, false);
   };
-  const move = async (outdent: boolean) => {
-    const snapshot = current.current;
+  const moveDestination = (snapshot: { id: number | null; parentId: number | null; afterId: number | null }, outdent: boolean) => {
     const parent = records.current.find(item => item.id === snapshot.parentId);
     const group = siblings(records.current, snapshot.parentId).filter(item => item.id !== snapshot.id);
     const previous = snapshot.afterId !== null ? group.find(item => item.id === snapshot.afterId) : undefined;
-    if (outdent ? !parent : !previous) return;
+    if (outdent ? !parent : !previous) return null;
     const parentId = outdent ? parent!.parent_id : previous!.id;
     const afterId = outdent ? parent!.id : siblings(records.current, previous!.id).at(-1)?.id ?? null;
     const targetParent = parentId === null ? null : records.current.find(item => item.id === parentId);
@@ -482,6 +500,13 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     let level = 1, ancestor = parentId;
     while (ancestor !== null) { level++; ancestor = records.current.find(item => item.id === ancestor)?.parent_id ?? null; }
     if (level > MAX_LEVELS) throw new Error(`Bullets support up to ${MAX_LEVELS} levels.`);
+    return { parentId, afterId, targetKind };
+  };
+  const move = async (outdent: boolean) => {
+    const snapshot = current.current;
+    const destination = moveDestination(snapshot, outdent);
+    if (!destination) return;
+    const { parentId, afterId, targetKind } = destination;
     if (snapshot.id === null) {
       setShifting(outdent ? 'out' : 'in');
       setTimeout(() => { if (mounted.current) setShifting(null); }, 240);
@@ -513,6 +538,22 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       flushSync(() => { setBusy(false); persist({ ...current.current, kind: targetKind, parentId, afterId, revision: moved?.revision ?? current.current.revision }); });
     }
     await refresh();
+  };
+  const moveSavedItem = (item: OutlineItem, outdent: boolean) => {
+    void run(async () => {
+      await save();
+      const latest = records.current.find(row => row.id === item.id);
+      if (!latest) return;
+      const group = siblings(records.current, latest.parent_id);
+      const index = group.findIndex(row => row.id === latest.id);
+      const destination = moveDestination({ id: latest.id, parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }, outdent);
+      if (!destination) return;
+      await editDocument([{
+        kind: entryKind(latest), id: latest.id, move: true,
+        parent_id: destination.parentId, after_id: destination.afterId, expected_revision: latest.revision,
+      }]);
+      await refresh();
+    }, false);
   };
   const complete = (id: number) => void run(async () => {
     await save();
@@ -805,33 +846,102 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       (document.activeElement as HTMLElement | null)?.blur();
     }
   };
-  const startSwipe = (event: React.PointerEvent) => {
+  const clearEntryGestureTimer = (gesture: EntryGesture) => {
+    if (gesture.timer) clearTimeout(gesture.timer);
+    gesture.timer = null;
+  };
+  const startEntryGesture = (event: React.PointerEvent, key: string, element: HTMLElement) => {
     if (event.pointerType !== 'touch' || !event.isPrimary) return;
-    swipe.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+    const previous = entryGesture.current;
+    if (previous) clearEntryGestureTimer(previous);
+    const pager = element.closest<HTMLElement>('[data-mobile-pager]');
+    const gesture: EntryGesture = {
+      pointerId: event.pointerId, key, element, x: event.clientX, y: event.clientY, pager,
+      pagerLeft: pager?.scrollLeft ?? 0, armed: entrySelectionRef.current?.key === key,
+      paging: false, cancelled: false, timer: null,
+    };
+    entryGesture.current = gesture;
+    if (gesture.armed) return;
+    gesture.timer = setTimeout(() => {
+      if (entryGesture.current !== gesture || gesture.cancelled || gesture.paging) return;
+      gesture.armed = true;
+      suppressClick.current = true;
+      updateEntrySelection({ key, dragX: 0 });
+      window.getSelection()?.removeAllRanges();
+      try { element.setPointerCapture(gesture.pointerId); } catch { /* The pointer may already have ended. */ }
+      haptic('impact');
+    }, ENTRY_HOLD_MS);
   };
-  const trackSwipe = (event: React.PointerEvent) => {
-    const start = swipe.current;
-    if (!start || start.pointerId !== event.pointerId) return;
-    if (Math.abs(event.clientX - start.x) >= 12 || Math.abs(event.clientY - start.y) >= 12) start.moved = true;
+  const trackEntryGesture = (event: React.PointerEvent) => {
+    const gesture = entryGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId || gesture.cancelled) return;
+    const x = event.clientX - gesture.x;
+    const y = event.clientY - gesture.y;
+    if (gesture.armed) {
+      if (Math.abs(x) < 4 || Math.abs(x) < Math.abs(y)) return;
+      event.preventDefault(); event.stopPropagation();
+      const dragX = Math.sign(x) * Math.min(28, Math.abs(x));
+      updateEntrySelection({ key: gesture.key, dragX });
+      return;
+    }
+    if (!gesture.paging && Math.abs(x) < 10 && Math.abs(y) < 10) return;
+    clearEntryGestureTimer(gesture);
+    if (!gesture.paging && Math.abs(y) >= Math.abs(x)) {
+      gesture.cancelled = true;
+      return;
+    }
+    if (!gesture.pager) { gesture.cancelled = true; return; }
+    gesture.paging = true;
+    gesture.pager.dataset.dragging = 'true';
+    try { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); } catch { /* Continue with the events the browser provides. */ }
+    event.preventDefault(); event.stopPropagation();
+    gesture.pager.scrollLeft = gesture.pagerLeft - x;
   };
-  const swipeDirection = (event: React.PointerEvent): 'in' | 'out' | null => {
-    const start = swipe.current;
-    swipe.current = null;
-    if (!start || !start.moved || start.pointerId !== event.pointerId) return null;
-    const x = event.clientX - start.x, y = event.clientY - start.y;
-    if (Math.abs(x) < 48 || Math.abs(x) < Math.abs(y) * 1.25) return null;
-    event.preventDefault(); event.stopPropagation(); haptic('impact');
-    return x > 0 ? 'in' : 'out';
-  };
-  const finishDraftSwipe = (event: React.PointerEvent) => {
-    const direction = swipeDirection(event);
-    if (direction) shiftDraft(direction === 'out');
-  };
-  const finishSavedSwipe = (event: React.PointerEvent, item: OutlineItem) => {
-    const direction = swipeDirection(event);
-    if (!direction) return;
+  const finishEntryGesture = (event: React.PointerEvent) => {
+    const gesture = entryGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    entryGesture.current = null;
+    clearEntryGestureTimer(gesture);
+    const x = event.clientX - gesture.x;
+    const y = event.clientY - gesture.y;
+    if (gesture.paging && gesture.pager) {
+      event.preventDefault(); event.stopPropagation();
+      delete gesture.pager.dataset.dragging;
+      const width = gesture.pager.clientWidth;
+      const initial = Math.round(gesture.pagerLeft / width);
+      const direction = Math.abs(x) >= ENTRY_MOVE_THRESHOLD && Math.abs(x) >= Math.abs(y) * 1.25 ? (x < 0 ? 1 : -1) : 0;
+      const last = Math.max(0, Math.round(gesture.pager.scrollWidth / width) - 1);
+      const target = Math.max(0, Math.min(last, initial + direction));
+      gesture.pager.scrollTo({ left: target * width, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      suppressClick.current = true;
+      return;
+    }
+    if (!gesture.armed) return;
+    event.preventDefault(); event.stopPropagation();
     suppressClick.current = true;
-    void select(item).then(() => shiftDraft(direction === 'out'));
+    const direction = Math.abs(x) >= ENTRY_MOVE_THRESHOLD && Math.abs(x) >= Math.abs(y) * 1.25 ? (x > 0 ? 'in' : 'out') : null;
+    if (!direction) {
+      updateEntrySelection({ key: gesture.key, dragX: 0 });
+      return;
+    }
+    updateEntrySelection(null);
+    const outdent = direction === 'out';
+    if (gesture.key.startsWith('item:')) {
+      const id = Number(gesture.key.slice('item:'.length));
+      const item = records.current.find(row => row.id === id);
+      if (item) moveSavedItem(item, outdent);
+    } else shiftDraft(outdent);
+  };
+  const cancelEntryGesture = (event: React.PointerEvent) => {
+    const gesture = entryGesture.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    entryGesture.current = null;
+    clearEntryGestureTimer(gesture);
+    if (gesture.pager) {
+      delete gesture.pager.dataset.dragging;
+      if (gesture.paging) gesture.pager.scrollTo({ left: gesture.pagerLeft, behavior: 'smooth' });
+    }
+    if (gesture.armed) updateEntrySelection({ key: gesture.key, dragX: 0 });
   };
   const advance = () => {
     if (!current.current.content.trim() && !current.current.tags.length && current.current.id !== null) {
@@ -869,11 +979,16 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       flushSync(() => persist(splitDraft));
     });
   };
-  const renderDraft = (depth: number): ReactNode => <DraftItem key="draft" data-depth={depth}
+  const renderDraft = (depth: number): ReactNode => {
+    const gestureKey = `draft:${draft.clientId}`;
+    const gestureSelected = entrySelection?.key === gestureKey;
+    return <DraftItem key="draft" data-depth={depth}
     data-outline-key={key} data-kind={draft.kind} data-item-id={draft.id ?? 'draft'}
+    data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
     onPointerLeave={() => clearPreview(draft.id)}
-    onPointerDown={startSwipe} onPointerMove={trackSwipe} onPointerUp={finishDraftSwipe} onPointerCancel={() => { swipe.current = null; }}
+    onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
     $emptyTask={draft.kind === 'tasks' && draft.id === null && !draft.content.trim() && !draft.tags.length}
+    $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
     $shifting={shifting}
     $leaving={completing === draft.id && completing !== null}>
     <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed subtask' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
@@ -926,6 +1041,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     {failed && <TextButton onClick={() => void run(async () => { await save(); })}>Retry saving</TextButton>}
     {draft.id !== null && <Branch data-branch-for={draft.id} $open={isExpanded(draft.id)} aria-hidden={!isExpanded(draft.id)}>{renderChildren(draft.id, depth + 1)}</Branch>}
   </DraftItem>;
+  };
 
   const renderChildren = (parentId: number | null, depth: number): ReactNode => {
     const group: (OutlineItem | null)[] = sorted(items.filter(item => !removed.has(item.id) &&
@@ -941,11 +1057,17 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       group.splice(index, 0, null);
     }
     if (!group.length) return null;
-    const content = group.map(item => item === null ? renderDraft(depth) : <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={entryKind(item)} data-item-id={item.id} data-depth={depth} $leaving={completing === item.id}
+    const content = group.map(item => {
+      if (item === null) return renderDraft(depth);
+      const gestureKey = `item:${item.id}`;
+      const gestureSelected = entrySelection?.key === gestureKey;
+      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={entryKind(item)} data-item-id={item.id} data-depth={depth} $leaving={completing === item.id}
+      data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
       onPointerLeave={() => clearPreview(item.id)}
-      onPointerDown={startSwipe} onPointerMove={trackSwipe} onPointerUp={event => finishSavedSwipe(event, item)} onPointerCancel={() => { swipe.current = null; }}
+      onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
+      $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
       $arriving={entryKind(item) === 'tasks' && (completed.has(item.id) || reopened.has(item.id))}>
-      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && entryKind(item) === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ')}
+      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && entryKind(item) === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, activeTag ? [activeTag] : []) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ')}
         onClick={event => {
           if (suppressClick.current) { suppressClick.current = false; return; }
           if ((archived || !item.completed_at) && !(event.target as HTMLElement).closest('a')) void select(item, event.currentTarget);
@@ -955,14 +1077,21 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
           if (link && (archived || !item.completed_at)) { event.preventDefault(); select(item, event.currentTarget, link); }
         }}
         onKeyDown={event => { if ((archived || !item.completed_at) && event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(item); } }}
-      ><MarkdownContent content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} /></Text>
+      ><MarkdownContent content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={activeTag ? [activeTag] : []} /></Text>
       </Row>
       <Branch data-branch-for={item.id} $open={isExpanded(item.id)} aria-hidden={!isExpanded(item.id)}>{renderChildren(item.id, depth + 1)}</Branch>
-    </Item>);
+    </Item>;
+    });
     const parent = parentId === null ? null : items.find(item => item.id === parentId);
     return parentId === null ? <List>{content}</List> : <Children $task={parent ? entryKind(parent) === 'tasks' : draft.kind === 'tasks'}>{content}</Children>;
   };
-  return <OutlineSurface ref={surface} data-outline-kind={defaultKind} tabIndex={-1} onPointerDown={() => { verticalX.current = null; selectionActive.current = false; setSelectedAll(false); }} onCopyCapture={event => {
+  return <OutlineSurface ref={surface} data-outline-kind={defaultKind} tabIndex={-1} onPointerDown={event => {
+    verticalX.current = null; selectionActive.current = false; setSelectedAll(false);
+    const entry = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-entry-gesture-key]') : null;
+    const gestureKey = entry?.dataset.entryGestureKey;
+    if (gestureKey !== entrySelectionRef.current?.key) updateEntrySelection(null);
+    if (entry && gestureKey) startEntryGesture(event, gestureKey, entry);
+  }} onPointerMove={trackEntryGesture} onPointerUp={finishEntryGesture} onPointerCancel={cancelEntryGesture} onCopyCapture={event => {
     if (!selectionActive.current) return;
     event.preventDefault(); event.stopPropagation(); copyDocument(event.clipboardData);
   }} onCutCapture={event => { if (selectionActive.current) { event.preventDefault(); event.stopPropagation(); copyDocument(event.clipboardData); replaceDocument(); } }}
@@ -970,8 +1099,11 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (!selectionActive.current || event.defaultPrevented) return;
     event.stopPropagation();
     const mod = event.metaKey || event.ctrlKey;
+    const historyKey = mod && !event.altKey && ['z', 'y'].includes(event.key.toLowerCase());
+    if (historyKey && event.repeat) { event.preventDefault(); return; }
+    const historyDirection = historyShortcutDirection(event.nativeEvent);
     if (mod && event.key.toLowerCase() === 'a') { event.preventDefault(); return; }
-    if (mod && ['z', 'y'].includes(event.key.toLowerCase())) { event.preventDefault(); void documentUndo(event.shiftKey || event.key.toLowerCase() === 'y').catch(e => notify(errorMessage(e))); return; }
+    if (historyDirection !== null) { event.preventDefault(); void documentUndo(historyDirection).catch(e => notify(errorMessage(e))); return; }
     const format = mod ? ({ b: 'bold', i: 'italic', u: 'underline', c: event.shiftKey ? 'code' : '' } as Record<string, string>)[event.key.toLowerCase()] : '';
     if (format) { event.preventDefault(); void run(async () => {
       await save();

@@ -165,6 +165,42 @@ test('merging, grouped selection, and document undo cross bullet boundaries', as
   await expect(page.getByRole('group', { name: 'Beta', exact: true }).locator('strong')).toHaveText('Beta');
 });
 
+test('document undo ignores editable fields and repeating shortcuts', async ({ page }) => {
+  await page.goto('/');
+  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  await composer.fill('Protected from accidental undo');
+  await composer.dispatchEvent('keydown', { key: 'z', code: 'KeyZ', metaKey: true, repeat: true, bubbles: true, cancelable: true });
+  await expect(composer).toHaveText('Protected from accidental undo');
+  await composer.press('Enter');
+  const saved = page.getByRole('group', { name: 'Protected from accidental undo', exact: true });
+  await expect(saved).toBeVisible();
+
+  let historyRequests = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/api/document/history')) historyRequests += 1;
+  });
+  const input = page.locator('body').locator('input[data-undo-guard]');
+  await page.evaluate(() => {
+    const field = document.createElement('input');
+    field.dataset.undoGuard = 'true';
+    document.body.append(field);
+  });
+  await input.fill('Field-local text');
+  await input.press('Meta+z');
+  await page.getByRole('button', { name: 'Start focus timer', exact: true }).evaluate(element => {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', code: 'KeyZ', metaKey: true, repeat: true, bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(100);
+  expect(historyRequests).toBe(0);
+  await expect(saved).toBeVisible();
+
+  const historyResponse = page.waitForResponse(response => response.request().method() === 'POST' && response.url().includes('/api/document/history'));
+  await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
+  await page.keyboard.press('Meta+z');
+  await historyResponse;
+  await expect(saved).toHaveCount(0);
+});
+
 for (const key of ['Backspace', 'Delete'] as const) {
   test(`${key} deletes entries spanned by a document selection`, async ({ page, request }) => {
     const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();

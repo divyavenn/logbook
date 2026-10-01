@@ -10,7 +10,7 @@ import { TagTabs } from './components/TagTabs';
 import { JournalContext, flushDrafts } from './JournalContext';
 import { Modal } from './components/Modal';
 import type { SearchHit } from './components/SearchModal';
-import { documentUndo, recordCompletion } from './documentHistory';
+import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
 import { compactViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
 
@@ -153,6 +153,7 @@ const MobileTab = styled.button<{ $active: boolean }>`
 const MobilePager = styled.div`
   display: flex; flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden;
   scroll-snap-type: x mandatory; overscroll-behavior-x: none; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  &[data-dragging='true'] { scroll-snap-type: none; scroll-behavior: auto; }
   &::-webkit-scrollbar { display: none; }
 `;
 const MobilePane = styled.section`
@@ -326,8 +327,14 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     if (locked) return;
     const shortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
+      const historyDirection = historyShortcutDirection(event);
+      const editing = event.target instanceof Element && !!event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
+      if (historyDirection !== null && !editing) {
+        event.preventDefault();
+        void documentUndo(historyDirection).catch(e => notify(errorMessage(e)));
+        return;
+      }
       if (event.metaKey || event.ctrlKey) {
-        if (['z', 'y'].includes(event.key.toLowerCase())) { event.preventDefault(); void documentUndo(event.shiftKey || event.key.toLowerCase() === 'y').catch(e => notify(errorMessage(e))); }
         if (event.key.toLowerCase() === 'f') { event.preventDefault(); setSearchOpen(true); }
       }
     };
@@ -528,7 +535,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
             <MobileTab id="mobile-tab-tags" type="button" role="tab" aria-controls="mobile-panel-tags" aria-selected={mobileView === 'tags'} $active={mobileView === 'tags'} onClick={() => selectMobileView('tags')}>tags</MobileTab>
           </MobileTabs>
         </ShortHeader>
-        <MobilePager ref={mobilePager} data-testid="mobile-pager" onScroll={event => trackMobileScroll(event.currentTarget)}>
+        <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}>
           <MobilePane id="mobile-panel-todos" role="tabpanel" aria-labelledby="mobile-tab-todos" aria-hidden={mobileView !== 'todos'} inert={mobileView !== 'todos'}>{data ? <Todos key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} /> : null}</MobilePane>
           <MobilePane id="mobile-panel-log" role="tabpanel" aria-labelledby="mobile-tab-log" aria-hidden={mobileView !== 'log'} inert={mobileView !== 'log'}>{data && <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
             <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate}

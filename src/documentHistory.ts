@@ -3,11 +3,21 @@ import { flushDrafts } from './JournalContext';
 import type { OutlineItem } from './types';
 
 type Entry = { key: string; operations: string[]; completion?: { id: number; at: string } };
+type HistoryShortcutEvent = {
+  key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; repeat: boolean;
+};
 let undo: Entry[] = [], redo: Entry[] = [], busy = false;
 try { const stored = JSON.parse(localStorage.getItem('still-document-history') ?? '{}'); undo = stored.undo ?? []; redo = stored.redo ?? []; } catch { /* A damaged history does not prevent editing. */ }
 function changed() {
   localStorage.setItem('still-document-history', JSON.stringify({ undo: undo.slice(-200), redo: redo.slice(-200) }));
   window.dispatchEvent(new CustomEvent('still-history-available', { detail: undo.length > 0 }));
+}
+export function historyShortcutDirection(event: HistoryShortcutEvent): boolean | null {
+  if (event.repeat || event.altKey || !(event.metaKey || event.ctrlKey)) return null;
+  const key = event.key.toLowerCase();
+  if (key === 'z') return event.shiftKey;
+  if (key === 'y' && !event.shiftKey) return true;
+  return null;
 }
 export function recordEdit(operation: string | null, key: string) {
   if (!operation) return;

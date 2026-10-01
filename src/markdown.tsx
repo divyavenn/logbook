@@ -4,7 +4,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { MarkdownSerializer, defaultMarkdownSerializer } from 'prosemirror-markdown';
 import { MarkdownManager } from '@tiptap/markdown';
 import styled, { css } from 'styled-components';
-import { tagMatches } from './tagSyntax';
+import { normalizeTag, tagMatches } from './tagSyntax';
 import { JournalTag } from './tagEditor';
 
 export function safeHref(value: string): string | null {
@@ -84,13 +84,35 @@ export function pastedBullet(text: string, html = '') {
   });
   return serializeBullet(html ? generateJSON(html, formattingExtensions()) : { type: 'doc', content: [{ type: 'paragraph', content }] });
 }
-export function markdownText(source: string): string {
-  const visit = (node: JSONContent): string => node.text ?? (node.type === 'hardBreak' ? '\n' : (node.content ?? []).map(visit).join(node.type === 'doc' ? '\n' : ''));
-  return visit(parseMarkdown(source));
+function hideTags(node: JSONContent, hidden: Set<string>): JSONContent | null {
+  if (node.type === 'codeBlock' || node.marks?.some(mark => mark.type === 'code' || mark.type === 'link')) return node;
+  if (node.text) {
+    const matches = tagMatches(node.text).filter(match => hidden.has(match.name));
+    if (!matches.length) return node;
+    let text = '', offset = 0;
+    for (const match of matches) {
+      text += node.text.slice(offset, match.from);
+      offset = match.to;
+    }
+    text += node.text.slice(offset);
+    return text ? { ...node, text } : null;
+  }
+  if (node.content) node.content = node.content.map(child => hideTags(child, hidden)).filter((child): child is JSONContent => child !== null);
+  return node;
 }
 
-export function documentWithTags(content: string, tags: string[]): JSONContent {
-  const document = parseMarkdown(content);
+export function markdownText(source: string, hiddenTags: string[] = []): string {
+  const hidden = new Set(hiddenTags.map(normalizeTag));
+  const parsed = parseMarkdown(source);
+  const document = hidden.size ? hideTags(parsed, hidden) ?? { type: 'doc' as const } : parsed;
+  const visit = (node: JSONContent): string => node.text ?? (node.type === 'hardBreak' ? '\n' : (node.content ?? []).map(visit).join(node.type === 'doc' ? '\n' : ''));
+  return visit(document);
+}
+
+export function documentWithTags(content: string, tags: string[], hiddenTags: string[] = []): JSONContent {
+  const hidden = new Set(hiddenTags.map(normalizeTag));
+  const parsed = parseMarkdown(content);
+  const document = (hidden.size ? hideTags(parsed, hidden) : parsed) ?? { type: 'doc' as const };
   document.content ??= [];
   const expected = new Set(tags);
   const found = new Set<string>();
@@ -230,8 +252,8 @@ function renderNode(node: JSONContent, key: number): ReactNode {
   }
 }
 
-export const MarkdownContent = memo(function MarkdownContent({ content, tags = [] }: { content: string; tags?: string[] }) {
-  const document = useMemo(() => documentWithTags(content, tags), [content, tags]);
+export const MarkdownContent = memo(function MarkdownContent({ content, tags = [], hiddenTags = [] }: { content: string; tags?: string[]; hiddenTags?: string[] }) {
+  const document = useMemo(() => documentWithTags(content, tags, hiddenTags), [content, tags, hiddenTags]);
   // Explicit React elements only: raw HTML, scripts, images and unsafe links never execute.
   return <>{document.content?.map(renderNode)}</>;
 });
