@@ -210,9 +210,10 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(editor).toHaveText(`First ${kind.slice(0, -1)}Secon`);
     await editor.press('Enter');
     await expect(saved(first.id)).toBeVisible();
-    const rows = (await (await request.get('/api/export')).json())[kind];
-    expect(rows.some((row: { id: number }) => row.id === second.id)).toBe(false);
-    expect(rows.find((row: { id: number }) => row.id === first.id).content).toBe(`First ${kind.slice(0, -1)}Secon`);
+    await expect.poll(async () => {
+      const rows = (await (await request.get('/api/export')).json())[kind];
+      return { secondExists: rows.some((row: { id: number }) => row.id === second.id), content: rows.find((row: { id: number }) => row.id === first.id).content };
+    }).toEqual({ secondExists: false, content: `First ${kind.slice(0, -1)}Secon` });
   });
 }
 
@@ -402,7 +403,7 @@ test('clicking beneath a past date opens an end bullet and abandoned empty draft
   expect(notes.at(-1).content).toBe('A new historical note');
 });
 
-test('typing while Enter waits for the server is acknowledged before the editor advances', async ({ page, request }) => {
+test('typing after Enter stays in the new row while the previous save is pending', async ({ page, request }) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let held = false;
@@ -420,13 +421,15 @@ test('typing while Enter waits for the server is acknowledged before the editor 
   await editor.fill('Before response');
   await editor.press('Enter');
   await expect.poll(() => held).toBe(true);
-  await editor.pressSequentially(' plus late typing');
-  release();
   await expect(editor).toHaveText('');
+  await editor.pressSequentially('Next row');
+  release();
+  await expect(editor).toHaveText('Next row');
+  await editor.press('Enter');
   await expect.poll(async () => {
     const notes = (await (await request.get('/api/export')).json()).notes;
-    return notes.some((row: { content: string }) => row.content === 'Before response plus late typing');
-  }).toBe(true);
+    return notes.map((row: { content: string }) => row.content);
+  }).toEqual(['Before response', 'Next row']);
 });
 
 test('editing a saved entry after inserting before it uses its latest revision', async ({ page, request }) => {
@@ -466,8 +469,10 @@ test('a stale saved-entry draft refreshes its revision and retries without getti
 
   await expect(page.getByRole('button', { name: 'Retry saving' })).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'dv-notes local draft survives', exact: true })).toBeVisible();
-  const exported = await (await request.get('/api/export')).json();
-  expect(exported.notes.find((item: { id: number }) => item.id === note.id).content).toBe('dv-notes local draft survives');
+  await expect.poll(async () => {
+    const exported = await (await request.get('/api/export')).json();
+    return exported.notes.find((item: { id: number }) => item.id === note.id).content;
+  }).toBe('dv-notes local draft survives');
 });
 
 test('Backspace merges a completed task into the preceding note', async ({ page, request }) => {

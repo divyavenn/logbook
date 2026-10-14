@@ -2,14 +2,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { flushSync } from 'react-dom';
 import styled, { keyframes, css } from 'styled-components';
 import { useJournalContext, registerDraftFlush } from '../JournalContext';
-import { api, ApiError, errorMessage } from '../api';
+import { api } from '../api';
 import type { EntryKind, OutlineItem } from '../types';
-import { TextButton, VisuallyHidden } from '../styles';
+import { VisuallyHidden } from '../styles';
 import { MarkdownContent, markdownText, richTextStyles, mergeMarkdown, formatMarkdown, pastedBullet } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
 import { documentUndo, editDocument, historyShortcutDirection, recordEdit } from '../documentHistory';
 import { compactViewport } from '../layout';
 import { haptic } from '../haptics';
+import { OutlineDocument } from '../outlineDocument';
+import { entryError } from '../entryFeedback';
 
 const MAX_LEVELS = 8;
 const ENTRY_HOLD_MS = 360;
@@ -34,22 +36,21 @@ const Children = styled(List)<{ $task: boolean }>`
 `;
 const popOut = keyframes`0% { opacity: 1; transform: scale(1); } 40% { opacity: .8; transform: scale(1.012); } 100% { opacity: 0; transform: translateY(-3px) scale(.985); }`;
 const slideIn = keyframes`from { opacity: 0; transform: translateY(-7px); } to { opacity: 1; transform: translateY(0); }`;
-const shiftIn = keyframes`from { opacity: .72; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); }`;
-const shiftOut = keyframes`from { opacity: .72; transform: translateX(10px); } to { opacity: 1; transform: translateX(0); }`;
 const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height);`;
-const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $shifting?: 'in' | 'out' | null; $gestureSelected?: boolean; $dragX?: number }>`
+const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
   ${({ $leaving }) => $leaving && css`animation: ${popOut} 180ms ease-out both; pointer-events: none;`}
   ${({ $arriving }) => $arriving && css`animation: ${slideIn} 280ms cubic-bezier(.2,.7,.3,1) both;`}
-  ${({ $shifting }) => $shifting && css`animation: ${$shifting === 'in' ? shiftIn : shiftOut} 220ms cubic-bezier(.2, 0, 0, 1) both;`}
   > ${Row} { transition: background-color 120ms ease-out; }
+  &[data-drop-position="before"] > ${Row} { box-shadow: 0 -2px 0 var(--link); }
+  &[data-drop-position="after"] > ${Row} { box-shadow: 0 2px 0 var(--link); }
   ${({ $gestureSelected }) => $gestureSelected && css`
     user-select: none; -webkit-user-select: none;
     > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
   `}
   @media(pointer: coarse) { touch-action: pan-y; }
 `;
-const Branch = styled.div<{ $open: boolean }>`
+const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
   display: grid; min-height: 0;
   grid-template-rows: ${({ $open }) => $open ? '1fr' : '0fr'};
   opacity: ${({ $open }) => $open ? 1 : 0};
@@ -74,6 +75,10 @@ const Branch = styled.div<{ $open: boolean }>`
     > ${Children} > ${Item}:nth-child(3) > ${Row} { transition-delay: 70ms; }
     > ${Children} > ${Item}:nth-child(4) > ${Row} { transition-delay: 105ms; }
     > ${Children} > ${Item}:nth-child(n + 5) > ${Row} { transition-delay: 140ms; }
+  `}
+  ${({ $editing }) => $editing && css`
+    transition: none;
+    > ${Children} > ${Item} > ${Row} { transition: none; }
   `}
 
   @media (prefers-reduced-motion: reduce) {
@@ -145,7 +150,7 @@ type Draft = {
   active: boolean; mode: 'new' | 'edit'; id: number | null; content: string; saved: string;
   kind: EntryKind;
   clientId: ReturnType<typeof crypto.randomUUID>; requestId: ReturnType<typeof crypto.randomUUID>; revision: number | null;
-  parentId: number | null; afterId: number | null; placement: 'tail' | 'after'; hiddenTag: string | null; tags: string[]; savedTags: string[];
+  parentId: number | null; afterId: number | null; beforeId?: number | null; placement: 'tail' | 'after'; hiddenTag: string | null; tags: string[]; savedTags: string[];
 };
 type VerticalTarget = { x: number; direction: VerticalDirection };
 type EntrySelection = { key: string; dragX: number };
@@ -186,8 +191,12 @@ const fresh = (items: OutlineItem[], active: boolean, kind: EntryKind, parentId:
   afterId: afterId === undefined ? siblings(items, parentId).at(-1)?.id ?? null : afterId,
 });
 
-export function Outline({ kind, items, day, composer = false, archived = false, scope, refresh, notify }: Props) {
+export function Outline({ kind, items: serverItems, day, composer = false, archived = false, scope, refresh }: Props) {
   const defaultKind: EntryKind = kind === 'mixed' ? 'notes' : kind;
+  const key = scope ? `still-outline-${kind}-${scope}` : kind === 'tasks' ? 'still-outline-tasks' : `still-draft-${day}`;
+  const [documentStore] = useState(() => new OutlineDocument(key));
+  const [, renderDocument] = useState(0);
+  const items = documentStore.rebase(serverItems);
   const entryKind = (row: OutlineItem): EntryKind => {
     const value = row.kind as string | undefined;
     return value === 'task' || value === 'tasks' ? 'tasks' : value === 'note' || value === 'notes' ? 'notes' : defaultKind;
@@ -215,11 +224,11 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     setEntrySelection(next);
   };
   const suppressClick = useRef(false);
-  const [shifting, setShifting] = useState<'in' | 'out' | null>(null);
+  const draggedEntry = useRef<number | null>(null);
+  const dropTarget = useRef<HTMLElement | null>(null);
   const [, setSelectedAll] = useState(false);
   const selectionActive = useRef(false);
   const surface = useRef<HTMLDivElement>(null);
-  const key = scope ? `still-outline-${kind}-${scope}` : kind === 'tasks' ? 'still-outline-tasks' : `still-draft-${day}`;
   useEffect(() => {
     const completedIds = new Set(archived ? items.filter(row => entryKind(row) === 'tasks' && !!row.completed_at).map(row => row.id) : []);
     const newlyCompleted = [...completedIds].filter(id => !seenCompleted.current.has(id));
@@ -233,7 +242,11 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   const [draft, setDraft] = useState<Draft>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<Draft> | null;
-      if (stored && (stored.content !== stored.saved || JSON.stringify(stored.tags ?? []) !== JSON.stringify(stored.savedTags ?? [])) && typeof stored.content === 'string') {
+      if (stored && (stored.content !== stored.saved || JSON.stringify(stored.tags ?? []) !== JSON.stringify(stored.savedTags ?? []) || documentStore.hasPending(stored.id ?? null)) && typeof stored.content === 'string') {
+        stored.id = documentStore.resolve(stored.id ?? null);
+        stored.parentId = documentStore.resolve(stored.parentId ?? null);
+        stored.afterId = documentStore.resolve(stored.afterId ?? null);
+        stored.beforeId = documentStore.resolve(stored.beforeId ?? null);
         const row = items.find(item => item.id === stored.id);
         return { ...blank(items, true), ...stored, placement: stored.placement ?? 'tail', requestId: stored.requestId ?? crypto.randomUUID(), revision: stored.revision ?? row?.revision ?? null,
           kind: stored.kind ?? (row ? entryKind(row) : defaultKind), active: true, parentId: stored.parentId ?? row?.parent_id ?? null };
@@ -271,13 +284,11 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   const pendingVertical = useRef<VerticalTarget | undefined>(undefined);
   const verticalX = useRef<number | null>(null);
   const pendingLinkEdit = useRef(false);
-  const queue = useRef<Promise<number | null>>(Promise.resolve(null));
   const lock = useRef(false);
   const actionToken = useRef(0);
   const restoringFocus = useRef(false);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [failed, setFailed] = useState(false);
   const previouslyComposer = useRef(composer);
   const persist = useCallback((next: Draft) => {
     current.current = next;
@@ -293,22 +304,14 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (value.afterId !== afterId) persist({ ...value, afterId });
   }, [items, kind, composer, persist]);
   const focus = () => {
-    // A remounted editor can inherit DOM focus one frame before its intended
-    // caret is restored. Temporarily remove that premature focus so a rapid
-    // follow-up key cannot land at the editor's default edge.
-    if ((pendingSelection.current || pendingVertical.current) && surface.current?.contains(document.activeElement)) {
-      (document.activeElement as HTMLElement | null)?.blur();
-    }
-    requestAnimationFrame(() => {
-      if (selectionActive.current) { restoringFocus.current = false; return; }
-      if (pendingVertical.current) input.current?.focusAt(pendingVertical.current.x, pendingVertical.current.direction, { preventScroll: false });
-      else input.current?.focus({ preventScroll: false }, pendingSelection.current);
-      if (pendingLinkEdit.current) input.current?.editLink();
-      pendingSelection.current = undefined;
-      pendingVertical.current = undefined;
-      pendingLinkEdit.current = false;
-      restoringFocus.current = false;
-    });
+    if (selectionActive.current) { restoringFocus.current = false; return; }
+    if (pendingVertical.current) input.current?.focusAt(pendingVertical.current.x, pendingVertical.current.direction, { preventScroll: false });
+    else input.current?.focus({ preventScroll: false }, pendingSelection.current);
+    if (pendingLinkEdit.current) input.current?.editLink();
+    pendingSelection.current = undefined;
+    pendingVertical.current = undefined;
+    pendingLinkEdit.current = false;
+    restoringFocus.current = false;
   };
   const dismissEmptyDraft = () => {
     if (lock.current) return false;
@@ -318,79 +321,50 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     return true;
   };
 
+  documentStore.refresh = refresh;
+  documentStore.changed = () => {
+    records.current = documentStore.items();
+    if (mounted.current) renderDocument(value => value + 1);
+  };
+  documentStore.remapped = () => {
+    const resolve = documentStore.resolve;
+    const value = current.current;
+    records.current = documentStore.items();
+    persist({ ...value, id: resolve(value.id), parentId: resolve(value.parentId),
+      afterId: resolve(value.afterId), beforeId: resolve(value.beforeId ?? null) });
+    const remap = (ids: Set<number>) => new Set([...ids].map(id => resolve(id)!));
+    setExpanded(remap); setCollapsed(remap); setPreviewed(remap); setRemoved(remap);
+  };
+  documentStore.failed = (error, ids) => {
+    for (const id of ids) entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
+  };
+  const stageDraft = useCallback(() => {
+    const value = current.current;
+    if (!value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags)) return value.id;
+    if (!value.content.trim() && !value.tags.length) {
+      if (value.id !== null) documentStore.enqueue([{ kind: value.kind, id: value.id, delete: true }], value.clientId);
+      persist({ ...value, id: null, revision: null, saved: '', savedTags: [] });
+      return null;
+    }
+    const id = value.id ?? documentStore.allocate();
+    documentStore.enqueue([{
+      id, kind: value.kind, create: value.id === null, content: value.content, tags: value.tags, date: day,
+      client_id: value.clientId, parent_id: value.parentId, after_id: value.afterId, before_id: value.beforeId,
+    }], value.clientId);
+    persist({ ...value, id, saved: value.content, savedTags: value.tags });
+    return id;
+  }, [day, documentStore, persist]);
   const save = useCallback(() => {
-    const operation = queue.current.catch(() => null).then(async () => {
-      let snapshot = current.current;
-      if (!snapshot.active || snapshot.content === snapshot.saved && JSON.stringify(snapshot.tags) === JSON.stringify(snapshot.savedTags)) return snapshot.id;
-      let announced = false;
-      const feedback = setTimeout(() => {
-        announced = true;
-        window.dispatchEvent(new CustomEvent('still-save-state', { detail: 'saving' }));
-      }, 450);
-      setSaving(true);
-      try {
-        const edit = async (changes: (value: Draft) => Record<string, unknown>[]) => {
-          try {
-            return await editDocument(changes(snapshot), snapshot.clientId, snapshot.requestId);
-          } catch (error) {
-            if (!(error instanceof ApiError) || error.status !== 409 || snapshot.id === null) throw error;
-            await refresh();
-            await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-            const latest = records.current.find(item => item.id === snapshot.id);
-            if (!latest || current.current.clientId !== snapshot.clientId) throw error;
-            const group = siblings(records.current, latest.parent_id);
-            const index = group.findIndex(item => item.id === latest.id);
-            snapshot = {
-              ...current.current,
-              kind: entryKind(latest),
-              revision: latest.revision,
-              saved: latest.content,
-              savedTags: latest.tags ?? [],
-              parentId: latest.parent_id,
-              afterId: group[index - 1]?.id ?? null,
-              requestId: crypto.randomUUID(),
-            };
-            persist(snapshot);
-            return editDocument(changes(snapshot), snapshot.clientId, snapshot.requestId);
-          }
-        };
-        if (!snapshot.content.trim() && !snapshot.tags.length) {
-          if (snapshot.id) {
-            await edit(value => [{ kind: value.kind, id: value.id, delete: true, expected_revision: value.revision }]);
-            setRemoved(previous => new Set([...previous, snapshot.id!]));
-            if (current.current.clientId === snapshot.clientId) persist({ ...current.current, id: null, revision: null, requestId: crypto.randomUUID(), saved: '', savedTags: [] });
-            await refresh();
-          }
-          setFailed(false);
-          if (announced) window.dispatchEvent(new CustomEvent('still-save-state', { detail: 'saved' }));
-          return null;
-        }
-        const [result] = await edit(value => [{
-          kind: value.kind, id: value.id, content: value.content, tags: value.tags, date: day, client_id: value.clientId, parent_id: value.parentId, after_id: value.afterId,
-          expected_revision: value.revision,
-        }]);
-        if (!result) throw new Error('The entry could not be saved.');
-        if (snapshot.id === null) {
-          setRemoved(previous => {
-            if (!previous.has(result.id)) return previous;
-            const next = new Set(previous); next.delete(result.id); return next;
-          });
-        }
-        if (current.current.clientId === snapshot.clientId) persist({ ...current.current, id: result.id, revision: result.revision, requestId: crypto.randomUUID(), saved: snapshot.content, savedTags: snapshot.tags });
-        if (snapshot.kind === 'tasks') localStorage.removeItem('still-task-draft');
-        if (snapshot.id) localStorage.removeItem(`still-edit-${snapshot.kind}-${snapshot.id}`);
-        setFailed(false);
-        if (announced) window.dispatchEvent(new CustomEvent('still-save-state', { detail: 'saved' }));
-        await refresh(); return result.id;
-      } catch (error) {
-        if (announced) window.dispatchEvent(new CustomEvent('still-save-state', { detail: 'clear' }));
-        setFailed(true); notify(errorMessage(error)); throw error;
-      }
-      finally { clearTimeout(feedback); if (mounted.current) setSaving(false); }
-    });
-    queue.current = operation;
-    return operation;
-  }, [day, kind, notify, persist, refresh]);
+    const id = stageDraft();
+    setSaving(true);
+    return documentStore.flush().then(() => documentStore.resolve(id)).finally(() => { if (mounted.current) setSaving(false); });
+  }, [documentStore, stageDraft]);
+  useEffect(() => {
+    const retry = () => { void documentStore.flush().catch(() => {}); };
+    retry();
+    window.addEventListener('online', retry);
+    return () => window.removeEventListener('online', retry);
+  }, [documentStore]);
 
   useEffect(() => registerDraftFlush(save), [save]);
   useEffect(() => {
@@ -443,7 +417,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     const token = ++actionToken.current;
     lock.current = true; restoringFocus.current = restoreFocus; setBusy(true);
     try { await action(); }
-    catch (error) { notify(errorMessage(error)); }
+    catch (error) { entryError(error); }
     finally {
       if (actionToken.current === token && mounted.current) {
         lock.current = false;
@@ -452,115 +426,82 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       }
     }
   };
+  const activate = (row: OutlineItem, selection?: TextOffsets, vertical?: VerticalTarget) => {
+    const group = siblings(records.current, row.parent_id);
+    const index = group.findIndex(item => item.id === row.id);
+    restoringFocus.current = true;
+    flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: row.id, content: row.content, saved: row.content,
+      kind: entryKind(row), revision: row.revision, tags: row.tags ?? [], savedTags: row.tags ?? [],
+      hiddenTag: activeTag && row.tags?.includes(activeTag) ? activeTag : null,
+      parentId: row.parent_id, afterId: group[index - 1]?.id ?? null, beforeId: index === 0 ? group[1]?.id : null }));
+    pendingSelection.current = selection;
+    pendingVertical.current = vertical;
+    focus();
+  };
   const select = (row: OutlineItem, element?: HTMLElement, contextLink?: HTMLElement, offsets?: TextOffsets, vertical?: VerticalTarget) => {
+    if (lock.current) return;
     if (!vertical) verticalX.current = null;
     const selection = offsets ?? selectedTextOffsets(element, contextLink);
-    const activate = (latest: OutlineItem) => {
-      const group = siblings(records.current, latest.parent_id);
-      const index = group.findIndex(item => item.id === latest.id);
-      const content = latest.content;
-      flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: latest.id, content, saved: content,
-        kind: entryKind(latest), revision: latest.revision, tags: latest.tags ?? [], savedTags: latest.tags ?? [],
-        hiddenTag: activeTag && latest.tags?.includes(activeTag) ? activeTag : null,
-        parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }));
-      if (vertical) input.current?.focusAt(vertical.x, vertical.direction, { preventScroll: false });
-      else input.current?.focus({ preventScroll: true }, selection);
-      if (contextLink) input.current?.editLink();
-    };
-    const value = current.current;
-    const unchanged = !value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags);
-    if (unchanged) {
-      const latest = records.current.find(item => item.id === row.id);
-      if (latest) activate(latest);
-      return Promise.resolve();
-    }
-    return run(async () => {
-      await save();
-      // Saving the previous draft can insert before this row and advance its
-      // revision. Let the refresh commit, then resolve the row again instead
-      // of opening the pre-save snapshot; otherwise the first edit is
-      // guaranteed to conflict and cannot retry.
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      const latest = records.current.find(item => item.id === row.id);
-      if (!latest) return;
-      activate(latest);
-      if (!surface.current?.contains(document.activeElement)) {
-        pendingSelection.current = selection;
-        pendingVertical.current = vertical;
-        setTimeout(focus, 0);
-      }
-    }, false);
+    void save().catch(() => {});
+    const latest = records.current.find(item => item.id === documentStore.resolve(row.id));
+    if (!latest) return;
+    activate(latest, selection, vertical);
+    if (contextLink) input.current?.editLink();
+  };
+  const checkDepth = (id: number | null, parentId: number | null) => {
+    let level = 1, ancestor = parentId;
+    while (ancestor !== null) { level++; ancestor = records.current.find(item => item.id === ancestor)?.parent_id ?? null; }
+    const height = (parent: number): number => Math.max(0, ...records.current.filter(row => row.parent_id === parent).map(row => 1 + height(row.id)));
+    if (level + (id === null ? 0 : height(id)) > MAX_LEVELS) throw new Error(`Bullets support up to ${MAX_LEVELS} levels.`);
   };
   const moveDestination = (snapshot: { id: number | null; parentId: number | null; afterId: number | null }, outdent: boolean) => {
     const parent = records.current.find(item => item.id === snapshot.parentId);
-    const group = siblings(records.current, snapshot.parentId).filter(item => item.id !== snapshot.id);
-    const previous = snapshot.afterId !== null ? group.find(item => item.id === snapshot.afterId) : undefined;
+    const group = siblings(records.current, snapshot.parentId);
+    const index = group.findIndex(item => item.id === snapshot.id);
+    const previous = index >= 0 ? group[index - 1] : group.find(item => item.id === snapshot.afterId);
     if (outdent ? !parent : !previous) return null;
     const parentId = outdent ? parent!.parent_id : previous!.id;
     const afterId = outdent ? parent!.id : siblings(records.current, previous!.id).at(-1)?.id ?? null;
     const targetParent = parentId === null ? null : records.current.find(item => item.id === parentId);
     const targetKind: EntryKind = targetParent ? entryKind(targetParent) : defaultKind;
-    let level = 1, ancestor = parentId;
-    while (ancestor !== null) { level++; ancestor = records.current.find(item => item.id === ancestor)?.parent_id ?? null; }
-    if (level > MAX_LEVELS) throw new Error(`Bullets support up to ${MAX_LEVELS} levels.`);
+    checkDepth(snapshot.id, parentId);
     return { parentId, afterId, targetKind };
   };
-  const move = async (outdent: boolean) => {
+  const move = (outdent: boolean) => {
     const snapshot = current.current;
     const destination = moveDestination(snapshot, outdent);
     if (!destination) return;
     const { parentId, afterId, targetKind } = destination;
-    if (snapshot.id === null) {
-      setShifting(outdent ? 'out' : 'in');
-      setTimeout(() => { if (mounted.current) setShifting(null); }, 240);
-      flushSync(() => persist({ ...snapshot, kind: targetKind, parentId, afterId, placement: 'after' }));
-      // A new draft has no server-side position to move yet. Keep indentation
-      // immediate and persist the final parent when Enter or blur saves it.
-      // Waiting on a create request here makes a quick Tab, Enter sequence lose
-      // the Enter while the structural action still owns the mutation lock.
-      // If the note autosave had already started, reconcile the just-created
-      // row through the same save queue before a following Enter advances.
-      const reconcile = queue.current.catch(() => null).then(async id => {
-        const value = current.current;
-        if (!id || value.clientId !== snapshot.clientId || value.parentId !== parentId || value.kind !== targetKind) return id;
-        const [moved] = await editDocument([{ kind: snapshot.kind, id, move: true, parent_id: parentId, after_id: afterId, expected_revision: value.revision }]);
-        if (moved && current.current.clientId === snapshot.clientId) {
-          persist({ ...current.current, kind: targetKind, parentId, afterId, revision: moved.revision });
-          await refresh();
-        }
-        return id;
-      });
-      queue.current = reconcile;
-      return;
-    } else {
-      const id = await save();
-      const [moved] = id ? await editDocument([{ kind: snapshot.kind, id, move: true, parent_id: parentId, after_id: afterId, expected_revision: current.current.revision }]) : [];
-      setShifting(outdent ? 'out' : 'in');
-      setTimeout(() => { if (mounted.current) setShifting(null); }, 240);
-      lock.current = false;
-      flushSync(() => { setBusy(false); persist({ ...current.current, kind: targetKind, parentId, afterId, revision: moved?.revision ?? current.current.revision }); });
+    if (snapshot.id !== null) {
+      const id = stageDraft();
+      if (id !== null) documentStore.enqueue([{ kind: snapshot.kind, id, move: true, parent_id: parentId, after_id: afterId, target_kind: targetKind }]);
     }
-    await refresh();
+    restoringFocus.current = true;
+    flushSync(() => {
+      if (parentId !== null) setExpanded(previous => new Set([...previous, parentId]));
+      persist({ ...current.current, kind: targetKind, parentId, afterId, beforeId: null, placement: 'after' });
+    });
+    void documentStore.flush().catch(() => {});
   };
   const moveSavedItem = (item: OutlineItem, outdent: boolean) => {
-    void run(async () => {
-      await save();
+    try {
+      stageDraft();
       const latest = records.current.find(row => row.id === item.id);
       if (!latest) return;
       const group = siblings(records.current, latest.parent_id);
       const index = group.findIndex(row => row.id === latest.id);
       const destination = moveDestination({ id: latest.id, parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }, outdent);
       if (!destination) return;
-      await editDocument([{
-        kind: entryKind(latest), id: latest.id, move: true,
-        parent_id: destination.parentId, after_id: destination.afterId, expected_revision: latest.revision,
-      }]);
-      await refresh();
-    }, false);
+      documentStore.enqueue([{ kind: entryKind(latest), id: latest.id, move: true,
+        parent_id: destination.parentId, after_id: destination.afterId, target_kind: destination.targetKind }]);
+      void documentStore.flush().catch(() => {});
+    } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${item.id}"]`)); }
   };
   const complete = (id: number) => void run(async () => {
     await save();
-    const task = records.current.find(row => row.id === id)!;
+    id = documentStore.resolve(id)!;
+    const task = records.current.find(row => row.id === id);
+    if (!task) return;
     if (task.completed_at) {
       const result = await api<{ reopened: number[]; operation_id: string | null }>(`/tasks/${id}/reopen`, 'POST', { completed_at: task.completed_at, expected_revision: task.revision, record_history: true });
       recordEdit(result.operation_id, crypto.randomUUID());
@@ -584,18 +525,10 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
   }, false);
 
   const beginBullet = () => {
-    const value = current.current;
-    const unchanged = !value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags);
-    if (unchanged) {
-      flushSync(() => persist(blank(records.current, true)));
-      input.current?.focus({ preventScroll: true });
-      return;
-    }
-    void run(async () => {
-      await save();
-      lock.current = false;
-      flushSync(() => { setBusy(false); persist(blank(records.current, true)); });
-    });
+    void save().catch(() => {});
+    restoringFocus.current = true;
+    flushSync(() => persist(blank(records.current, true)));
+    focus();
   };
 
   const verticalBoundary = (direction: VerticalDirection, measuredX: number) => {
@@ -636,47 +569,62 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     window.addEventListener('still-new-bullet', append);
     return () => window.removeEventListener('still-new-bullet', append);
   });
-  const boundary = (direction: 'backspace' | 'delete') => void run(async () => {
+  const adjacentEntry = (backwards: boolean) => {
     const currentElement = surface.current?.querySelector('[contenteditable]')?.closest('li');
-    const elements = [...document.querySelectorAll<HTMLElement>('li[data-outline-key][data-item-id]')].filter(el => el.offsetParent !== null && !el.closest('[aria-hidden="true"]') && el.dataset.done !== 'true');
+    const elements = [...surface.current?.querySelectorAll<HTMLElement>('li[data-outline-key][data-item-id]') ?? []]
+      .filter(el => el.offsetParent !== null && !el.closest('[aria-hidden="true"]') && el.dataset.done !== 'true');
     const index = elements.findIndex(el => el === currentElement);
-    const backwards = direction === 'backspace';
     const adjacent = elements[index + (backwards ? -1 : 1)];
-    if (!adjacent || adjacent.dataset.outlineKey !== key) {
-      if (direction === 'backspace' && !current.current.content.trim() && !current.current.tags.length) {
-        await save(); persist(blank(records.current, false));
+    return records.current.find(row => row.id === Number(adjacent?.dataset.itemId));
+  };
+  const boundary = (direction: 'backspace' | 'delete') => {
+    if (lock.current) return;
+    const backwards = direction === 'backspace';
+    if (backwards && current.current.parentId !== null) { shiftDraft(true); return; }
+    const other = adjacentEntry(backwards);
+    const snapshot = current.current;
+    if (!other) {
+      if (backwards && !snapshot.content.trim() && !snapshot.tags.length) {
+        void save().catch(() => {});
+        flushSync(() => persist(blank(records.current, false)));
       }
       return;
     }
-    const id = adjacent.dataset.itemId === 'draft' ? null : Number(adjacent.dataset.itemId);
-    if (id === null) return;
-    const other = records.current.find(row => row.id === id);
-    if (!other) return;
-    const snapshot = current.current;
-    const ownId = await save();
-    if (!ownId) {
-      pendingSelection.current = { anchor: markdownText(other.content).length, head: markdownText(other.content).length };
-      // Do not expose the remounted editor as focused before focus() restores
-      // its end caret. Otherwise a very fast Backspace can land at position 0
-      // and be mistaken for another cross-entry merge.
-      (document.activeElement as HTMLElement | null)?.blur();
-      flushSync(() => persist({ ...blank([], true), kind: entryKind(other), mode: 'edit', id: other.id, content: other.content, saved: other.content,
-        tags: other.tags ?? [], savedTags: other.tags ?? [], parentId: other.parent_id }));
-      return;
+    restoringFocus.current = true;
+    const ownId = stageDraft();
+    if (ownId === null) {
+      const offset = backwards ? markdownText(other.content).length : 0;
+      activate(other, { anchor: offset, head: offset });
+    } else {
+      const own = records.current.find(row => row.id === ownId)!;
+      const first = backwards ? other : own, second = backwards ? own : other;
+      const content = mergeMarkdown(first.content, second.content);
+      const tags = [...new Set([...first.tags ?? [], ...second.tags ?? []])];
+      const offset = markdownText(first.content).length;
+      documentStore.enqueue([
+        { kind: entryKind(first), id: first.id, content, tags },
+        { kind: entryKind(second), id: second.id, delete: true },
+      ]);
+      activate(records.current.find(row => row.id === first.id)!, { anchor: offset, head: offset });
     }
-    const own = { ...other, id: ownId, kind: snapshot.kind, content: snapshot.content, tags: snapshot.tags, revision: current.current.revision ?? other.revision };
-    const first = backwards ? other : own;
-    const second = backwards ? own : other;
-    const content = mergeMarkdown(first.content, second.content), tags = [...new Set([...first.tags ?? [], ...second.tags ?? []])];
-    const [result] = await editDocument([
-      { kind: entryKind(first), id: first.id, content, tags, expected_revision: first.revision },
-      { kind: entryKind(second), id: second.id, delete: true, expected_revision: second.revision },
-    ]);
-    if (!result) return;
-    persist({ ...blank([], true), kind: entryKind(first), mode: 'edit', id: result.id, content, saved: content, tags, savedTags: tags, parentId: result.parent_id });
-    pendingSelection.current = { anchor: markdownText(first.content).length, head: markdownText(first.content).length };
-    await refresh();
-  }, direction === 'backspace' || direction === 'delete');
+    void documentStore.flush().catch(() => {});
+  };
+  const deleteCurrentEntry = () => {
+    const previous = adjacentEntry(true), next = adjacentEntry(false);
+    const snapshot = current.current;
+    restoringFocus.current = true;
+    updateEntrySelection(null);
+    if (snapshot.id !== null) documentStore.enqueue([{ kind: snapshot.kind, id: snapshot.id, delete: true }]);
+    const other = previous ?? next;
+    if (other) {
+      const offset = previous ? markdownText(other.content).length : 0;
+      activate(records.current.find(row => row.id === other.id) ?? other, { anchor: offset, head: offset });
+    } else {
+      flushSync(() => persist({ ...blank(records.current, true, snapshot.parentId, snapshot.afterId, snapshot.kind), beforeId: snapshot.beforeId }));
+      focus();
+    }
+    void documentStore.flush().catch(() => {});
+  };
   const selectDocument = () => {
     selectionActive.current = true; setSelectedAll(true); setExpanded(new Set(records.current.map(item => item.id)));
     if (surface.current) {
@@ -792,9 +740,9 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       aria-label={`${pinned ? 'Collapse' : 'Expand'} ${markdownText(content) || 'bullet'}`}
       onPointerEnter={event => {
         if (!pinned && event.pointerType !== 'touch') setPreviewed(previous => previous.has(id) ? previous : new Set([...previous, id]));
-      }} onClick={() => void run(async () => {
+      }} onClick={() => {
         if (pinned) {
-          await save();
+          void save().catch(() => {});
           if (draftInside(id)) persist(blank(records.current, composer));
           clearPreview(id);
         }
@@ -806,7 +754,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
             return next;
           });
         }
-      }, false)} />;
+      }} />;
   };
 
   const inputLabel = draft.mode === 'edit' ? draft.kind === 'notes' ? 'Edit note' : 'Edit to-do' : draft.kind === 'notes' ? 'New journal bullet' : 'New to-do';
@@ -832,23 +780,12 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     return toggle ?? <Marker data-focus-chrome $task={rowKind === 'tasks'} aria-hidden="true" />;
   };
   const shiftDraft = (outdent: boolean) => {
-    if (outdent && current.current.parentId === null) return;
-    const indentSelection = input.current?.selection();
-    if (current.current.id === null) {
-      restoringFocus.current = true;
-      const emptyDraft = !current.current.content.trim() && !current.current.tags.length;
-      void move(outdent);
-      if (emptyDraft) {
-        pendingSelection.current = indentSelection;
-        focus();
-      } else {
-        (document.activeElement as HTMLElement | null)?.blur();
-        void queue.current.finally(() => { pendingSelection.current = indentSelection; focus(); });
-      }
-    } else {
-      void run(async () => { await move(outdent); pendingSelection.current = indentSelection; });
-      (document.activeElement as HTMLElement | null)?.blur();
-    }
+    const selection = input.current?.selection();
+    try {
+      move(outdent);
+      pendingSelection.current = selection;
+      focus();
+    } catch (error) { entryError(error); restoringFocus.current = false; }
   };
   const clearEntryGestureTimer = (gesture: EntryGesture) => {
     if (gesture.timer) clearTimeout(gesture.timer);
@@ -948,56 +885,54 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (gesture.armed) updateEntrySelection({ key: gesture.key, dragX: 0 });
   };
   const advance = () => {
-    if (!current.current.content.trim() && !current.current.tags.length && current.current.id !== null) {
-      persist({ ...current.current, content: '', tags: [] });
-    }
-    if (!current.current.content.trim() && !current.current.tags.length && current.current.id === null) {
-      if (current.current.parentId !== null) void run(() => move(true));
+    if (lock.current) return;
+    const snapshot = current.current;
+    if (!snapshot.content.trim() && !snapshot.tags.length) {
+      if (snapshot.id !== null) stageDraft();
+      if (snapshot.parentId !== null) shiftDraft(true);
+      else { void documentStore.flush().catch(() => {}); }
       return;
     }
-    void run(async () => {
-      const split = input.current?.splitAtSelection();
-      const hiddenTag = current.current.hiddenTag ?? (activeTag && current.current.savedTags.includes(activeTag) ? activeTag : null);
-      const keepHiddenTag = (content: string, tags: string[], value = hiddenTag) =>
-        [...new Set([...tags, ...(value && (content.trim() || tags.length) ? [value] : [])])];
-      if (split) persist({ ...current.current, content: split.before.content, tags: keepHiddenTag(split.before.content, split.before.tags) });
-      const snapshot = current.current;
-      let id = await save();
-      // The editor stays responsive while a request is in flight. If the
-      // user typed more, acknowledge that newer revision before Enter
-      // advances to the next row; never clear unacknowledged text.
-      if (current.current.clientId === snapshot.clientId &&
-          (current.current.content !== current.current.saved || JSON.stringify(current.current.tags) !== JSON.stringify(current.current.savedTags))) {
-        id = await save();
-      }
-      const parent = snapshot.parentId === null ? null : records.current.find(item => item.id === snapshot.parentId);
-      const nextKind = parent ? entryKind(parent) : defaultKind;
-      const next = id ? blank(records.current, true, snapshot.parentId, id, nextKind) : blank(records.current, composer);
-      const splitDraft = split?.after.content || split?.after.tags.length
-        ? { ...next, content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags, next.hiddenTag) }
-        : next;
-      if (split?.after.content || split?.after.tags.length) pendingSelection.current = { anchor: 0, head: 0 };
-      // Make the next rendered row interactive immediately. Otherwise a
-      // very fast click can land between this render and run()'s finally.
-      lock.current = false;
-      flushSync(() => persist(splitDraft));
+    const split = input.current?.splitAtSelection();
+    const hiddenTag = snapshot.hiddenTag ?? (activeTag && snapshot.savedTags.includes(activeTag) ? activeTag : null);
+    const keepHiddenTag = (content: string, tags: string[]) =>
+      [...new Set([...tags, ...(hiddenTag && (content.trim() || tags.length) ? [hiddenTag] : [])])];
+    restoringFocus.current = true;
+    if (split && !split.before.content && !split.before.tags.length && (split.after.content || split.after.tags.length)) {
+      // A split at the start must not delete the parent and promote all its
+      // children. Keep that entry's identity with its trailing content.
+      flushSync(() => persist({ ...snapshot, mode: 'new', content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags) }));
+      pendingSelection.current = { anchor: 0, head: 0 };
+      focus();
+      void save().catch(() => {});
+      return;
+    }
+    flushSync(() => {
+      if (split) persist({ ...snapshot, content: split.before.content, tags: keepHiddenTag(split.before.content, split.before.tags) });
+      const id = stageDraft();
+      const parent = records.current.find(item => item.id === snapshot.parentId);
+      const next = blank(records.current, true, snapshot.parentId, id ?? snapshot.afterId, parent ? entryKind(parent) : defaultKind);
+      persist({ ...next, beforeId: id === null ? snapshot.beforeId : null,
+        content: split?.after.content ?? '', tags: split ? keepHiddenTag(split.after.content, split.after.tags) : [] });
     });
+    pendingSelection.current = { anchor: 0, head: 0 };
+    focus();
+    void documentStore.flush().catch(() => {});
   };
   const renderDraft = (depth: number): ReactNode => {
     const gestureKey = `draft:${draft.clientId}`;
     const gestureSelected = entrySelection?.key === gestureKey;
-    return <DraftItem key="draft" data-depth={depth}
+    return <DraftItem key="draft" data-depth={depth} draggable={gestureSelected}
     data-outline-key={key} data-kind={draft.kind} data-item-id={draft.id ?? 'draft'}
     data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
     onPointerLeave={() => clearPreview(draft.id)}
     onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
     $emptyTask={draft.kind === 'tasks' && draft.id === null && !draft.content.trim() && !draft.tags.length}
     $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
-    $shifting={shifting}
     $leaving={completing === draft.id && completing !== null}>
     <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed subtask' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
       onBoundary={boundary} onVerticalBoundary={verticalBoundary} onSelectDocument={selectDocument}
-      onEnter={advance}
+      onEnter={advance} onSelectEntry={selected => updateEntrySelection(selected ? { key: gestureKey, dragX: 0 } : null)} onDeleteEntry={deleteCurrentEntry}
       onChange={(content, tags) => {
         verticalX.current = null;
         const hiddenTag = current.current.hiddenTag ?? (activeTag && current.current.savedTags.includes(activeTag) ? activeTag : null);
@@ -1005,7 +940,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
       }}
       onBlur={event => {
         const blurredClientId = draft.clientId;
-        // Enter and nesting can remount the editor before its next-frame focus.
+        // Enter and nesting can remount the editor during a focus transfer.
         // That structural blur must not dismiss the draft being moved.
         if (restoringFocus.current || current.current.clientId !== blurredClientId) return;
         if (event?.relatedTarget instanceof Node && surface.current?.contains(event.relatedTarget)) { void save().catch(() => {}); return; }
@@ -1030,7 +965,6 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
         }
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') verticalX.current = null;
         if (event.key === 'Tab') {
-          if (event.shiftKey && current.current.parentId === null) return;
           event.preventDefault();
           shiftDraft(event.shiftKey);
         } else if (event.key === 'Enter' && !event.shiftKey) {
@@ -1042,8 +976,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
           event.preventDefault(); persist(blank(records.current, composer)); focus();
         }
       }} /></Row>
-    {failed && <TextButton onClick={() => void run(async () => { await save(); })}>Retry saving</TextButton>}
-    {draft.id !== null && <Branch data-branch-for={draft.id} $open={isExpanded(draft.id)} aria-hidden={!isExpanded(draft.id)}>{renderChildren(draft.id, depth + 1)}</Branch>}
+    {draft.id !== null && <Branch data-branch-for={draft.id} $open={isExpanded(draft.id)} $editing={draftInside(draft.id)} aria-hidden={!isExpanded(draft.id)}>{renderChildren(draft.id, depth + 1)}</Branch>}
   </DraftItem>;
   };
 
@@ -1053,8 +986,8 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     )).filter(item => !draft.active || item.id !== draft.id);
     const draftParent = draft.parentId !== null && !items.some(row => row.id === draft.parentId) ? null : draft.parentId;
     if (draft.active && draftParent === parentId) {
-      let index = draft.afterId !== null ? group.findIndex(item => item?.id === draft.afterId) + 1 : -1;
-      if (index < 1) {
+      let index = draft.beforeId != null ? group.findIndex(item => item?.id === draft.beforeId) : draft.afterId !== null ? group.findIndex(item => item?.id === draft.afterId) + 1 : -1;
+      if (index < 0 || index === 0 && draft.beforeId == null) {
         const original = items.find(item => item.id === draft.id && item.parent_id === parentId);
         index = original ? group.filter(item => item && (item.position < original.position || item.position === original.position && item.id < original.id)).length : group.length;
       }
@@ -1083,13 +1016,61 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
         onKeyDown={event => { if ((archived || !item.completed_at) && event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(item); } }}
       ><MarkdownContent content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={activeTag ? [activeTag] : []} /></Text>
       </Row>
-      <Branch data-branch-for={item.id} $open={isExpanded(item.id)} aria-hidden={!isExpanded(item.id)}>{renderChildren(item.id, depth + 1)}</Branch>
+      <Branch data-branch-for={item.id} $open={isExpanded(item.id)} $editing={draftInside(item.id)} aria-hidden={!isExpanded(item.id)}>{renderChildren(item.id, depth + 1)}</Branch>
     </Item>;
     });
     const parent = parentId === null ? null : items.find(item => item.id === parentId);
     return parentId === null ? <List>{content}</List> : <Children $task={parent ? entryKind(parent) === 'tasks' : draft.kind === 'tasks'}>{content}</Children>;
   };
-  return <OutlineSurface ref={surface} data-outline-kind={defaultKind} tabIndex={-1} onPointerDown={event => {
+  const clearDrop = () => {
+    if (dropTarget.current) delete dropTarget.current.dataset.dropPosition;
+    dropTarget.current = null;
+  };
+  const dropEntry = (event: React.DragEvent) => {
+    const element = (event.target as Element).closest<HTMLElement>('li[data-item-id]');
+    const target = records.current.find(row => row.id === Number(element?.dataset.itemId));
+    const id = documentStore.resolve(draggedEntry.current);
+    if (!element || !target || id === null || target.id === id) return null;
+    let parent: number | null = target.parent_id;
+    while (parent !== null) {
+      if (parent === id) return null;
+      parent = records.current.find(row => row.id === parent)?.parent_id ?? null;
+    }
+    const rect = element.firstElementChild!.getBoundingClientRect();
+    return { element, target, id, before: event.clientY < rect.top + rect.height / 2 };
+  };
+  return <OutlineSurface ref={surface} data-outline-kind={defaultKind} tabIndex={-1}
+  onDragStartCapture={event => {
+    if (!entrySelectionRef.current?.key.startsWith('draft:')) return;
+    const id = stageDraft();
+    if (id === null) { event.preventDefault(); return; }
+    draggedEntry.current = id;
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', current.current.content);
+  }} onDragOverCapture={event => {
+    if (draggedEntry.current === null) return;
+    event.preventDefault(); event.stopPropagation(); clearDrop();
+    const drop = dropEntry(event);
+    event.dataTransfer.dropEffect = drop ? 'move' : 'none';
+    if (drop) { drop.element.dataset.dropPosition = drop.before ? 'before' : 'after'; dropTarget.current = drop.element; }
+  }} onDropCapture={event => {
+    if (draggedEntry.current === null) return;
+    event.preventDefault(); event.stopPropagation();
+    const drop = dropEntry(event); clearDrop(); draggedEntry.current = null;
+    if (!drop) return;
+    const row = records.current.find(row => row.id === drop.id);
+    if (!row) return;
+    try { checkDepth(row.id, drop.target.parent_id); }
+    catch (error) { entryError(error); return; }
+    documentStore.enqueue([{ kind: entryKind(row), id: row.id, move: true, parent_id: drop.target.parent_id,
+      after_id: drop.before ? null : drop.target.id, before_id: drop.before ? drop.target.id : null,
+      target_kind: drop.target.parent_id === null ? defaultKind : entryKind(drop.target) }]);
+    const moved = records.current.find(item => item.id === row.id)!;
+    activate(moved);
+    input.current?.selectEntry();
+    void documentStore.flush().catch(() => {});
+  }} onDragEndCapture={() => { draggedEntry.current = null; clearDrop(); }} onPointerDown={event => {
     verticalX.current = null; selectionActive.current = false; setSelectedAll(false);
     const entry = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-entry-gesture-key]') : null;
     const gestureKey = entry?.dataset.entryGestureKey;
@@ -1107,7 +1088,7 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (historyKey && event.repeat) { event.preventDefault(); return; }
     const historyDirection = historyShortcutDirection(event.nativeEvent);
     if (mod && event.key.toLowerCase() === 'a') { event.preventDefault(); return; }
-    if (historyDirection !== null) { event.preventDefault(); void documentUndo(historyDirection).catch(e => notify(errorMessage(e))); return; }
+    if (historyDirection !== null) { event.preventDefault(); void documentUndo(historyDirection).catch(e => entryError(e)); return; }
     const format = mod ? ({ b: 'bold', i: 'italic', u: 'underline', c: event.shiftKey ? 'code' : '' } as Record<string, string>)[event.key.toLowerCase()] : '';
     if (format) { event.preventDefault(); void run(async () => {
       await save();

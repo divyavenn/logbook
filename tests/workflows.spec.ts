@@ -123,16 +123,9 @@ test('merging, grouped selection, and document undo cross bullet boundaries', as
   await page.getByRole('group', { name: 'Beta', exact: true }).click();
   let editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
   await expect(editor).toHaveText('Beta');
-  await editor.evaluate(element => {
-    const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode();
-    if (!text) throw new Error('Expected editor text');
-    const range = document.createRange(); range.setStart(text, 0); range.collapse(true);
-    const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
-  });
-  await expect.poll(() => editor.evaluate(element => {
-    const selection = getSelection()!; const range = document.createRange(); range.selectNodeContents(element);
-    range.setEnd(selection.focusNode!, selection.focusOffset); return range.toString().length;
-  })).toBe(0);
+  await editor.press('Meta+ArrowUp');
+  await editor.press('Backspace');
+  await expect(editor.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
   await editor.press('Backspace');
   await expect(editor).toHaveText('AlphaBeta');
   await editor.press('Meta+ArrowDown');

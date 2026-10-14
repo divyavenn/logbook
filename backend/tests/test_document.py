@@ -13,6 +13,18 @@ def history(client, operation, redo=False):
     assert response.status_code == 200, response.text
 
 
+def test_document_can_insert_and_move_before_the_first_sibling(client):
+    first = create(client, 'notes', 'First')
+    last = create(client, 'notes', 'Last')
+    inserted = batch(client, [{'kind': 'notes', 'content': 'Inserted', 'date': '2026-09-16', 'before_id': first['id']}])['items'][0]
+    moved = batch(client, [{'kind': 'notes', 'id': last['id'], 'move': True, 'before_id': inserted['id']}])
+    rows = sorted(client.get('/api/export').json()['notes'], key=lambda row: row['position'])
+    assert [row['content'] for row in rows] == ['Last', 'Inserted', 'First']
+    history(client, moved['operation_id'])
+    rows = sorted(client.get('/api/export').json()['notes'], key=lambda row: row['position'])
+    assert [row['content'] for row in rows] == ['Inserted', 'First', 'Last']
+
+
 def test_completed_children_stay_until_immediate_parent_finishes(client):
     root = create(client, 'tasks', 'Project')
     parent = create(client, 'tasks', 'Phase', root['id'])

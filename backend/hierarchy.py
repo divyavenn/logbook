@@ -66,7 +66,7 @@ def validate_parent(db, table, parent_id, day_id=None, item_id=None, allow_compl
         raise HTTPException(422, f"Bullets support up to {MAX_LEVELS} levels.")
 
 
-def place(db, table, item_id, parent_id, after_id=None, allow_completed_parent=False):
+def place(db, table, item_id, parent_id, after_id=None, allow_completed_parent=False, before_id=None):
     row = get_row(db, table, item_id)
     day_id = row.get("day_id")
     validate_parent(db, table, parent_id, day_id, item_id, allow_completed_parent)
@@ -74,7 +74,9 @@ def place(db, table, item_id, parent_id, after_id=None, allow_completed_parent=F
     ids = [r["id"] for r in group]
     if after_id is not None and after_id not in ids:
         raise HTTPException(409, "The preceding bullet must be a sibling.")
-    index = ids.index(after_id) + 1 if after_id is not None else len(ids)
+    if before_id is not None and before_id not in ids:
+        raise HTTPException(409, "The following bullet must be a sibling.")
+    index = ids.index(before_id) if before_id is not None else ids.index(after_id) + 1 if after_id is not None else len(ids)
     ids.insert(index, item_id)
     db.execute("UPDATE entries SET parent_id = ?, revision = revision + 1 WHERE id = ? AND parent_id IS NOT ?",
                (parent_id, item_id, parent_id))

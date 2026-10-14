@@ -11,7 +11,7 @@ import { useJournalContext } from '../JournalContext';
 import { normalizeTag } from '../tagSyntax';
 import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
-import { errorMessage } from '../api';
+import { entryError } from '../entryFeedback';
 import { Code2, Link2 } from 'lucide-react';
 
 const Surface = styled.div`
@@ -96,6 +96,7 @@ export type RichTextHandle = {
   focusAt: (x: number, direction: VerticalDirection, options?: FocusOptions) => void;
   selection: () => TextOffsets | undefined;
   editLink: () => void;
+  selectEntry: () => void;
   splitAtSelection: () => { before: { content: string; tags: string[] }; after: { content: string; tags: string[] } } | null;
 };
 type Props = {
@@ -105,16 +106,19 @@ type Props = {
   onBoundary?: (direction: 'backspace' | 'delete') => void;
   onVerticalBoundary?: (direction: VerticalDirection, x: number) => boolean;
   onSelectDocument?: () => void;
+  onSelectEntry?: (selected: boolean) => void;
+  onDeleteEntry?: () => void;
 };
 
-export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument }: Props) {
+export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry }: Props) {
   const { tags } = useJournalContext();
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
-  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument });
-  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument };
+  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry });
+  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry };
+  const entrySelected = useRef(false);
   const lastSnapshot = useRef(JSON.stringify([value, bulletTags]));
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
@@ -145,7 +149,15 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       handleDOMEvents: {
         beforeinput(view, event) {
           const inputEvent = event as InputEvent;
-          if (!view.editable || view.composing || inputEvent.isComposing || inputEvent.inputType !== 'insertParagraph') return false;
+          if (!view.editable || view.composing || inputEvent.isComposing) return false;
+          if (['deleteContentBackward', 'deleteContentForward'].includes(inputEvent.inputType)) {
+            if (entrySelected.current) { event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true; }
+            const backwards = inputEvent.inputType === 'deleteContentBackward';
+            if (view.state.selection.empty && view.state.selection.from === (backwards ? 1 : view.state.doc.content.size - 1)) {
+              event.preventDefault(); callbacks.current.onBoundary?.(backwards ? 'backspace' : 'delete'); return true;
+            }
+          }
+          if (inputEvent.inputType !== 'insertParagraph') return false;
           const pending = suggestionRef.current;
           if (pending) {
             event.preventDefault();
@@ -161,13 +173,30 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
           callbacks.current.onEnter();
           return true;
         },
-        mousedown(_view, event) {
+        mousedown(view, event) {
           if (event.button !== 0 || !(event.target instanceof Element)) return false;
+          const end = view.coordsAtPos(view.state.doc.content.size - 1);
+          if (event.detail === 2 && event.clientX >= end.left - 3 && event.clientY >= end.top && event.clientY <= end.bottom) {
+            event.preventDefault();
+            editor?.commands.selectAll();
+            entrySelected.current = true;
+            callbacks.current.onSelectEntry?.(true);
+            return true;
+          }
+          if (entrySelected.current) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
           const anchor = event.target.closest<HTMLAnchorElement>('a');
           const href = anchor && safeHref(anchor.getAttribute('href') ?? '');
           if (!href) return false;
           event.preventDefault(); event.stopPropagation();
           window.open(href, '_blank', 'noopener,noreferrer');
+          return true;
+        },
+        cut(view, event) {
+          if (!entrySelected.current || !event.clipboardData) return false;
+          event.preventDefault();
+          event.clipboardData.setData('text/plain', view.dom.textContent ?? '');
+          event.clipboardData.setData('text/html', view.dom.innerHTML);
+          callbacks.current.onDeleteEntry?.();
           return true;
         },
         input(view) {
@@ -254,6 +283,19 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       },
       handleKeyDown(view, event) {
         if (view.composing || event.isComposing || !view.editable) return false;
+        // Native selectionchange can arrive after a fast follow-up key. Read
+        // the actual caret before deciding whether to join or outdent a row.
+        const native = window.getSelection();
+        if (view.state.selection instanceof TextSelection && native?.anchorNode && native.focusNode &&
+            view.dom.contains(native.anchorNode) && view.dom.contains(native.focusNode)) {
+          const anchor = view.posAtDOM(native.anchorNode, native.anchorOffset), head = view.posAtDOM(native.focusNode, native.focusOffset);
+          if (anchor !== view.state.selection.anchor || head !== view.state.selection.head) {
+            view.dispatch(view.state.tr.setSelection(TextSelection.between(view.state.doc.resolve(anchor), view.state.doc.resolve(head))));
+          }
+        }
+        if (entrySelected.current && (event.key === 'Backspace' || event.key === 'Delete')) {
+          event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true;
+        }
         const pending = suggestionRef.current;
         if (pending && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
           event.preventDefault();
@@ -265,6 +307,13 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         }
         if (pending && event.key === 'Escape') { event.preventDefault(); suggest(null); return true; }
         const mod = event.metaKey || event.ctrlKey;
+        if (!event.altKey && (event.metaKey && ['ArrowUp', 'ArrowDown'].includes(event.key) || event.ctrlKey && ['Home', 'End'].includes(event.key))) {
+          const edge = event.key === 'ArrowUp' || event.key === 'Home' ? 1 : view.state.doc.content.size - 1;
+          event.preventDefault();
+          view.dispatch(view.state.tr.setSelection(TextSelection.between(
+            view.state.doc.resolve(event.shiftKey ? view.state.selection.anchor : edge), view.state.doc.resolve(edge))));
+          return true;
+        }
         const historyKey = mod && !event.altKey && ['z', 'y'].includes(event.key.toLowerCase());
         if (historyKey && event.repeat) { event.preventDefault(); return true; }
         const historyDirection = historyShortcutDirection(event);
@@ -288,7 +337,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         if (historyDirection !== null) {
           event.preventDefault();
           const handled = historyDirection ? editor?.commands.redo() : editor?.commands.undo();
-          if (!handled) void documentUndo(historyDirection).catch(error => window.dispatchEvent(new CustomEvent('still-history-error', { detail: errorMessage(error) })));
+          if (!handled) void documentUndo(historyDirection).catch(error => entryError(error));
           return true;
         }
         if (mod && event.key.toLowerCase() === 'a') {
@@ -330,6 +379,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       },
     },
     onUpdate({ editor }) {
+      if (entrySelected.current) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
       const bullet = serializeBullet(editor.getJSON());
       lastSnapshot.current = JSON.stringify([bullet.content, bullet.tags]);
       callbacks.current.onChange(bullet.content, bullet.tags);
@@ -337,6 +387,9 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       commitTypedTags(editor);
     },
     onSelectionUpdate({ editor }) {
+      if (entrySelected.current && (editor.state.selection.from > 1 || editor.state.selection.to < editor.state.doc.content.size - 1)) {
+        entrySelected.current = false; callbacks.current.onSelectEntry?.(false);
+      }
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;
       if (!editor.state.selection.empty || editor.state.selection.from !== linkReplacement.current?.to) linkReplacement.current = null;
       updateSuggestion(editor);
@@ -470,6 +523,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     },
     focus(options, selection) {
       if (!editor || editor.isDestroyed) return;
+      editor.view.dom.focus({ ...options, preventScroll: true });
       if (selection) {
         // Saved HTML and ProseMirror use different offsets. Count visible text
         // in both so a mouse selection survives entering the editor.
@@ -479,10 +533,11 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
           let found = false;
           editor.state.doc.descendants((node, pos) => {
             if (found) return false;
-            if (node.isText) {
-              position = pos + Math.min(remaining, node.nodeSize);
-              if (remaining <= node.nodeSize) found = true;
-              else remaining -= node.nodeSize;
+            const length = node.isText ? node.nodeSize : node.type.name === 'journalTag' ? String(node.attrs.name).length + 1 : node.type.name === 'hardBreak' ? 1 : 0;
+            if (length) {
+              position = pos + (node.isText ? Math.min(remaining, length) : remaining > 0 ? node.nodeSize : 0);
+              if (remaining <= length) found = true;
+              else remaining -= length;
             }
             return !found;
           });
@@ -490,12 +545,13 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         };
         editor.commands.setTextSelection({ from: positionAt(selection.anchor), to: positionAt(selection.head) });
       }
-      editor.view.dom.focus(options);
+      editor.view.focus();
+      if (!options?.preventScroll) editor.view.dispatch(editor.state.tr.scrollIntoView());
     },
     focusAt(x, direction, options) {
       if (!editor || editor.isDestroyed) return;
       const element = editor.view.dom;
-      element.focus(options);
+      element.focus({ ...options, preventScroll: true });
       const rect = element.getBoundingClientRect();
       const style = getComputedStyle(element);
       const lineHeight = parseFloat(style.lineHeight) || 18;
@@ -510,49 +566,39 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       });
       const fallback = direction === 'up' ? editor.state.doc.content.size - 1 : 1;
       editor.commands.setTextSelection(point?.pos ?? fallback);
-      element.focus(options);
+      element.focus({ ...options, preventScroll: true });
+      if (!options?.preventScroll) editor.view.dispatch(editor.state.tr.scrollIntoView());
     },
     editLink() { openLink('context'); },
+    selectEntry() {
+      if (!editor || editor.isDestroyed) return;
+      editor.commands.selectAll();
+      entrySelected.current = true;
+      callbacks.current.onSelectEntry?.(true);
+    },
     splitAtSelection() {
       if (!editor || editor.isDestroyed) return null;
       commitTypedTags(editor, true);
-      const doc = editor.state.doc;
-      const whole = serializeBullet(doc.toJSON());
-      const domSelection = window.getSelection();
-      if (domSelection?.isCollapsed && domSelection.focusNode && editor.view.dom.contains(domSelection.focusNode)) {
-        const tail = document.createRange();
-        tail.setStart(domSelection.focusNode, domSelection.focusOffset);
-        tail.setEnd(editor.view.dom, editor.view.dom.childNodes.length);
-        if (!tail.toString().trim()) return { before: whole, after: { content: '', tags: [] } };
+      const { doc, selection } = editor.state;
+      const dom = window.getSelection();
+      let from = selection.from, to = selection.to;
+      if (dom?.anchorNode && dom.focusNode && editor.view.dom.contains(dom.anchorNode) && editor.view.dom.contains(dom.focusNode)) {
+        // Map native caret positions directly, including tags and hard breaks.
+        // Counting text characters loses atomic nodes and can split the wrong word.
+        const anchor = editor.view.posAtDOM(dom.anchorNode, dom.anchorOffset);
+        const head = editor.view.posAtDOM(dom.focusNode, dom.focusOffset);
+        from = Math.min(anchor, head); to = Math.max(anchor, head);
       }
-      const visibleOffset = (node: Node, offset: number) => {
-        const range = document.createRange(); range.selectNodeContents(editor.view.dom); range.setEnd(node, offset); return range.toString().length;
+      const text = (start: number, end: number) => doc.textBetween(start, end, '\n', node =>
+        node.type.name === 'journalTag' ? '#' + node.attrs.name : node.type.name === 'hardBreak' ? '\n' : '');
+      // At the end of a heading, quote, or code block, its empty closing
+      // structure is not content to carry into the next entry.
+      if (from === to && !text(to, doc.content.size)) return {
+        before: serializeBullet(doc.toJSON()), after: { content: '', tags: [] },
       };
-      const fullRange = document.createRange(); fullRange.selectNodeContents(editor.view.dom);
-      const visibleLength = fullRange.toString().length;
-      const anchor = domSelection?.anchorNode && editor.view.dom.contains(domSelection.anchorNode) ? visibleOffset(domSelection.anchorNode, domSelection.anchorOffset) : null;
-      const head = domSelection?.focusNode && editor.view.dom.contains(domSelection.focusNode) ? visibleOffset(domSelection.focusNode, domSelection.focusOffset) : null;
-      if (anchor !== null && head !== null && anchor >= visibleLength && head >= visibleLength) return { before: whole, after: { content: '', tags: [] } };
-      const positionAt = (offset: number) => {
-        let remaining = offset, position = 1, found = false;
-        doc.descendants((node, pos) => {
-          if (found) return false;
-          if (node.isText) {
-            position = pos + Math.min(remaining, node.nodeSize);
-            if (remaining <= node.nodeSize) found = true; else remaining -= node.nodeSize;
-          } else if (node.type.name === 'hardBreak') {
-            if (!remaining) { position = pos; found = true; } else remaining--;
-          }
-          return !found;
-        });
-        return position;
-      };
-      const fallback = editor.state.selection;
-      const from = anchor === null || head === null ? fallback.from : positionAt(Math.min(anchor, head));
-      const to = anchor === null || head === null ? fallback.to : positionAt(Math.max(anchor, head));
       return {
-        before: serializeBullet(doc.cut(0, from).toJSON()),
-        after: serializeBullet(doc.cut(to, doc.content.size).toJSON()),
+        before: text(0, from) ? serializeBullet(doc.cut(0, from).toJSON()) : { content: '', tags: [] },
+        after: text(to, doc.content.size) ? serializeBullet(doc.cut(to, doc.content.size).toJSON()) : { content: '', tags: [] },
       };
     },
   }), [editor]);

@@ -176,7 +176,7 @@ def check_revision(row, expected):
         raise HTTPException(409, 'This entry changed elsewhere. Your local draft was preserved.')
 
 
-def move_entry(db, table, item_id, parent_id, after_id, now):
+def move_entry(db, table, item_id, parent_id, after_id, now, before_id=None):
     """Move an entry and let its new parent determine note/task identity."""
     row = required(db, table, item_id)
     parent = db.execute('SELECT * FROM entries WHERE id = ?', (parent_id,)).fetchone() if parent_id is not None else None
@@ -209,7 +209,7 @@ def move_entry(db, table, item_id, parent_id, after_id, now):
             db.execute('UPDATE entries SET completed_at = COALESCE(completed_at, ?), updated_at = ?, revision = revision + 1 WHERE id = ?',
                        (now, now, entry['id']))
     place(db, target_table, item_id, parent_id, after_id,
-          allow_completed_parent=bool(parent and parent['completed_at']))
+          allow_completed_parent=bool(parent and parent['completed_at']), before_id=before_id)
     return target_table
 
 
@@ -403,6 +403,7 @@ class DocumentChange(BaseModel):
     date: CalendarDate | None = None
     parent_id: int | None = None
     after_id: int | None = None
+    before_id: int | None = None
     client_id: str | None = None
     move: bool = False
     expected_revision: int | None = Field(default=None, ge=1)
@@ -461,7 +462,7 @@ def edit_document(body: DocumentBatch, timezone: str = "UTC"):
             if row and index not in prevalidated:
                 check_revision(row, change.expected_revision)
             if change.move and row:
-                table = move_entry(db, table, item_id, change.parent_id, change.after_id, now)
+                table = move_entry(db, table, item_id, change.parent_id, change.after_id, now, change.before_id)
                 if table == 'tasks':
                     promoted.append(item_id)
             else:
@@ -489,7 +490,7 @@ def edit_document(body: DocumentBatch, timezone: str = "UTC"):
                                             (day_id, value.content, encoded, now, now, completed_at, change.parent_id, change.client_id))
                     item_id = cursor.lastrowid
                     place(db, table, item_id, change.parent_id, change.after_id,
-                          allow_completed_parent=table == 'tasks' and bool(completed_at))
+                          allow_completed_parent=table == 'tasks' and bool(completed_at), before_id=change.before_id)
             results.append(required(db, table, item_id))
         parents = [before['tasks'][change.id]['parent_id'] for change in body.changes if change.kind == 'tasks' and change.id in before['tasks']]
         zone, instant = get_zone(timezone), utcnow()

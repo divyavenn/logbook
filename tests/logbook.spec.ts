@@ -220,7 +220,8 @@ test('recovers a failed autosave without losing the draft', async ({ page }) => 
   await expect(composer).toBeFocused();
   await page.route('**/api/document/edit?*', route => route.abort());
   await composer.fill('This thought stays safe through a connection failure.');
-  await expect(page.getByRole('button', { name: 'Retry saving' })).toBeVisible();
+  await expect(composer.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-entry-error', 'true');
+  await expect(page.getByRole('button', { name: 'Retry saving' })).toHaveCount(0);
   await page.reload();
   await expect(composer).toHaveText('This thought stays safe through a connection failure.');
   await page.unroute('**/api/document/edit?*');

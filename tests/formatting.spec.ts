@@ -113,7 +113,7 @@ for (const kind of ['notes', 'tasks'] as const) {
       await saveAtEnd(composer);
       await expect(composer).toHaveText('');
       await expect(page.getByRole('group', { name: text, exact: true }).locator(tag)).toHaveText(text);
-      expect((await rows(page, kind)).some(row => row.content === `${delimiter}${text}${delimiter}`)).toBe(true);
+      await expect.poll(async () => (await rows(page, kind)).some(row => row.content === `${delimiter}${text}${delimiter}`)).toBe(true);
     }
   });
 }
@@ -181,6 +181,7 @@ test('link shortcut inserts a labeled link at the caret or links selected text',
 });
 
 test('clicking links opens them from saved text and the active editor', async ({ page, request }) => {
+  await page.context().route('https://example.com/**', route => route.fulfill({ contentType: 'text/html', body: '<p>Reference</p>' }));
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: '[Open reference](https://example.com/reference)' } });
   await page.goto('/');
@@ -350,13 +351,10 @@ test('Ctrl shortcuts work on Windows and block formatting saves valid Markdown',
   await composer.pressSequentially('Line two');
   await composer.press('Enter');
   await expect(composer).toHaveText('');
-  const content = (await rows(page, 'notes')).map(row => row.content);
-  expect(content).toContain('**Windows bold**');
-  expect(content).toContain('`Windows code`');
-  expect(content).toContain('## Small heading');
-  expect(content).toContain('> A quoted thought');
-  expect(content).toContain('````\nfirst line\n```\nthird line\n````');
-  expect(content).toContain('Line one\\\nLine two');
+  await expect.poll(async () => (await rows(page, 'notes')).map(row => row.content)).toEqual(expect.arrayContaining([
+    '**Windows bold**', '`Windows code`', '## Small heading', '> A quoted thought',
+    '````\nfirst line\n```\nthird line\n````', 'Line one\\\nLine two',
+  ]));
   await page.reload();
   await expect(page.getByRole('group', { name: 'Small heading', exact: true }).locator('h2')).toHaveText('Small heading');
   await expect(page.getByRole('group', { name: 'first line ``` third line', exact: true }).locator('pre code')).toHaveText('first line\n```\nthird line');

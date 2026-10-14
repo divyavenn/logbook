@@ -13,6 +13,7 @@ import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
 import { compactViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
+import { entryError } from './entryFeedback';
 
 const JOURNAL_PAGE_SIZE = 14;
 const MOBILE_VIEWS = ['todos', 'log', 'tags'] as const;
@@ -331,7 +332,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       const editing = event.target instanceof Element && !!event.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])');
       if (historyDirection !== null && !editing) {
         event.preventDefault();
-        void documentUndo(historyDirection).catch(e => notify(errorMessage(e)));
+        void documentUndo(historyDirection).catch(e => entryError(e));
         return;
       }
       if (event.metaKey || event.ctrlKey) {
@@ -383,8 +384,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     setError('');
   }, [notify]);
   useEffect(() => {
-    const applied = () => { void refresh().catch(e => notify(errorMessage(e))); };
-    const failed = (event: Event) => notify((event as CustomEvent<string>).detail);
+    const applied = () => { void refresh().catch(e => entryError(e)); };
+    const failed = (event: Event) => entryError((event as CustomEvent<string>).detail);
     const edited = () => setUndoTask(null);
     window.addEventListener('still-history-applied', applied);
     window.addEventListener('still-history-error', failed);

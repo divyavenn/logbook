@@ -21,6 +21,7 @@ export function historyShortcutDirection(event: HistoryShortcutEvent): boolean |
 }
 export function recordEdit(operation: string | null, key: string) {
   if (!operation) return;
+  if (undo.some(entry => entry.operations.includes(operation))) return;
   if (undo.at(-1)?.key === key && !undo.at(-1)?.completion) undo.at(-1)!.operations.push(operation);
   else undo.push({ key, operations: [operation] });
   redo = []; changed();
@@ -28,7 +29,7 @@ export function recordEdit(operation: string | null, key: string) {
 export function recordCompletion(id: number, at: string) {
   undo.push({ key: crypto.randomUUID(), operations: [], completion: { id, at } }); redo = []; changed();
 }
-export async function editDocument(changes: Record<string, unknown>[], key = crypto.randomUUID(), requestId = crypto.randomUUID()) {
+export async function editDocument(changes: Record<string, unknown>[], key: string = crypto.randomUUID(), requestId: string = crypto.randomUUID()) {
   const result = await api<{ items: (OutlineItem | null)[]; operation_id: string | null }>('/document/edit', 'POST', { changes, request_id: requestId });
   recordEdit(result.operation_id, key); return result.items;
 }
