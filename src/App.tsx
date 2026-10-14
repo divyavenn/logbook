@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import styled, { css, keyframes } from 'styled-components';
+import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
 import { api, errorMessage, getJournal, localDate, recoverEarlierDrafts, timerDuration } from './api';
 import { FocusSound } from './audio';
@@ -85,10 +85,6 @@ const Page = styled.div<{ $focusing: boolean }>`
     overflow-y: hidden;
   }
 `;
-const ringPulse = keyframes`
-  from { transform: scale(1); opacity: .65; }
-  to { transform: scale(1.14); opacity: 0; }
-`;
 const pageControl = css`
   ${press}; position: relative; display: grid; place-items: center;
   width: 28px; height: 36px; padding: 0; border: 0; border-radius: 50%;
@@ -123,12 +119,13 @@ const TimerChrome = styled.div`
 const TimerTime = styled.span`
   color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: -.01em;
 `;
-const TimerButton = styled.button<{ $pulse: boolean; $running: boolean }>`
+const TimerButton = styled.button<{ $running: boolean }>`
   ${press}; position: relative; width: 44px; height: 44px; display: grid; place-items: center; flex-shrink: 0;
   padding: 0; border: 0; border-radius: 50%; background: var(--timer); color: var(--timer-ink);
   &::before { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-ring); border-radius: 50%; pointer-events: none; transition: border-color 160ms ease-out; }
-  &::after { content: ''; position: absolute; inset: -3px; border: 1px solid ${({ $running }) => $running ? 'var(--timer-running-ring)' : 'var(--timer-ring)'}; border-radius: 50%; pointer-events: none; opacity: 0;
-    transform: scale(1); ${({ $pulse }) => $pulse && css`animation: ${ringPulse} 360ms ease-out; will-change: transform, opacity;`} }
+  &::after { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-running-ring); border-radius: 50%; pointer-events: none;
+    opacity: ${({ $running }) => $running ? .3 : 0}; transform: scale(${({ $running }) => $running ? 1.14 : 1});
+    transition: opacity 240ms ease-out, transform 240ms ease-out; }
   &:hover { background: var(--timer-hover); }
   &[aria-pressed='true'] { background: var(--timer-running); scale: 1.03; }
   &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
@@ -294,10 +291,14 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerIntent, setTimerIntent] = useState<'start' | 'stop' | null>(null);
-  const [timerPulse, setTimerPulse] = useState(false);
   const [audible, setAudible] = useState(false);
   const [volume, setVolume] = useState(() => Math.max(0, Math.min(1, Number(localStorage.getItem('still-volume') ?? '0.22') || 0)));
   const sound = useRef(new FocusSound());
+  const openedModals = useRef(new Set<string>());
+  if (sessionsDate) openedModals.current.add('sessions');
+  if (statsOpen) openedModals.current.add('stats');
+  if (searchOpen) openedModals.current.add('search');
+  if (calendarOpen) openedModals.current.add('calendar');
   const timerLock = useRef(false);
   const clockOffset = useRef(0);
   const generation = useRef(0);
@@ -453,11 +454,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         const started = await api<Session>('/timer/start', 'POST');
         setData(current => current ? { ...current, active_session: started } : current);
       }
-      setTimerPulse(false);
-      if (!active) {
-        requestAnimationFrame(() => setTimerPulse(true));
-        setTimeout(() => setTimerPulse(false), 400);
-      }
       await refresh();
     } catch (e) { if (!active) { sound.current.stop(); setAudible(false); } notify(errorMessage(e)); }
     finally { timerLock.current = false; setTimerIntent(null); setTimerBusy(false); }
@@ -500,7 +496,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== hit.date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
       }
       setSearchOpen(false);
-      setTimeout(() => setTarget({ kind: hit.kind, id: hit.id }), 180);
+      setTarget({ kind: hit.kind, id: hit.id });
     } catch (e) { notify(errorMessage(e)); }
   };
 
@@ -519,7 +515,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}>
     <TimerChrome>
       <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(visibleElapsed)}</TimerTime>
-      <TimerButton $pulse={timerPulse} $running={timerRunning} type="button" disabled={!data} data-haptic="impact"
+      <TimerButton $running={timerRunning} type="button" disabled={!data} data-haptic="impact"
         aria-label={timerRunning ? 'Stop focus timer' : 'Start focus timer'} aria-pressed={timerRunning} aria-disabled={timerBusy || undefined} aria-busy={timerBusy || undefined}
         title="Click to start/stop · right-click for sound"
         onContextMenu={event => { event.preventDefault(); setSoundOpen(true); }}
@@ -565,10 +561,10 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       </>}
     </Main>
     <Suspense fallback={null}>
-      {sessionsDate && <SessionsModal date={sessionsDate} onClose={() => setSessionsDate(null)} onChange={refresh} />}
-      {statsOpen && <StatsModal open onClose={() => setStatsOpen(false)} />}
-      {searchOpen && <SearchModal open onClose={() => setSearchOpen(false)} onSelect={jumpTo} />}
-      {calendarOpen && <CalendarModal open onClose={() => setCalendarOpen(false)} onChange={refresh} />}
+      {openedModals.current.has('sessions') && <SessionsModal date={sessionsDate} onClose={() => setSessionsDate(null)} onChange={refresh} />}
+      {openedModals.current.has('stats') && <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />}
+      {openedModals.current.has('search') && <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={jumpTo} />}
+      {openedModals.current.has('calendar') && <CalendarModal open={calendarOpen} onClose={() => setCalendarOpen(false)} onChange={refresh} />}
     </Suspense>
     <Modal open={soundOpen} onClose={() => setSoundOpen(false)} title="Focus sound" compact><SoundMenu>
       <TextButton aria-label={audible ? 'Mute focus sound' : 'Play focus sound'} onClick={() => void toggleSound()}>{audible ? 'Mute' : 'Play sound'}</TextButton>

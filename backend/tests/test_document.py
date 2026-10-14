@@ -13,6 +13,60 @@ def history(client, operation, redo=False):
     assert response.status_code == 200, response.text
 
 
+def test_explicit_empty_row_preserves_parent_identity_and_can_be_undone(client):
+    parent = create(client, 'notes', 'Parent')
+    child = create(client, 'notes', 'Child', parent['id'])
+    result = batch(client, [{'kind': 'notes', 'content': '', 'tags': [], 'allow_empty': True,
+                             'date': '2026-09-16', 'before_id': parent['id'], 'client_id': 'empty-before-parent'}])
+    rows = sorted(client.get('/api/export').json()['notes'], key=lambda row: row['position'])
+    roots = [row for row in rows if row['parent_id'] is None]
+    assert [row['content'] for row in roots] == ['', 'Parent']
+    assert next(row for row in rows if row['id'] == child['id'])['parent_id'] == parent['id']
+    history(client, result['operation_id'])
+    assert len(client.get('/api/export').json()['notes']) == 2
+    history(client, result['operation_id'], redo=True)
+    assert len(client.get('/api/export').json()['notes']) == 3
+
+
+def test_completion_responses_support_immediate_reversal_with_current_revisions(client):
+    parent = create(client, 'tasks', 'Parent')
+    child = create(client, 'tasks', 'Child', parent['id'])
+    finished = client.post(f"/api/tasks/{child['id']}/complete?expected_revision={child['revision']}").json()
+    current = next(row for row in finished['items'] if row['id'] == child['id'])
+    reopened = client.post(f"/api/tasks/{child['id']}/reopen", json={
+        'completed_at': current['completed_at'], 'expected_revision': current['revision'], 'record_history': True,
+    })
+    assert reopened.status_code == 200
+    assert {row['id'] for row in reopened.json()['items']} == {parent['id'], child['id']}
+    assert all(row['completed_at'] is None for row in reopened.json()['items'])
+
+
+def test_finishing_a_tree_returns_the_updated_revision_of_earlier_completed_siblings(client):
+    parent = create(client, 'tasks', 'Parent')
+    first = create(client, 'tasks', 'First', parent['id'])
+    last = create(client, 'tasks', 'Last', parent['id'])
+    client.post(f"/api/tasks/{first['id']}/complete")
+    finished = client.post(f"/api/tasks/{last['id']}/complete").json()
+    current = next(row for row in finished['items'] if row['id'] == first['id'])
+    reopened = client.post(f"/api/tasks/{first['id']}/reopen", json={
+        'completed_at': current['completed_at'], 'expected_revision': current['revision'],
+    })
+    assert reopened.status_code == 200
+    current_last = next(row for row in reopened.json()['items'] if row['id'] == last['id'])
+    assert client.post(f"/api/tasks/{last['id']}/reopen", json={
+        'completed_at': current_last['completed_at'], 'expected_revision': current_last['revision'],
+    }).status_code == 200
+
+
+def test_an_empty_note_can_precede_a_completed_task_in_the_logbook(client):
+    task = create(client, 'tasks', 'Done')
+    client.post(f"/api/tasks/{task['id']}/complete")
+    today = client.get('/api/journal').json()['today']
+    result = batch(client, [{'kind': 'notes', 'content': '', 'allow_empty': True, 'date': today, 'before_id': task['id']}])
+    assert result['items'][0]['position'] == 0
+    assert client.get('/api/export').json()['tasks'][0]['content'] == 'Done'
+
+
 def test_document_can_insert_and_move_before_the_first_sibling(client):
     first = create(client, 'notes', 'First')
     last = create(client, 'notes', 'Last')

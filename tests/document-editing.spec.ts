@@ -255,6 +255,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
     const rootIds = () => mobile.locator('[data-outline-kind="tasks"] > ul > li[data-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-item-id')));
     const preview = mobile.getByRole('group', { name: 'First mobile task', exact: true });
     await expect(preview).toBeInViewport();
+    await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
     await expect.poll(rootIds).toEqual([String(first.id), String(last.id), 'draft']);
     const previewBox = (await preview.boundingBox())!;
     await preview.click();
@@ -292,6 +293,7 @@ test('mobile entry swipes change panes until a hold selects the entry for indent
     await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
     const row = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
     await expect(row).toBeInViewport();
+    await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
     let pointerId = 7;
     const swipe = async (element: typeof row, from: number, to: number, hold = false) => {
       pointerId += 1;
@@ -308,6 +310,7 @@ test('mobile entry swipes change panes until a hold selects the entry for indent
     expect(((await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>).find(task => task.id === second.id)?.parent_id).toBeNull();
 
     await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
     await swipe(row, 90, 165, true);
     await expect.poll(async () => {
       const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
@@ -452,8 +455,14 @@ test('editing a saved entry after inserting before it uses its latest revision',
   await editor.press('Meta+ArrowUp'); await editor.press('Enter');
 
   await expect(page.getByRole('button', { name: 'Retry saving' })).toHaveCount(0);
-  await expect(composer).toBeFocused();
-  await expect(composer).toHaveText('Move all of this text');
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveText('Move all of this text');
+  await expect(editor.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-item-id', String(target.id));
+  await expect(page.getByRole('group', { name: 'Empty note', exact: true })).toBeVisible();
+  await expect.poll(async () => {
+    const rows = (await (await request.get('/api/export')).json()).notes as Array<{ content: string; position: number }>;
+    return rows.sort((a, b) => a.position - b.position).map(row => row.content);
+  }).toEqual(['Before target', 'Inserted before target', '', 'Move all of this text']);
 });
 
 test('a stale saved-entry draft refreshes its revision and retries without getting stuck', async ({ page, request }) => {

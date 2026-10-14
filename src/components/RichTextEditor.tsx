@@ -125,6 +125,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
   const lastSnapshot = useRef(JSON.stringify([value, bulletTags]));
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
+  const restoreLinkSelection = useRef<{ from: number; to: number } | null>(null);
   const [url, setUrl] = useState('');
   const [linkMode, setLinkMode] = useState<LinkMode>('shortcut');
   const [linkText, setLinkText] = useState('');
@@ -459,6 +460,20 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     editor.view.dom.focus();
   };
   useEffect(() => {
+    if (!editor) return;
+    const preserveDocumentSelection = (event: Event) => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return;
+      const root = editor.view.dom;
+      // ProseMirror only owns selections wholly inside this entry. Its DOM
+      // observer would otherwise clamp a native cross-entry selection back
+      // into the editor before the outline can handle typing, cut, or delete.
+      if (root.contains(selection.anchorNode) && !root.contains(selection.focusNode)) event.stopImmediatePropagation();
+    };
+    document.addEventListener('selectionchange', preserveDocumentSelection, true);
+    return () => document.removeEventListener('selectionchange', preserveDocumentSelection, true);
+  }, [editor]);
+  useEffect(() => {
     const dismiss = (event: Event) => {
       if (event.target instanceof Element && event.target.closest('#tag-suggestions')) return;
       if (!suggestionRef.current) return;
@@ -504,6 +519,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     const actualMode: LinkMode = empty && mode === 'shortcut' ? 'insert' : mode;
     const selected = empty ? '' : editor.state.doc.textBetween(from, to, '\n');
     if (actualMode !== 'insert' && !selected.trim()) return;
+    restoreLinkSelection.current = null;
     const existing = editor.isActive('link');
     setLinkText(selected);
     setUrl(existing ? String(editor.getAttributes('link').href ?? '') : '');
@@ -610,13 +626,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
 
   const close = (range = link) => {
     linkOpen.current = false; clipboardRequest.current++; setLink(null);
-    // Native dialog closes after its exit transition; restore the original text selection.
-    setTimeout(() => {
-      if (editor && !editor.isDestroyed) {
-        if (range) editor.commands.setTextSelection({ from: range.from, to: range.to });
-        editor.view.dom.focus();
-      }
-    }, 170);
+    restoreLinkSelection.current = range;
   };
 
   const formatSelection = (format: 'bold' | 'italic' | 'underline' | 'code') => {
@@ -643,7 +653,12 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       <TagAlternatives>{suggestion.names.slice(1, 3).map((name, offset) => { const index = offset + 1; return <TagOption $selected={suggestion.index === index} key={name} id={`tag-option-${index}`} role="option" aria-selected={suggestion.index === index}
         onMouseDown={event => event.preventDefault()} onClick={() => chooseTag(name)}>#{name}</TagOption>; })}</TagAlternatives>
     </TagCompletion>}
-    <Modal open={link !== null} onClose={() => close()} title="Link" compact>
+    <Modal open={link !== null} onClose={() => close()} onAfterClose={() => {
+      if (!editor || editor.isDestroyed || linkOpen.current) return;
+      if (restoreLinkSelection.current) editor.commands.setTextSelection(restoreLinkSelection.current);
+      restoreLinkSelection.current = null;
+      editor.view.focus();
+    }} title="Link" compact>
       <LinkForm onKeyDown={event => {
         if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
           if (linkMode === 'insert' && event.target === linkTextField.current) {

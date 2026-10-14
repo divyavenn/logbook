@@ -1,11 +1,14 @@
 import { Fragment, memo, useMemo, type ReactNode } from 'react';
-import { generateJSON, getSchema, type JSONContent } from '@tiptap/core';
+import { getSchema, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { MarkdownSerializer, defaultMarkdownSerializer } from 'prosemirror-markdown';
 import { MarkdownManager } from '@tiptap/markdown';
 import styled, { css } from 'styled-components';
 import { normalizeTag, tagMatches } from './tagSyntax';
 import { JournalTag } from './tagEditor';
+import { DOMParser as ProseMirrorDOMParser, Slice } from '@tiptap/pm/model';
+import { Transform } from '@tiptap/pm/transform';
+import { textPositions } from './textSelection';
 
 export function safeHref(value: string): string | null {
   if (/^[\s\u0000-\u001f]/.test(value) || /[\u0000-\u001f\u007f]/.test(value)) return null;
@@ -67,6 +70,29 @@ export function mergeMarkdown(first: string, second: string) {
   a.content = [...a.content ?? [], ...b.content ?? []];
   return markdownSerializer.serialize(schema.nodeFromJSON(a));
 }
+
+type SelectedBullet = { content: string; tags: string[]; from: number; to: number };
+export function replaceBulletRange(first: SelectedBullet, last: SelectedBullet, text = '', html = '', hiddenTags: string[] = []) {
+  const a = schema.nodeFromJSON(documentWithTags(first.content, first.tags.filter(tag => !hiddenTags.includes(tag)), hiddenTags));
+  const b = schema.nodeFromJSON(documentWithTags(last.content, last.tags.filter(tag => !hiddenTags.includes(tag)), hiddenTags));
+  const doc = first === last ? a : schema.topNodeType.create(null, a.content.append(b.content));
+  const from = textPositions(a).positionAt(first.from);
+  const to = (first === last ? 0 : a.content.size) + textPositions(b).positionAt(last.to);
+  const marks = doc.resolve(from).marks();
+  const tr = new Transform(doc).delete(from, to);
+  const caret = tr.mapping.map(from, -1);
+  if (html || text.includes('\n')) {
+    // Keep clipboard whitespace until after the fragments have been joined.
+    // Serializing a standalone bullet first would trim its boundary spaces.
+    const insert = pastedDocument(text, html);
+    tr.replaceRange(caret, caret, Slice.maxOpen(insert.content));
+  } else if (text) tr.insert(caret, schema.text(text, marks));
+  const offset = textPositions(tr.doc).offsetAt(tr.mapping.map(from, 1));
+  const result = serializeBullet(tr.doc.toJSON());
+  // A filtered-out tag is context, not selected text.
+  result.tags = [...new Set([...result.tags, ...hiddenTags.filter(tag => first.tags.includes(tag) || last.tags.includes(tag))])];
+  return { ...result, offset };
+}
 export function formatMarkdown(content: string, format: string) {
   const doc = parseMarkdown(content), texts: JSONContent[] = [];
   const visit = (node: JSONContent) => { if (node.type === 'text') texts.push(node); node.content?.forEach(visit); };
@@ -76,13 +102,20 @@ export function formatMarkdown(content: string, format: string) {
     : [...(format === 'code' ? [] : node.marks?.filter(mark => mark.type !== format && mark.type !== 'code') ?? []), { type: format }];
   return markdownSerializer.serialize(schema.nodeFromJSON(doc));
 }
-export function pastedBullet(text: string, html = '') {
+function pastedDocument(text: string, html: string) {
+  if (html) {
+    const dom = new DOMParser().parseFromString(html, 'text/html');
+    return ProseMirrorDOMParser.fromSchema(schema).parse(dom.body, { preserveWhitespace: true });
+  }
   const content: JSONContent[] = [];
   text.split('\n').forEach((line, index) => {
     if (index) content.push({ type: 'hardBreak' });
     if (line) content.push({ type: 'text', text: line });
   });
-  return serializeBullet(html ? generateJSON(html, formattingExtensions()) : { type: 'doc', content: [{ type: 'paragraph', content }] });
+  return schema.nodeFromJSON({ type: 'doc', content: [{ type: 'paragraph', content }] });
+}
+export function pastedBullet(text: string, html = '') {
+  return serializeBullet(pastedDocument(text, html).toJSON());
 }
 function hideTags(node: JSONContent, hidden: Set<string>): JSONContent | null {
   if (node.type === 'codeBlock' || node.marks?.some(mark => mark.type === 'code' || mark.type === 'link')) return node;

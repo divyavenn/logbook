@@ -109,7 +109,10 @@ test('timer shows ticking seconds, running colors in both themes, and resets on 
   const restarted = page.getByRole('button', { name: 'Stop focus timer', exact: true });
   await page.clock.runFor(16);
   await expect(restarted).toHaveCSS('scale', '1.03');
-  await expect.poll(() => restarted.evaluate(el => getComputedStyle(el, '::after').animationName)).not.toBe('none');
+  await expect.poll(() => restarted.evaluate(el => {
+    const style = getComputedStyle(el, '::after');
+    return { animation: style.animationName, transition: style.transitionProperty, opacity: style.opacity };
+  })).toEqual({ animation: 'none', transition: 'opacity, transform', opacity: '0.3' });
   await page.setViewportSize({ width: 260, height: 180 });
   await expect(restarted).toBeVisible();
   await expect(restarted).toHaveCSS('width', '44px');
@@ -117,9 +120,15 @@ test('timer shows ticking seconds, running colors in both themes, and resets on 
   await expect(restarted).toHaveCSS('scale', '1.03');
   await expect(restarted).toHaveCSS('background-color', 'rgb(24, 113, 186)');
   await expect(restarted.locator('svg')).toBeVisible();
-  await expect(readout).toHaveText('01:02:04');
+  await expect(restarted).not.toHaveAttribute('aria-busy', 'true');
+  // Fix wall time, then deliver the next timer tick independently of the
+  // interval's phase after the asynchronous restart and visual checks.
+  await page.clock.setFixedTime(new Date('2026-09-16T10:02:11.500-07:00'));
+  await page.clock.runFor(1000);
+  await expect(readout).toHaveText('01:02:11');
   expect(await restarted.evaluate(element => ({
     staticRing: getComputedStyle(element, '::before').top,
-    pulse: getComputedStyle(element, '::after').animationName,
-  }))).toEqual({ staticRing: '-3px', pulse: expect.not.stringMatching(/^none$/) });
+    animation: getComputedStyle(element, '::after').animationName,
+    transform: getComputedStyle(element, '::after').transform,
+  }))).toEqual({ staticRing: '-3px', animation: 'none', transform: 'matrix(1.14, 0, 0, 1.14, 0, 0)' });
 });

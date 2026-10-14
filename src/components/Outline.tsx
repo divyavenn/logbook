@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import styled, { keyframes, css } from 'styled-components';
+import styled, { css } from 'styled-components';
 import { useJournalContext, registerDraftFlush } from '../JournalContext';
 import { api } from '../api';
 import type { EntryKind, OutlineItem } from '../types';
 import { VisuallyHidden } from '../styles';
-import { MarkdownContent, markdownText, richTextStyles, mergeMarkdown, formatMarkdown, pastedBullet } from '../markdown';
+import { MarkdownContent, markdownText, richTextStyles, mergeMarkdown, formatMarkdown, pastedBullet, replaceBulletRange } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
 import { documentUndo, editDocument, historyShortcutDirection, recordEdit } from '../documentHistory';
 import { compactViewport } from '../layout';
@@ -13,6 +13,8 @@ import { haptic } from '../haptics';
 import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
 import { domTextOffset } from '../textSelection';
+import { selectedEntryRanges, replaceEntrySelection, type SelectionEdit } from '../entrySelection';
+import { completionPreview, waitForMotion } from '../taskCompletion';
 
 const MAX_LEVELS = 8;
 const ENTRY_HOLD_MS = 360;
@@ -36,13 +38,15 @@ const Children = styled(List)<{ $task: boolean }>`
   @media(max-width: 440px) { padding-left: 12px; }
   @media ${compactViewport} { padding-left: 9px; }
 `;
-const popOut = keyframes`0% { opacity: 1; transform: scale(1); } 40% { opacity: .8; transform: scale(1.012); } 100% { opacity: 0; transform: translateY(-3px) scale(.985); }`;
-const slideIn = keyframes`from { opacity: 0; transform: translateY(-7px); } to { opacity: 1; transform: translateY(0); }`;
 const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height);`;
 const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
-  ${({ $leaving }) => $leaving && css`animation: ${popOut} 180ms ease-out both; pointer-events: none;`}
-  ${({ $arriving }) => $arriving && css`animation: ${slideIn} 280ms cubic-bezier(.2,.7,.3,1) both;`}
+  opacity: ${({ $leaving }) => $leaving ? 0 : 1};
+  transform: ${({ $leaving }) => $leaving ? 'translateY(-3px)' : 'none'};
+  transition-property: opacity, transform;
+  transition-duration: ${({ $leaving }) => $leaving ? '180ms' : '280ms'};
+  transition-timing-function: cubic-bezier(.2, 0, 0, 1);
+  ${({ $arriving }) => $arriving && css`@starting-style { opacity: 0; transform: translateY(-7px); }`}
   > ${Row} { transition: background-color 120ms ease-out; }
   &[data-drop-position="before"] > ${Row} { box-shadow: 0 -2px 0 var(--link); }
   &[data-drop-position="after"] > ${Row} { box-shadow: 0 2px 0 var(--link); }
@@ -56,7 +60,7 @@ const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
   display: grid; min-height: 0;
   grid-template-rows: ${({ $open }) => $open ? '1fr' : '0fr'};
   opacity: ${({ $open }) => $open ? 1 : 0};
-  transform: translateY(${({ $open }) => $open ? '0' : '-3px'});
+  transform: ${({ $open }) => $open ? 'none' : 'translateY(-3px)'};
   visibility: ${({ $open }) => $open ? 'visible' : 'hidden'};
   pointer-events: ${({ $open }) => $open ? 'auto' : 'none'};
   transition-property: grid-template-rows, opacity, transform, visibility;
@@ -67,7 +71,7 @@ const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
   > ${Children} { min-height: 0; overflow: hidden; }
   > ${Children} > ${Item} > ${Row} {
     opacity: ${({ $open }) => $open ? 1 : 0};
-    transform: translateY(${({ $open }) => $open ? '0' : '-3px'});
+    transform: ${({ $open }) => $open ? 'none' : 'translateY(-3px)'};
     transition-property: opacity, transform;
     transition-duration: 220ms, 280ms;
     transition-timing-function: ease-out;
@@ -216,8 +220,12 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     seenCompleted.current = new Set(initial);
     return initial;
   });
-  const [completing, setCompleting] = useState<number | null>(null);
-  const [pendingCompletion, setPendingCompletion] = useState<{ ids: Set<number>; done: boolean } | null>(null);
+  const [completing, setCompleting] = useState(new Set<number>());
+  const [pendingCompletion, setPendingCompletion] = useState(new Map<number, boolean>());
+  const completionTargets = useRef(new Map<number, boolean>());
+  const completionRunning = useRef(false);
+  const completionMotion = useRef<AbortController | null>(null);
+  const completionChangedAt = useRef(0);
   const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
@@ -343,11 +351,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   documentStore.failed = (error, ids) => {
     for (const id of ids) entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
   };
-  const stageDraft = useCallback(() => {
+  const stageDraft = useCallback((historyKey?: ReturnType<typeof crypto.randomUUID>) => {
     const value = current.current;
     if (!value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags)) return value.id;
     if (!value.content.trim() && !value.tags.length) {
-      if (value.id !== null) documentStore.enqueue([{ kind: value.kind, id: value.id, delete: true }], value.clientId);
+      if (value.id !== null) documentStore.enqueue([{ kind: value.kind, id: value.id, delete: true }], historyKey ?? value.clientId);
       persist({ ...value, id: null, revision: null, saved: '', savedTags: [] });
       return null;
     }
@@ -355,7 +363,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     documentStore.enqueue([{
       id, kind: value.kind, create: value.id === null, content: value.content, tags: value.tags, date: day,
       client_id: value.clientId, parent_id: value.parentId, after_id: value.afterId, before_id: value.beforeId,
-    }], value.clientId);
+    }], historyKey ?? value.clientId);
     persist({ ...value, id, saved: value.content, savedTags: value.tags });
     return id;
   }, [day, documentStore, persist]);
@@ -373,7 +381,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
 
   useEffect(() => registerDraftFlush(save), [save]);
   useEffect(() => {
-    const applied = () => { selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); persist(blank([], composer)); };
+    const applied = () => {
+      completionTargets.current.clear(); completionMotion.current?.abort();
+      setCompleting(new Set()); setPendingCompletion(new Map());
+      selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); persist(blank([], composer));
+    };
     window.addEventListener('still-history-applied', applied);
     return () => window.removeEventListener('still-history-applied', applied);
   }, [composer, persist]);
@@ -412,6 +424,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     return () => {
       mounted.current = false; cancelAnimationFrame(frame);
       if (entryGesture.current?.timer) clearTimeout(entryGesture.current.timer);
+      completionMotion.current?.abort();
       window.removeEventListener('focus', onFocus); window.removeEventListener('pagehide', flush);
       void save().catch(() => {});
     };
@@ -502,53 +515,85 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       void documentStore.flush().catch(() => {});
     } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${item.id}"]`)); }
   };
-  const complete = (id: number) => void run(async () => {
-    try {
-      await save();
-      id = documentStore.resolve(id)!;
-      const task = records.current.find(row => row.id === id);
-      if (!task) return;
-      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, reduced ? 0 : ms));
-      const affected = new Set([id]);
-      let finishing = task;
-      while (finishing.parent_id !== null) {
-        const parent = records.current.find(row => row.id === finishing.parent_id);
-        if (!parent || (!task.completed_at && (parent.completed_child_count ?? 0) + 1 !== parent.child_count)) break;
-        if (!task.completed_at || parent.completed_at) affected.add(parent.id);
-        finishing = parent;
+  const complete = (id: number) => {
+    if (lock.current) return;
+    id = documentStore.resolve(id)!;
+    const task = records.current.find(row => row.id === id);
+    if (!task) return;
+    const targets = completionTargets.current;
+    targets.set(id, !(targets.get(id) ?? !!task.completed_at));
+    completionChangedAt.current = performance.now();
+    completionMotion.current?.abort();
+    setCompleting(new Set());
+    setPendingCompletion(completionPreview(records.current, targets));
+    if (completionRunning.current) return;
+    completionRunning.current = true;
+    void (async () => {
+      const states = new Map<number, OutlineItem>();
+      try {
+        while (targets.size) {
+          await save();
+          for (const row of records.current) {
+            if (!states.has(row.id) || states.get(row.id)!.revision < row.revision) states.set(row.id, row);
+          }
+          for (const [temporaryId, desired] of [...targets]) {
+            const resolved = documentStore.resolve(temporaryId)!;
+            if (resolved !== temporaryId) { targets.delete(temporaryId); targets.set(resolved, desired); }
+          }
+          if (mounted.current) setPendingCompletion(completionPreview(records.current, targets));
+          const pending = [...targets].find(([taskId, desired]) => desired !== !!states.get(taskId)?.completed_at);
+          if (pending) {
+            const [taskId, desired] = pending;
+            const latest = states.get(taskId);
+            if (!latest) { targets.delete(taskId); continue; }
+            try {
+              if (desired) {
+                const result = await api<{ task_ids: number[]; completed_at: string; items: OutlineItem[] }>(`/tasks/${taskId}/complete?expected_revision=${latest.revision}`, 'POST');
+                for (const row of result.items) states.set(row.id, row);
+                onComplete(result.task_ids, taskId, result.completed_at);
+              } else {
+                const result = await api<{ reopened: number[]; operation_id: string | null; items: OutlineItem[] }>(`/tasks/${taskId}/reopen`, 'POST', {
+                  completed_at: latest.completed_at, expected_revision: latest.revision, record_history: true,
+                });
+                for (const row of result.items) states.set(row.id, row);
+                recordEdit(result.operation_id, crypto.randomUUID());
+                onReopen(result.reopened);
+              }
+            } catch (error) {
+              targets.set(taskId, !!latest.completed_at);
+              entryError(error, surface.current?.querySelector(`[data-item-id="${taskId}"]`));
+            }
+            continue;
+          }
+          // A new click cancels either visual wait and retargets the existing
+          // CSS transition. Save requests remain ordered, never animation-locked.
+          const motion = new AbortController();
+          completionMotion.current = motion;
+          const remaining = TASK_PROGRESS_MS - (performance.now() - completionChangedAt.current);
+          if (!await waitForMotion(remaining, motion.signal)) continue;
+          const exits = new Set(records.current.filter(row => row.parent_id === null && !row.completed_at && states.get(row.id)?.completed_at).map(row => row.id));
+          if (mounted.current) setCompleting(exits);
+          if (exits.size && !await waitForMotion(180, motion.signal)) continue;
+          const activeId = current.current.id;
+          if (activeId !== null && states.get(activeId)?.completed_at && completionPreview(records.current, targets).get(activeId) === true) {
+            stageDraft();
+            persist(blank(records.current, composer));
+          }
+          await refresh();
+          if (motion.signal.aborted) continue;
+          targets.clear();
+        }
+      } catch (error) {
+        targets.clear();
+        entryError(error, surface.current?.querySelector(`[data-item-id="${id}"]`));
+      } finally {
+        completionRunning.current = false;
+        completionMotion.current = null;
+        if (mounted.current) { setCompleting(new Set()); setPendingCompletion(new Map()); }
+        void documentStore.flush().catch(() => {});
       }
-      // Keep the existing ring mounted while its angle changes. Roll back the
-      // local feedback if saving fails; server counts take over after refresh.
-      flushSync(() => setPendingCompletion({ ids: affected, done: !task.completed_at }));
-      if (task.completed_at) {
-        const [result] = await Promise.all([
-          api<{ reopened: number[]; operation_id: string | null }>(`/tasks/${id}/reopen`, 'POST', { completed_at: task.completed_at, expected_revision: task.revision, record_history: true }),
-          wait(TASK_PROGRESS_MS),
-        ]);
-        recordEdit(result.operation_id, crypto.randomUUID());
-        onReopen(result.reopened);
-        await refresh(); return;
-      }
-      const [result] = await Promise.all([
-        api<{ task_ids: number[]; completed_at: string }>(`/tasks/${id}/complete?expected_revision=${task.revision}`, 'POST'),
-        wait(task.parent_id === null ? 0 : TASK_PROGRESS_MS),
-      ]);
-      if (finishing.parent_id === null) {
-        setCompleting(finishing.id);
-        await wait(180);
-      }
-      onComplete(result.task_ids, id, result.completed_at);
-      if (current.current.id !== null && result.task_ids.includes(current.current.id)) {
-        stageDraft();
-        persist(blank(records.current, composer));
-      }
-      await refresh();
-      void documentStore.flush().catch(() => {});
-    } catch (error) {
-      entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
-    } finally { setCompleting(null); setPendingCompletion(null); }
-  }, false);
+    })();
+  };
 
   const beginBullet = () => {
     void save().catch(() => {});
@@ -617,8 +662,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const snapshot = current.current;
     if (!other) {
       if (backwards && !snapshot.content.trim() && !snapshot.tags.length) {
-        void save().catch(() => {});
-        flushSync(() => persist(blank(records.current, false)));
+        if (snapshot.id === null) dismissEmptyDraft();
+        else deleteCurrentEntry();
       }
       return;
     }
@@ -669,35 +714,98 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     }
     void save().catch(() => {});
   };
-  const selectedEntryIds = () => {
-    const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || !selection.rangeCount) return [];
-    const range = selection.getRangeAt(0);
-    return records.current.filter(row => {
-      const item = surface.current?.querySelector<HTMLElement>(`[data-item-id="${row.id}"]`);
-      const content = item?.querySelector(':scope > div > [role="group"]');
-      return !!content && range.intersectsNode(content);
-    }).map(row => row.id);
-  };
-  const deleteEntries = (ids: number[]) => void run(async () => {
-    await save();
-    const selected = new Set(ids);
-    const changes = records.current.filter(item => selected.has(item.id))
-      .map(item => ({ kind: entryKind(item), id: item.id, delete: true, expected_revision: item.revision }));
-    if (changes.length) await editDocument(changes);
-    selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges();
-    persist(blank(records.current.filter(item => !selected.has(item.id)), composer));
-    await refresh();
-  });
   useEffect(() => {
-    const deleteSelection = (event: KeyboardEvent) => {
-      if (selectionActive.current || event.defaultPrevented || event.key !== 'Backspace' && event.key !== 'Delete') return;
-      const selected = selectedEntryIds();
-      if (selected.length < 2) return;
-      event.preventDefault(); event.stopPropagation(); deleteEntries(selected);
+    const apply = (event: Event) => {
+      const edit = (event as CustomEvent<SelectionEdit>).detail;
+      const ranges = edit.ranges.filter(range => range.key === key);
+      if (!ranges.length) return;
+      try {
+        const value = current.current;
+        const includesDraft = ranges.some(range => range.id === 'draft' || Number(range.id) === value.id);
+        const selected = ranges.map(range => {
+          if (range.id === 'draft' || Number(range.id) === value.id) return {
+            ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags, parentId: value.parentId,
+          };
+          const row = records.current.find(row => row.id === Number(range.id));
+          if (!row) throw new Error('The selected entry has changed.');
+          return { ...range, id: row.id, kind: entryKind(row), content: row.content, tags: row.tags, parentId: row.parent_id };
+        });
+        const first = selected[0], last = selected.at(-1)!;
+        const primary = edit.ranges[0].key === key;
+        const replacement = replaceBulletRange(first, last, primary ? edit.text : '', primary ? edit.html : '', activeTag ? [activeTag] : []);
+        if (!includesDraft) stageDraft();
+        else if (value.content.trim() || value.tags.length) {
+          const stagedId = stageDraft();
+          for (let index = 0; index < selected.length; index++) {
+            if (ranges[index].id === 'draft' || Number(ranges[index].id) === value.id) selected[index].id = stagedId;
+          }
+        }
+        const removeAll = !replacement.content.trim() && !replacement.tags.length;
+        const id = first.id ?? documentStore.allocate();
+        restoringFocus.current = true;
+        documentStore.enqueue([
+          ...(removeAll ? [] : [{ id, kind: first.kind, create: first.id === null, content: replacement.content, tags: replacement.tags, allow_empty: true,
+            date: day, client_id: first.id === null ? value.clientId : undefined, parent_id: first.parentId,
+            after_id: first.id === null ? value.afterId : undefined, before_id: first.id === null ? value.beforeId : undefined }]),
+          ...selected.slice(removeAll ? 0 : 1).flatMap(row => row.id === null ? [] : [{ id: row.id, kind: row.kind, delete: true }]),
+        ], edit.historyKey);
+        if (includesDraft) persist(blank(records.current, false));
+        if (primary) edit.focus = () => {
+          const row = records.current.find(row => row.id === documentStore.resolve(id));
+          if (row) activate(row, { anchor: replacement.offset, head: replacement.offset });
+          else {
+            flushSync(() => persist(blank(records.current, true, first.parentId)));
+            pendingSelection.current = { anchor: 0, head: 0 }; focus();
+          }
+        };
+        else restoringFocus.current = false;
+        void documentStore.flush().catch(() => {});
+      } catch (error) { restoringFocus.current = false; entryError(error, surface.current?.querySelector(`[data-item-id="${ranges[0].id}"]`)); }
     };
-    document.addEventListener('keydown', deleteSelection, true);
-    return () => document.removeEventListener('keydown', deleteSelection, true);
+    const ownedSelection = (event: Event) => {
+      if (selectionActive.current || event.defaultPrevented) return [];
+      const ranges = selectedEntryRanges();
+      return ranges.length >= 2 && ranges[0].key === key ? ranges : [];
+    };
+    const keydown = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      const deleting = event.key === 'Backspace' || event.key === 'Delete';
+      const typing = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+      if (!deleting && !typing) return;
+      const ranges = ownedSelection(event);
+      if (!ranges.length) return;
+      event.preventDefault(); event.stopPropagation();
+      replaceEntrySelection(ranges, typing ? event.key : '');
+    };
+    const beforeinput = (event: Event) => {
+      const input = event as InputEvent;
+      if (input.isComposing || !['deleteContentBackward', 'deleteContentForward', 'insertText'].includes(input.inputType)) return;
+      const ranges = ownedSelection(event);
+      if (!ranges.length) return;
+      event.preventDefault(); event.stopPropagation();
+      replaceEntrySelection(ranges, input.inputType === 'insertText' ? input.data ?? '' : '');
+    };
+    const clipboard = (event: ClipboardEvent) => {
+      const ranges = ownedSelection(event);
+      if (!ranges.length || !event.clipboardData) return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.type === 'paste') replaceEntrySelection(ranges, event.clipboardData.getData('text/plain'), event.clipboardData.getData('text/html'));
+      else {
+        event.clipboardData.setData('text/plain', ranges.map(range => range.text).join('\n'));
+        event.clipboardData.setData('text/html', ranges.map(range => range.html).join(''));
+        if (event.type === 'cut') replaceEntrySelection(ranges);
+      }
+    };
+    window.addEventListener('still-replace-entry-selection', apply);
+    document.addEventListener('keydown', keydown, true);
+    document.addEventListener('beforeinput', beforeinput, true);
+    for (const type of ['copy', 'cut', 'paste']) document.addEventListener(type, clipboard as EventListener, true);
+    return () => {
+      window.removeEventListener('still-replace-entry-selection', apply);
+      document.removeEventListener('keydown', keydown, true);
+      document.removeEventListener('beforeinput', beforeinput, true);
+      for (const type of ['copy', 'cut', 'paste']) document.removeEventListener(type, clipboard as EventListener, true);
+    };
   });
   const replaceDocument = (text = '', html = '') => void run(async () => {
     await save();
@@ -766,8 +874,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const unsavedChild = draft.active && draft.id === null && draft.parentId === id && !!(draft.content.trim() || draft.tags.length);
     const childCount = (row?.child_count ?? items.filter(item => item.parent_id === id).length) + Number(unsavedChild);
     let doneCount = row?.completed_child_count ?? items.filter(item => item.parent_id === id && item.completed_at).length;
-    if (pendingCompletion) for (const child of items) {
-      if (child.parent_id === id && pendingCompletion.ids.has(child.id)) doneCount += Number(pendingCompletion.done) - Number(!!child.completed_at);
+    if (pendingCompletion.size) for (const child of items) {
+      if (child.parent_id === id && pendingCompletion.has(child.id)) doneCount += Number(pendingCompletion.get(child.id)) - Number(!!child.completed_at);
     }
     const rowKind = row ? entryKind(row) : draft.kind;
     if (unsavedChild && row?.completed_at && draft.kind === 'tasks') doneCount++;
@@ -810,7 +918,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const row = items.find(item => item.id === id);
     const rowKind = row ? entryKind(row) : draft.kind;
     if (rowKind === 'tasks' && id !== null) {
-      const done = pendingCompletion?.ids.has(id) ? pendingCompletion.done : !!row?.completed_at;
+      const done = pendingCompletion.get(id) ?? !!row?.completed_at;
       return toggle ?? <Checkbox type="button" data-focus-chrome data-preview-suppressed={suppressedPreviews.has(id) || undefined} $checked={done} $suppressPreview={suppressedPreviews.has(id)} aria-pressed={done} disabled={busy} aria-label={`${done ? 'Reopen' : 'Complete'} ${markdownText(content)}`}
         onPointerLeave={event => {
           const button = event.currentTarget;
@@ -843,6 +951,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const previous = entryGesture.current;
     if (previous) clearEntryGestureTimer(previous);
     const pager = element.closest<HTMLElement>('[data-mobile-pager]');
+    pager?.scrollTo({ left: pager.scrollLeft, behavior: 'instant' });
     const gesture: EntryGesture = {
       pointerId: event.pointerId, key, element, x: event.clientX, y: event.clientY, pager,
       pagerLeft: pager?.scrollLeft ?? 0, armed: entrySelectionRef.current?.key === key,
@@ -927,7 +1036,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     clearEntryGestureTimer(gesture);
     if (gesture.pager) {
       delete gesture.pager.dataset.dragging;
-      if (gesture.paging) gesture.pager.scrollTo({ left: gesture.pagerLeft, behavior: 'smooth' });
+      if (gesture.paging) gesture.pager.scrollTo({ left: gesture.pagerLeft, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     }
     if (gesture.armed) updateEntrySelection({ key: gesture.key, dragX: 0 });
   };
@@ -946,9 +1055,20 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       [...new Set([...tags, ...(hiddenTag && (content.trim() || tags.length) ? [hiddenTag] : [])])];
     restoringFocus.current = true;
     if (split && !split.before.content && !split.before.tags.length && (split.after.content || split.after.tags.length)) {
-      // A split at the start must not delete the parent and promote all its
-      // children. Keep that entry's identity with its trailing content.
-      flushSync(() => persist({ ...snapshot, mode: 'new', content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags) }));
+      // Keep the trailing entry (and its children) intact. An explicit empty
+      // sibling represents the line inserted before it and survives a reload.
+      stageDraft();
+      const editKey = crypto.randomUUID();
+      persist({ ...current.current, content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags) });
+      const id = stageDraft(editKey)!;
+      const emptyId = documentStore.allocate();
+      const parent = records.current.find(row => row.id === snapshot.parentId);
+      const emptyKind = parent ? entryKind(parent) : defaultKind;
+      flushSync(() => {
+        documentStore.enqueue([{ id: emptyId, kind: emptyKind, create: true, content: '', tags: hiddenTag ? [hiddenTag] : [],
+          allow_empty: true, date: day, client_id: crypto.randomUUID(), parent_id: snapshot.parentId, before_id: id }], editKey);
+        persist({ ...current.current, clientId: crypto.randomUUID(), mode: 'edit', afterId: emptyId, beforeId: null, placement: 'after' });
+      });
       pendingSelection.current = { anchor: 0, head: 0 };
       focus();
       void save().catch(() => {});
@@ -976,7 +1096,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
     $emptyTask={draft.kind === 'tasks' && draft.id === null && !draft.content.trim() && !draft.tags.length}
     $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
-    $leaving={completing === draft.id && completing !== null}>
+    $leaving={draft.id !== null && completing.has(draft.id)}>
     <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed subtask' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
       onBoundary={boundary} onVerticalBoundary={navigateBoundary} onHorizontalBoundary={navigateBoundary} onSelectDocument={selectDocument}
       onEnter={advance} onSelectEntry={selected => updateEntrySelection(selected ? { key: gestureKey, dragX: 0 } : null)} onDeleteEntry={deleteCurrentEntry}
@@ -990,6 +1110,9 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         // Enter and nesting can remount the editor during a focus transfer.
         // That structural blur must not dismiss the draft being moved.
         if (restoringFocus.current || current.current.clientId !== blurredClientId) return;
+        // Native dialogs restore focus to this editor when closed. Keep an
+        // empty draft mounted while a dialog temporarily owns that focus.
+        if (document.querySelector('dialog[open]')) { void save().catch(() => {}); return; }
         if (event?.relatedTarget instanceof Node && surface.current?.contains(event.relatedTarget)) { void save().catch(() => {}); return; }
         if (!lock.current && dismissEmptyDraft()) return;
         void save().then(() => {
@@ -1049,15 +1172,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (item === null) return renderDraft(depth);
       const gestureKey = `item:${item.id}`;
       const gestureSelected = entrySelection?.key === gestureKey;
-      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={entryKind(item)} data-item-id={item.id} data-depth={depth} $leaving={completing === item.id}
+      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={entryKind(item)} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)}
       data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
       onPointerLeave={() => clearPreview(item.id)}
       onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
       $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
       $arriving={entryKind(item) === 'tasks' && (completed.has(item.id) || reopened.has(item.id))}>
-      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && entryKind(item) === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, activeTag ? [activeTag] : []) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ')}
+      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && entryKind(item) === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, activeTag ? [activeTag] : []) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ') || (entryKind(item) === 'tasks' ? 'Empty to-do' : 'Empty note')}
         onClick={event => {
           if (suppressClick.current) { suppressClick.current = false; return; }
+          if (selectedEntryRanges().length > 1) return;
           if ((archived || !item.completed_at) && !(event.target as HTMLElement).closest('a')) void select(item, event.currentTarget);
         }}
         onContextMenu={event => {

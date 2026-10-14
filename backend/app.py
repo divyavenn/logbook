@@ -110,7 +110,7 @@ def authentication_logout():
     return response
 
 
-class Content(BaseModel):
+class EntryText(BaseModel):
     content: str = Field(max_length=10000, description="Markdown text only. Tags are separate metadata, not hashtags embedded in content.")
     tags: list[str] | None = Field(default=None, max_length=50, description="Optional list of tag names. Omit when editing to preserve existing tags; use [] to clear them.")
     expected_revision: int | None = Field(default=None, ge=1, exclude=True)
@@ -120,6 +120,8 @@ class Content(BaseModel):
     def clean_tags(cls, value):
         return normalize_tags(value) if value is not None else None
 
+
+class Content(EntryText):
     @model_validator(mode="after")
     def nonempty(self):
         if not self.content.strip() and not self.tags:
@@ -398,6 +400,7 @@ class DocumentChange(BaseModel):
     kind: Literal['notes', 'tasks']
     id: int | None = Field(default=None, ge=1)
     delete: bool = False
+    allow_empty: bool = False
     content: str = Field(default='', max_length=10000)
     tags: list[str] | None = None
     date: CalendarDate | None = None
@@ -467,7 +470,8 @@ def edit_document(body: DocumentBatch, timezone: str = "UTC"):
                     promoted.append(item_id)
             else:
                 try:
-                    value = Content(content=change.content, tags=change.tags if change.tags is not None else (row or {}).get('tags', []))
+                    content_model = EntryText if change.allow_empty else Content
+                    value = content_model(content=change.content, tags=change.tags if change.tags is not None else (row or {}).get('tags', []))
                 except ValueError as error:
                     raise HTTPException(422, str(error))
                 encoded = json.dumps(value.tags or [])
@@ -701,13 +705,15 @@ def complete_task(task_id: int, timezone: str = "UTC", expected_revision: int | 
         db.execute("BEGIN IMMEDIATE")
         task = required(db, "tasks", task_id)
         if task["completed_at"]:
-            return {"completed": True, "task_ids": [], "completed_at": task['completed_at']}
+            return {"completed": True, "task_ids": [], "completed_at": task['completed_at'], "items": [task]}
         check_revision(task, expected_revision)
         if db.execute("SELECT 1 FROM entries WHERE kind = 'task' AND parent_id = ? AND completed_at IS NULL", (task_id,)).fetchone():
             raise HTTPException(409, 'Complete the children to finish this parent.')
         completed_ids = finish_task(db, task, now)
         archive_task_tree(db, task, zone, now)
-        return {"completed": True, "task_ids": completed_ids, "completed_at": stamp(now)}
+        root = root_task(db, required(db, 'tasks', task_id))
+        return {"completed": True, "task_ids": completed_ids, "completed_at": stamp(now),
+                "items": [bullet_dict(row) for row, _ in descendants(db, 'tasks', root['id'])]}
 
 
 class ReopenTask(BaseModel):
@@ -723,7 +729,7 @@ def reopen_task(task_id: int, body: ReopenTask):
         before = snapshot(db) if body.record_history else None
         task = required(db, 'tasks', task_id)
         if not task['completed_at']:
-            return {'reopened': []}
+            return {'reopened': [], 'operation_id': None, 'items': [task]}
         check_revision(task, body.expected_revision)
         if body.completed_at and task['completed_at'] != body.completed_at:
             raise HTTPException(409, 'This task has changed since that completion.')
@@ -745,7 +751,8 @@ def reopen_task(task_id: int, body: ReopenTask):
             parent = ancestor['parent_id']
         for item_id in reopen:
             db.execute('UPDATE entries SET completed_at = NULL, updated_at = ?, revision = revision + 1 WHERE id = ?', (stamp(utcnow()), item_id))
-        return {'reopened': reopen, 'operation_id': record(db, before, stamp(utcnow())) if before is not None else None}
+        return {'reopened': reopen, 'operation_id': record(db, before, stamp(utcnow())) if before is not None else None,
+                'items': [bullet_dict(row) for row, _ in descendants(db, 'tasks', root['id'])]}
 
 
 @app.delete("/api/tasks/{task_id}", status_code=204)

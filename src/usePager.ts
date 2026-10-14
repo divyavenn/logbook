@@ -13,6 +13,7 @@ export function usePager<View extends string>(views: readonly View[], initialVie
   }, []);
 
   const selectView = useCallback((next: View) => {
+    if (scrollTimer.current) clearTimeout(scrollTimer.current);
     commitView(next);
     const pager = pagerRef.current;
     if (!pager) return;

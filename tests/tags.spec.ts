@@ -201,13 +201,17 @@ test('hover tabs filter nested notes and tasks, hide the active tag, and preserv
   await expect.poll(() => page.evaluate((date) => JSON.parse(localStorage.getItem(`still-draft-${date}`) ?? 'null')?.tags, today)).toEqual(['focused']);
   await editor.press('Enter');
   await expect(page.getByRole('group', { name: 'Focus parent edited', exact: true })).toBeVisible();
-  let data = await (await request.get('/api/export')).json();
-  expect(data.notes.find((item: { id: number }) => item.id === parent.id).tags).toEqual(['focused']);
+  await expect.poll(async () => {
+    const data = await (await request.get('/api/export')).json();
+    return data.notes.find((item: { id: number }) => item.id === parent.id)?.tags;
+  }).toEqual(['focused']);
   const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
   await composer.fill('New filtered note'); await composer.press('Enter');
   await expect(page.getByRole('group', { name: 'New filtered note', exact: true })).toBeVisible();
-  data = await (await request.get('/api/export')).json();
-  expect(data.notes.find((item: { content: string }) => item.content === 'New filtered note').tags).toEqual(['focused']);
+  await expect.poll(async () => {
+    const data = await (await request.get('/api/export')).json();
+    return data.notes.find((item: { content: string }) => item.content === 'New filtered note')?.tags;
+  }).toEqual(['focused']);
   await rail.hover(); await rail.getByRole('button', { name: 'logbook', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Unmatched ancestor', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'New filtered note', exact: true }).locator('[data-tag="focused"]')).toBeVisible();
@@ -217,16 +221,16 @@ test('completion animates out and in while preserving tag metadata', async ({ pa
   const task = await (await request.post('/api/tasks', { data: { content: 'Animated task', tags: ['animation'] } })).json();
   await page.goto('/');
   await page.evaluate(() => {
-    (window as unknown as { bulletAnimations: string[] }).bulletAnimations = [];
-    document.addEventListener('animationstart', event => {
-      if ((event.target as Element).tagName === 'LI') (window as unknown as { bulletAnimations: string[] }).bulletAnimations.push((event as AnimationEvent).animationName);
+    (window as unknown as { bulletTransitions: string[] }).bulletTransitions = [];
+    document.addEventListener('transitionstart', event => {
+      if ((event.target as Element).tagName === 'LI') (window as unknown as { bulletTransitions: string[] }).bulletTransitions.push((event as TransitionEvent).propertyName);
     });
   });
   await page.getByRole('button', { name: 'Complete Animated task', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Complete Animated task', exact: true })).toHaveCount(0);
   const completed = page.getByRole('group', { name: 'Animated task', exact: true });
   await expect(completed.locator('[data-tag="animation"]')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => (window as unknown as { bulletAnimations: string[] }).bulletAnimations.length)).toBeGreaterThanOrEqual(1);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { bulletTransitions: string[] }).bulletTransitions)).toEqual(expect.arrayContaining(['opacity', 'transform']));
   const data = await (await request.get('/api/export')).json();
   expect(data.tasks.find((item: { id: number }) => item.id === task.id).tags).toEqual(['animation']);
 });

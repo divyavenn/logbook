@@ -7,6 +7,7 @@ export type OutlineChange = {
   content?: string; tags?: string[]; date?: string; client_id?: string;
   parent_id?: number | null; after_id?: number | null; before_id?: number | null;
   target_kind?: EntryKind;
+  allow_empty?: boolean;
 };
 type Edit = { changes: OutlineChange[]; key: string; requestId: string };
 const ordered = (rows: OutlineItem[]) => [...rows].sort((a, b) => a.position - b.position || a.id - b.id);

@@ -2,27 +2,31 @@ import type { Node as DocumentNode } from '@tiptap/pm/model';
 
 export type TextOffsets = { anchor: number; head: number };
 
+export function domText(root: Node): string {
+  let text = '', seenBlock = false;
+  const visit = (part: Node) => {
+    if (part.nodeType === Node.TEXT_NODE) { text += part.textContent ?? ''; return; }
+    if (part instanceof Element) {
+      if (part.classList.contains('ProseMirror-trailingBreak')) return;
+      if (part.tagName === 'BR') { text += '\n'; return; }
+      if (/^(P|H[1-6]|PRE)$/.test(part.tagName)) {
+        if (seenBlock) text += '\n';
+        seenBlock = true;
+      }
+    }
+    part.childNodes.forEach(visit);
+  };
+  visit(root);
+  return text;
+}
+
 // The read view and editor share these offsets: one character per hard break
 // or block boundary, and the full visible label for an atomic tag.
 export function domTextOffset(root: HTMLElement, node: Node, offset: number): number {
   const range = document.createRange();
   range.selectNodeContents(root);
   range.setEnd(node, offset);
-  let length = 0, seenBlock = false;
-  const visit = (part: Node) => {
-    if (part.nodeType === Node.TEXT_NODE) { length += part.textContent?.length ?? 0; return; }
-    if (part instanceof Element) {
-      if (part.classList.contains('ProseMirror-trailingBreak')) return;
-      if (part.tagName === 'BR') { length++; return; }
-      if (/^(P|H[1-6]|PRE)$/.test(part.tagName)) {
-        if (seenBlock) length++;
-        seenBlock = true;
-      }
-    }
-    part.childNodes.forEach(visit);
-  };
-  visit(range.cloneContents());
-  return length;
+  return domText(range.cloneContents()).length;
 }
 
 export function textPositions(doc: DocumentNode) {

@@ -110,12 +110,72 @@ test('Enter at the beginning of a parent preserves its children and sibling posi
   await page.getByRole('group', { name: 'Keep the parent', exact: true }).click();
   await page.keyboard.press('Meta+ArrowUp');
   await page.keyboard.press('Enter');
+  await expect(page.getByRole('group', { name: 'Empty note', exact: true })).toBeVisible();
   await page.keyboard.type('Edited ');
   await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
   await expect.poll(async () => {
     const rows = (await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string; parent_id: number | null }>;
     return { content: rows.find(row => row.id === parent.id)?.content, parent: rows.find(row => row.id === child.id)?.parent_id };
   }).toEqual({ content: 'Edited Keep the parent', parent: parent.id });
+  await page.reload();
+  const empty = page.getByRole('group', { name: 'Empty note', exact: true });
+  // Reload may restore this row's active editor from its durable draft.
+  const edited = page.locator(`[data-kind="notes"][data-item-id="${parent.id}"]`);
+  await expect(empty).toBeVisible();
+  await expect(edited).toContainText('Edited Keep the parent');
+  expect((await empty.boundingBox())!.y).toBeLessThan((await edited.boundingBox())!.y);
+});
+
+test('partial selection joins unselected text and preserves children of deleted entries', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const first = await (await request.post('/api/notes', { data: { date: today, content: 'Keep delete' } })).json();
+  const middle = await (await request.post('/api/notes', { data: { date: today, content: 'Remove middle' } })).json();
+  const child = await (await request.post('/api/notes', { data: { date: today, content: 'Keep nested child', parent_id: middle.id } })).json();
+  const last = await (await request.post('/api/notes', { data: { date: today, content: 'gone tail' } })).json();
+  await page.goto('/');
+  await page.getByRole('group', { name: 'gone tail', exact: true }).focus();
+  await page.evaluate(({ first, last }) => {
+    const text = (id: number) => document.querySelector(`[data-item-id="${id}"] > div > [role="group"] p`)!.firstChild!;
+    const selection = getSelection()!;
+    selection.setBaseAndExtent(text(last), 5, text(first), 5);
+  }, { first: first.id, last: last.id });
+  await page.keyboard.press('Backspace');
+  await expect(page.getByRole('textbox', { name: 'Edit note', exact: true })).toHaveText('Keep tail');
+  await expect.poll(async () => {
+    const rows = (await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string; parent_id: number | null }>;
+    return rows.map(row => [row.id, row.content, row.parent_id]);
+  }).toEqual([[first.id, 'Keep tail', null], [child.id, 'Keep nested child', null]]);
+  await page.keyboard.press('Meta+z');
+  await expect(page.getByRole('group', { name: 'Keep delete', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Remove middle', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'gone tail', exact: true })).toBeVisible();
+});
+
+test('a completion can reverse while its first request and pie animation are in flight', async ({ page, request }) => {
+  const parent = await (await request.post('/api/tasks', { data: { content: 'Interruptible parent' } })).json();
+  const child = await (await request.post('/api/tasks', { data: { content: 'Toggle again', parent_id: parent.id } })).json();
+  await request.post('/api/tasks', { data: { content: 'Later child', parent_id: parent.id } });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/tasks/${child.id}/complete*`, async route => { await gate; await route.continue(); });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Expand Interruptible parent', exact: true }).click();
+  const progress = page.getByRole('button', { name: 'Collapse Interruptible parent', exact: true });
+  try {
+    const completing = page.waitForRequest(request => request.url().includes(`/tasks/${child.id}/complete`));
+    await page.getByRole('button', { name: 'Complete Toggle again', exact: true }).click();
+    await completing;
+    await expect(progress).toHaveAttribute('aria-description', '1 of 2 children completed');
+    const reverse = page.getByRole('button', { name: 'Reopen Toggle again', exact: true });
+    await expect(reverse).toBeEnabled();
+    await reverse.click();
+    await expect(progress).toHaveAttribute('aria-description', '0 of 2 children completed');
+    const reopened = page.waitForResponse(response => response.url().includes(`/tasks/${child.id}/reopen`));
+    release();
+    expect((await reopened).ok()).toBe(true);
+    await expect(page.getByRole('button', { name: 'Complete Toggle again', exact: true })).toBeEnabled();
+    await expect(progress).toHaveAttribute('aria-description', '0 of 2 children completed');
+  } finally { release(); }
 });
 
 test('a selected entry can be dragged before a sibling without losing focus or text', async ({ page, request }) => {
@@ -155,4 +215,105 @@ test('a failed save shakes its entry, logs the error, and recovers the queued te
   await page.unroute('**/api/document/edit*');
   await page.reload();
   await expect.poll(async () => (await (await request.get('/api/export')).json()).notes.map((row: { content: string }) => row.content)).toEqual(['Keep my unsaved entry']);
+});
+
+for (const action of ['typing', 'cut', 'paste'] as const) {
+  test(`partial cross-entry ${action} preserves the unselected ends and formatting`, async ({ page, request }) => {
+    const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+    const first = await (await request.post('/api/notes', { data: { date: today, content: '**Keep** remove' } })).json();
+    const last = await (await request.post('/api/notes', { data: { date: today, content: 'gone *tail*' } })).json();
+    await page.goto('/');
+    await page.getByRole('group', { name: 'Keep remove', exact: true }).click();
+    const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+    await expect(editor).toBeFocused();
+    await editor.press('Meta+ArrowDown');
+    await page.evaluate(({ first, last }) => {
+      const start = document.querySelector(`[data-item-id="${first}"] [contenteditable] p`)!.lastChild!;
+      const end = document.querySelector(`[data-item-id="${last}"] > div > [role="group"] p`)!.firstChild!;
+      getSelection()!.setBaseAndExtent(start, 1, end, 5);
+    }, { first: first.id, last: last.id });
+    await expect.poll(() => page.evaluate(() => {
+      const selection = getSelection()!;
+      return [selection.anchorNode?.textContent, selection.anchorOffset, selection.focusNode?.textContent, selection.focusOffset];
+    })).toEqual([' remove', 1, 'gone ', 5]);
+    if (action === 'typing') await page.keyboard.type('new ');
+    else {
+      const copied = await editor.evaluate((element, action) => {
+        const clipboardData = new DataTransfer();
+        if (action === 'paste') {
+          clipboardData.setData('text/plain', 'new ');
+          clipboardData.setData('text/html', '<strong>new </strong>');
+        }
+        element.dispatchEvent(new ClipboardEvent(action, { bubbles: true, cancelable: true, clipboardData }));
+        return clipboardData.getData('text/plain');
+      }, action);
+      if (action === 'cut') expect(copied).toBe('remove\ngone ');
+    }
+    await expect(editor).toHaveText(action === 'cut' ? 'Keep tail' : 'Keep new tail');
+    await expect(editor.locator('strong').first()).toHaveText(/Keep/);
+    await expect(editor.locator('em')).toHaveText('tail');
+    await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
+    await expect.poll(async () => {
+      const rows = (await (await request.get('/api/export')).json()).notes as Array<{ id: number }>;
+      return rows.map(row => row.id);
+    }).toEqual([first.id]);
+  });
+}
+
+test('parent rings show faint child divisions and reverse their rendered pie transition', async ({ page, request }) => {
+  const parent = await (await request.post('/api/tasks', { data: { content: 'Parent with three subtasks' } })).json();
+  for (const content of ['First subtask', 'Second subtask', 'Third subtask']) {
+    await request.post('/api/tasks', { data: { content, parent_id: parent.id } });
+  }
+  await request.post('/api/tasks', { data: { content: 'Task without children' } });
+  await page.goto('/');
+  const ring = page.getByRole('button', { name: 'Expand Parent with three subtasks', exact: true });
+  await expect(ring.locator('svg path')).toHaveAttribute('opacity', '.22');
+  expect((await ring.locator('svg path').getAttribute('d'))!.match(/M/g)).toHaveLength(3);
+  expect(await ring.evaluate(element => {
+    const style = getComputedStyle(element, '::before');
+    return { radius: style.borderRadius, transform: style.transform, angle: style.getPropertyValue('--task-progress') };
+  })).toEqual({ radius: '50%', transform: 'none', angle: '0deg' });
+  await ring.click();
+  const progress = page.getByRole('button', { name: 'Collapse Parent with three subtasks', exact: true });
+  const angle = () => progress.evaluate(element => parseFloat(getComputedStyle(element, '::before').getPropertyValue('--task-progress')));
+  const checkbox = page.getByRole('button', { name: 'Complete First subtask', exact: true });
+  await checkbox.focus();
+  await page.keyboard.press('Space');
+  // Inspect the actual CSS transition at 10% playback speed.
+  await progress.evaluate(element => element.getAnimations({ subtree: true }).forEach(animation => animation.updatePlaybackRate(.1)));
+  await expect.poll(angle).toBeGreaterThan(1);
+  const partial = await angle();
+  expect(partial).toBeLessThan(120);
+  await page.keyboard.press('Space');
+  await expect(progress).toHaveAttribute('aria-description', '0 of 3 children completed');
+  const reversing = await angle();
+  expect(reversing).toBeLessThan(120);
+  await expect.poll(angle).toBe(0);
+  await expect(page.getByRole('button', { name: 'Complete First subtask', exact: true })).toBeFocused();
+  await page.screenshot({ path: 'test-results/parent-task-marker.png' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.keyboard.press('Space');
+  await expect.poll(angle).toBe(120);
+  await expect(progress).toHaveAttribute('aria-description', '1 of 3 children completed');
+  await page.screenshot({ path: 'test-results/parent-task-progress.png' });
+});
+
+test('search can reopen during its exit transition without losing keyboard focus', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeFocused();
+  await page.keyboard.press('Meta+f');
+  const dialog = page.getByRole('dialog', { name: 'Search journal', exact: true });
+  const search = dialog.getByRole('textbox');
+  await expect(search).toBeFocused();
+  const original = await dialog.elementHandle();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Meta+f');
+  await expect(search).toBeFocused();
+  expect(await dialog.evaluate((element, original) => element === original, original)).toBe(true);
+  await search.pressSequentially('Immediately usable');
+  await expect(search).toHaveValue('Immediately usable');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeFocused();
 });

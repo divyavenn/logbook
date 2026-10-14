@@ -59,10 +59,11 @@ test('a reopened root task animates into its saved position ahead of the compose
   const row = todos.locator(`[data-item-id="${task.id}"]`);
   const composer = todos.locator('[data-item-id="draft"]');
   await expect(row).toBeVisible();
-  await expect(row).not.toHaveCSS('animation-name', 'none');
+  await expect(row).toHaveCSS('animation-name', 'none');
+  await expect(row).toHaveCSS('transition-property', 'opacity, transform');
   expect(await row.evaluate((element, draft) =>
     !!(element.compareDocumentPosition(draft as Node) & Node.DOCUMENT_POSITION_FOLLOWING), await composer.elementHandle())).toBe(true);
-  await row.evaluate(element => Promise.all(element.getAnimations().map(animation => animation.finished)));
+  await row.evaluate(element => Promise.allSettled(element.getAnimations().map(animation => animation.finished)));
   const rowBox = (await row.boundingBox())!;
   const composerBox = (await composer.boundingBox())!;
   expect(composerBox.y - (rowBox.y + rowBox.height)).toBeLessThan(2);
