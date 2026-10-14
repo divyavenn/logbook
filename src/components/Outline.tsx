@@ -121,12 +121,18 @@ const Checkbox = styled.button<{ $checked?: boolean; $suppressPreview?: boolean 
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
-const Disclosure = styled.button<{ $open: boolean; $task: boolean; $progress: number }>`
-  width: 40px; min-width: 40px; height: var(--bullet-row-height); padding: 0; border: 0;
-  display: grid; place-items: center; background: transparent; border-radius: 4px; color: ${({ $task }) => $task ? 'var(--ink)' : 'var(--muted)'};
+const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolean; $progress: number }>`
+  position: relative; width: 40px; min-width: 40px; height: var(--bullet-row-height); padding: 0; border: 0;
+  display: grid; place-items: center; background: transparent; border-radius: 4px; color: ${({ $done }) => $done ? 'var(--muted)' : 'var(--ink)'};
   &::before { content: ''; width: 5px; height: 5px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; translate: 0 var(--bullet-marker-offset);
     transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
-  ${({ $task, $progress }) => $task && css`&::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1px solid currentColor; border-radius: 50%; transform: none; background: conic-gradient(currentColor var(--task-progress), transparent 0); transition: --task-progress 240ms ease-out; }`}
+  &::after { content: ''; position: absolute; width: 4px; height: 4px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor;
+    translate: 0 var(--bullet-marker-offset); opacity: ${({ $task }) => $task ? 1 : 0};
+    transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
+  ${({ $task, $progress }) => $task && css`
+    &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1px solid currentColor; border-radius: 50%; transform: none;
+      background: conic-gradient(currentColor var(--task-progress), transparent 0); transition: --task-progress 240ms ease-out; }
+  `}
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px;
   }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
@@ -782,9 +788,9 @@ export function Outline({ kind, items, day, composer = false, archived = false, 
     if (id === null || !childCount && !(draft.active && draft.parentId === id && (draft.content.trim() || draft.tags.length))) return null;
     const open = isExpanded(id);
     const pinned = expanded.has(id) || draftInside(id) || (!!row?.completed_at && rowKind === 'tasks' && !collapsed.has(id));
-    const progressTask = rowKind === 'tasks' && !row?.completed_at;
-    return <Disclosure type="button" data-focus-chrome $open={open} $task={progressTask} $progress={childCount ? doneCount / childCount : 0} disabled={busy} aria-expanded={open}
-      aria-description={progressTask ? `${doneCount} of ${childCount} children completed` : undefined}
+    const taskParent = rowKind === 'tasks';
+    return <Disclosure type="button" data-focus-chrome $open={open} $task={taskParent} $done={!!row?.completed_at} $progress={childCount ? doneCount / childCount : 0} disabled={busy} aria-expanded={open}
+      aria-description={taskParent ? `${doneCount} of ${childCount} children completed` : undefined}
       aria-label={`${pinned ? 'Collapse' : 'Expand'} ${markdownText(content) || 'bullet'}`}
       onPointerEnter={event => {
         if (!pinned && event.pointerType !== 'touch') setPreviewed(previous => previous.has(id) ? previous : new Set([...previous, id]));
