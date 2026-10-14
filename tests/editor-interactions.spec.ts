@@ -277,8 +277,9 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   });
   await expect(ring.locator('svg')).toHaveCSS('width', `${bubble.width}px`);
   await expect(ring.locator('svg')).toHaveCSS('height', `${bubble.height}px`);
+  await expect(ring.locator('svg')).toHaveCSS('overflow', 'visible');
   await expect(ring.locator('svg path')).toHaveCSS('stroke-width', bubble.stroke);
-  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M7 .5A6.5 6.5 0 0 0 7 13.5C7.45 13.5 7.75 13.25 8.1 12.9L12.4 8.6Q14 7 12.4 5.4L8.1 1.1C7.75 .75 7.45 .5 7 .5Z');
+  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M10.821 1.741A6.5 6.5 0 1 0 10.821 12.259C12.05 11.366 13.7 9.519 14.45 8.55Q15.65 7 14.45 5.45C13.7 4.481 12.05 2.634 10.821 1.741Z');
   expect(await ring.evaluate(element => {
     const style = getComputedStyle(element, '::before');
     return { radius: style.borderRadius, opacity: style.opacity, angle: style.getPropertyValue('--task-progress') };
