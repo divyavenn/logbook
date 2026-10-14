@@ -146,7 +146,8 @@ const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolea
       opacity: ${$progress > 0 ? 1 : 0}; scale: ${$progress > 0 ? 1 : .25}; filter: blur(${$progress > 0 ? 0 : 4}px);
       transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   `}
-  > svg { position: absolute; width: 12px; height: 12px; pointer-events: none; translate: 0 var(--bullet-marker-offset);
+  /* Match the task bubbles' 12px interior and rendered 1px borders. */
+  > svg { position: absolute; width: 14px; height: 14px; pointer-events: none; translate: 0 var(--bullet-marker-offset);
     transform: rotate(${({ $open }) => $open ? 90 : 0}deg);
     opacity: ${({ $progress }) => $progress > 0 ? 0 : 1}; scale: ${({ $progress }) => $progress > 0 ? .25 : 1}; filter: blur(${({ $progress }) => $progress > 0 ? 4 : 0}px);
     transition: transform 140ms ease-out, opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
@@ -909,8 +910,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
           });
         }
       }} >
-      {taskParent && <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-        <path d="M6 .625A5.375 5.375 0 0 0 6 11.375L11.375 6Z" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
+      {taskParent && <svg viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+        <path d="M7 .5A6.5 6.5 0 0 0 7 13.5L13.1 7.4Q13.5 7 13.1 6.6Z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
       </svg>}
     </Disclosure>;
   };

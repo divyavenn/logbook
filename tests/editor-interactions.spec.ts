@@ -270,8 +270,15 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   const ring = page.getByRole('button', { name: 'Expand Parent with three subtasks', exact: true });
   await expect(ring.locator('svg')).toHaveCSS('opacity', '1');
   await expect(ring.locator('svg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
-  await expect(ring.locator('svg path')).toHaveCSS('stroke-width', '1.25px');
-  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M6 .625A5.375 5.375 0 0 0 6 11.375L11.375 6Z');
+  const bubble = await page.getByRole('button', { name: 'Complete Task without children', exact: true }).evaluate(element => {
+    const style = getComputedStyle(element, '::before');
+    const border = parseFloat(style.borderTopWidth);
+    return { width: parseFloat(style.width) + border * 2, height: parseFloat(style.height) + border * 2, stroke: style.borderTopWidth };
+  });
+  await expect(ring.locator('svg')).toHaveCSS('width', `${bubble.width}px`);
+  await expect(ring.locator('svg')).toHaveCSS('height', `${bubble.height}px`);
+  await expect(ring.locator('svg path')).toHaveCSS('stroke-width', bubble.stroke);
+  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M7 .5A6.5 6.5 0 0 0 7 13.5L13.1 7.4Q13.5 7 13.1 6.6Z');
   expect(await ring.evaluate(element => {
     const style = getComputedStyle(element, '::before');
     return { radius: style.borderRadius, opacity: style.opacity, angle: style.getPropertyValue('--task-progress') };
