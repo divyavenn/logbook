@@ -12,7 +12,7 @@ import { normalizeTag } from '../tagSyntax';
 import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
-import { textPositions, type TextOffsets } from '../textSelection';
+import { domText, textPositions, type TextOffsets } from '../textSelection';
 import { Code2, Link2 } from 'lucide-react';
 
 const Surface = styled.div`
@@ -93,6 +93,10 @@ type LinkMode = 'shortcut' | 'insert' | 'context';
 export type VerticalDirection = 'up' | 'down';
 export type { TextOffsets } from '../textSelection';
 const entryEdge = (doc: DocumentNode, start: boolean) => start ? TextSelection.atStart(doc).from : TextSelection.atEnd(doc).to;
+const entireEntrySelected = (editor: Editor) => {
+  const { doc, selection } = editor.state;
+  return !selection.empty && selection.from <= entryEdge(doc, true) && selection.to >= entryEdge(doc, false);
+};
 export type RichTextHandle = {
   focus: (options?: FocusOptions, selection?: TextOffsets) => void;
   focusAt: (x: number, direction: VerticalDirection, options?: FocusOptions) => void;
@@ -195,10 +199,17 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
           window.open(href, '_blank', 'noopener,noreferrer');
           return true;
         },
+        copy(view, event) {
+          if (!entrySelected.current || !event.clipboardData) return false;
+          event.preventDefault();
+          event.clipboardData.setData('text/plain', domText(view.dom));
+          event.clipboardData.setData('text/html', view.dom.innerHTML);
+          return true;
+        },
         cut(view, event) {
           if (!entrySelected.current || !event.clipboardData) return false;
           event.preventDefault();
-          event.clipboardData.setData('text/plain', view.dom.textContent ?? '');
+          event.clipboardData.setData('text/plain', domText(view.dom));
           event.clipboardData.setData('text/html', view.dom.innerHTML);
           callbacks.current.onDeleteEntry?.();
           return true;
@@ -394,7 +405,9 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       },
     },
     onUpdate({ editor }) {
-      if (entrySelected.current) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
+      // Formatting changes the document while leaving its full selection in
+      // place. Keep the row highlight until typing or navigation collapses it.
+      if (entrySelected.current && !entireEntrySelected(editor)) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
       const bullet = serializeBullet(editor.getJSON());
       lastSnapshot.current = JSON.stringify([bullet.content, bullet.tags]);
       callbacks.current.onChange(bullet.content, bullet.tags);
@@ -402,7 +415,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       commitTypedTags(editor);
     },
     onSelectionUpdate({ editor }) {
-      if (entrySelected.current && (editor.state.selection.from > entryEdge(editor.state.doc, true) || editor.state.selection.to < entryEdge(editor.state.doc, false))) {
+      if (entrySelected.current && !entireEntrySelected(editor)) {
         entrySelected.current = false; callbacks.current.onSelectEntry?.(false);
       }
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;

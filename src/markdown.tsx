@@ -219,7 +219,7 @@ export function serializeBullet(document: JSONContent): { content: string; tags:
 }
 
 const inlineTagStyles = css`
-  display: inline-block; position: relative; isolation: isolate; max-width: 100%; vertical-align: baseline;
+  display: inline-block; position: relative; isolation: isolate; max-width: 100%; vertical-align: baseline; translate: 0 1px;
   padding: 0 8px 0 7px; margin: 0; color: var(--tag-ink);
   font: inherit; font-size: calc(1em - .5px); white-space: normal; overflow-wrap: anywhere;
   &::before {

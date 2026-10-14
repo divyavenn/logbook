@@ -260,7 +260,7 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
   });
 }
 
-test('parent rings show faint child divisions and reverse their rendered pie transition', async ({ page, request }) => {
+test('parent rings show thin opaque child divisions and reverse their rendered pie transition', async ({ page, request }) => {
   const parent = await (await request.post('/api/tasks', { data: { content: 'Parent with three subtasks' } })).json();
   for (const content of ['First subtask', 'Second subtask', 'Third subtask']) {
     await request.post('/api/tasks', { data: { content, parent_id: parent.id } });
@@ -268,7 +268,8 @@ test('parent rings show faint child divisions and reverse their rendered pie tra
   await request.post('/api/tasks', { data: { content: 'Task without children' } });
   await page.goto('/');
   const ring = page.getByRole('button', { name: 'Expand Parent with three subtasks', exact: true });
-  await expect(ring.locator('svg path')).toHaveAttribute('opacity', '.22');
+  await expect(ring.locator('svg path')).toHaveCSS('opacity', '1');
+  await expect(ring.locator('svg path')).toHaveCSS('stroke-width', '0.5px');
   expect((await ring.locator('svg path').getAttribute('d'))!.match(/M/g)).toHaveLength(3);
   expect(await ring.evaluate(element => {
     const style = getComputedStyle(element, '::before');
@@ -290,13 +291,80 @@ test('parent rings show faint child divisions and reverse their rendered pie tra
   const reversing = await angle();
   expect(reversing).toBeLessThan(120);
   await expect.poll(angle).toBe(0);
+  await expect(progress.locator('svg path')).toHaveCSS('opacity', '1');
   await expect(page.getByRole('button', { name: 'Complete First subtask', exact: true })).toBeFocused();
   await page.screenshot({ path: 'test-results/parent-task-marker.png' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.keyboard.press('Space');
   await expect.poll(angle).toBe(120);
   await expect(progress).toHaveAttribute('aria-description', '1 of 3 children completed');
+  await expect(progress.locator('svg path')).toHaveCSS('opacity', '0.22');
   await page.screenshot({ path: 'test-results/parent-task-progress.png' });
+});
+
+for (const kind of ['notes', 'tasks'] as const) {
+  test(`whole ${kind} entry highlight supports formatting and clipboard edits without text highlighting`, async ({ page, request }) => {
+    const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+    const item = await (await request.post(`/api/${kind}`, { data: { date: today, content: 'First line\\\nSecond line' } })).json();
+    await page.goto('/');
+    const row = page.locator(`[data-kind="${kind}"][data-item-id="${item.id}"]`);
+    await row.getByRole('group').click();
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const selectEntry = async () => {
+      await editor.press('Meta+ArrowDown');
+      const box = (await editor.boundingBox())!;
+      await editor.dblclick({ position: { x: box.width - 5, y: box.height - 8 } });
+      await expect(row).toHaveAttribute('data-gesture-selected', 'true');
+    };
+    const copyOrCut = (type: 'copy' | 'cut') => editor.evaluate((element, type) => {
+      const clipboardData = new DataTransfer();
+      element.dispatchEvent(new ClipboardEvent(type, { bubbles: true, cancelable: true, clipboardData }));
+      return { text: clipboardData.getData('text/plain'), html: clipboardData.getData('text/html') };
+    }, type);
+    await selectEntry();
+    await expect.poll(() => editor.locator('p').evaluate(element => getComputedStyle(element, '::selection').backgroundColor)).toBe('rgba(0, 0, 0, 0)');
+    await editor.press('Meta+b');
+    await expect(row).toHaveAttribute('data-gesture-selected', 'true');
+    expect((await editor.locator('strong').allTextContents()).join('')).toBe('First lineSecond line');
+    await editor.press('Meta+i');
+    await expect(row).toHaveAttribute('data-gesture-selected', 'true');
+    expect((await editor.locator('em').allTextContents()).join('')).toBe('First lineSecond line');
+    const copied = await copyOrCut('copy');
+    expect(copied.text).toBe('First line\nSecond line');
+    expect(copied.html).toContain('<strong>');
+    expect(copied.html).toContain('<em>');
+    await page.screenshot({ path: `test-results/selected-${kind}-entry.png` });
+    await editor.evaluate(element => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', 'Pasted replacement');
+      clipboardData.setData('text/html', '<u>Pasted replacement</u>');
+      element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }));
+    });
+    await expect(editor).toHaveText('Pasted replacement');
+    await expect(editor.locator('u')).toHaveText('Pasted replacement');
+    await expect(row).not.toHaveAttribute('data-gesture-selected', 'true');
+    await selectEntry();
+    await page.keyboard.type('Typed replacement');
+    await expect(editor).toHaveText('Typed replacement');
+    await expect(row).not.toHaveAttribute('data-gesture-selected', 'true');
+    await selectEntry();
+    expect((await copyOrCut('cut')).text).toBe('Typed replacement');
+    await expect(row).toHaveCount(0);
+    await expect.poll(async () => (await (await request.get('/api/export')).json())[kind].some((row: { id: number }) => row.id === item.id)).toBe(false);
+  });
+}
+
+test('inline tag pills sit slightly lower in both saved text and the editor', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Text with #focus tag', tags: ['focus'] } });
+  await page.goto('/');
+  const saved = page.getByRole('group', { name: 'Text with #focus tag', exact: true });
+  await expect(saved.locator('[data-tag="focus"]')).toHaveCSS('translate', '0px 1px');
+  await saved.click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await expect(editor.locator('[data-tag="focus"]')).toHaveCSS('translate', '0px 1px');
+  await expect(page.getByTestId('tag-backdrop')).toHaveCSS('opacity', '0');
+  await editor.screenshot({ path: 'test-results/inline-tag-alignment.png' });
 });
 
 test('search can reopen during its exit transition without losing keyboard focus', async ({ page }) => {

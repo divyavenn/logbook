@@ -53,6 +53,7 @@ const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelect
   ${({ $gestureSelected }) => $gestureSelected && css`
     user-select: none; -webkit-user-select: none;
     > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
+    > ${Row} .tiptap::selection, > ${Row} .tiptap *::selection { background: transparent; color: inherit; }
   `}
   @media(pointer: coarse) { touch-action: pan-y; }
 `;
@@ -144,6 +145,7 @@ const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolea
       background: conic-gradient(currentColor var(--task-progress), transparent 0); transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   `}
   > svg { position: absolute; width: 12px; height: 12px; pointer-events: none; translate: 0 var(--bullet-marker-offset); }
+  > svg > path { transition: opacity ${TASK_PROGRESS_MS}ms ease-out, stroke-width ${TASK_PROGRESS_MS}ms ease-out; }
   &:disabled { opacity: 1; }
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px;
   }
@@ -907,7 +909,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         <path d={Array.from({ length: Math.max(1, childCount) }, (_, index) => {
           const angle = index * 2 * Math.PI / Math.max(1, childCount);
           return `M6 6L${6 + Math.sin(angle) * 6} ${6 - Math.cos(angle) * 6}`;
-        }).join(' ')} fill="none" stroke="currentColor" strokeWidth=".75" opacity=".22" />
+        }).join(' ')} fill="none" stroke="currentColor" strokeWidth={doneCount ? .75 : .5} opacity={doneCount ? .22 : 1} />
       </svg>}
     </Disclosure>;
   };
