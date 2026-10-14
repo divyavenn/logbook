@@ -12,10 +12,12 @@ import { compactViewport } from '../layout';
 import { haptic } from '../haptics';
 import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
+import { domTextOffset } from '../textSelection';
 
 const MAX_LEVELS = 8;
 const ENTRY_HOLD_MS = 360;
 const ENTRY_MOVE_THRESHOLD = 48;
+const TASK_PROGRESS_MS = 240;
 const OutlineSurface = styled.div`
   position: relative; outline: none;
   --bullet-size: 15px;
@@ -109,6 +111,7 @@ const Checkbox = styled.button<{ $checked?: boolean; $suppressPreview?: boolean 
   position: relative; display: flex; align-items: center; justify-content: center; width: 40px; min-width: 40px; height: var(--bullet-row-height);
   border: 0; padding: 0; background: transparent; border-radius: 50%; color: var(--ink);
   transition: transform 120ms ease-out; &:active { transform: scale(0.96); }
+  &:disabled { opacity: 1; }
   &::before { content: ''; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; translate: 0 var(--bullet-marker-offset); transition-property: background-color, border-color; transition-duration: 120ms; transition-timing-function: ease-out; }
   &::after { content: ''; position: absolute; width: 7px; height: 7px; background: currentColor;
     mask: url('/icons/check-flaticon.svg') center / contain no-repeat;
@@ -126,15 +129,18 @@ const Checkbox = styled.button<{ $checked?: boolean; $suppressPreview?: boolean 
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
-const Disclosure = styled.button<{ $open: boolean; $pie: boolean; $done: boolean; $progress: number }>`
+const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolean; $progress: number }>`
   position: relative; width: 40px; min-width: 40px; height: var(--bullet-row-height); padding: 0; border: 0;
-  display: grid; place-items: center; background: transparent; border-radius: 4px; color: ${({ $pie, $done }) => $pie && !$done ? 'var(--ink)' : 'var(--muted)'};
+  display: grid; place-items: center; background: transparent; border-radius: 4px; color: ${({ $task, $done }) => $task && !$done ? 'var(--ink)' : 'var(--muted)'};
+  transition: color 140ms ease-out;
   &::before { content: ''; width: 5px; height: 5px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; translate: 0 var(--bullet-marker-offset);
     transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
-  ${({ $pie, $progress }) => $pie && css`
-    &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1px solid currentColor; border-radius: 50%; transform: none;
-      background: conic-gradient(currentColor var(--task-progress), transparent 0); transition: --task-progress 240ms ease-out; }
+  ${({ $task, $progress }) => $task && css`
+    &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; transform: none;
+      background: conic-gradient(currentColor var(--task-progress), transparent 0); transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   `}
+  > svg { position: absolute; width: 12px; height: 12px; pointer-events: none; translate: 0 var(--bullet-marker-offset); }
+  &:disabled { opacity: 1; }
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px;
   }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
@@ -167,18 +173,16 @@ function selectedTextOffsets(element?: HTMLElement, link?: HTMLElement): TextOff
   if (element && link) {
     const range = document.createRange();
     range.selectNodeContents(element); range.setEndBefore(link);
-    const anchor = range.toString().length;
-    return { anchor, head: anchor + (link.textContent?.length ?? 0) };
+    const anchor = domTextOffset(element, range.endContainer, range.endOffset);
+    return { anchor, head: domTextOffset(element, link, link.childNodes.length) };
   }
   const selection = window.getSelection();
   if (!element || !selection?.anchorNode || !selection.focusNode ||
       !element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return;
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  range.setEnd(selection.anchorNode, selection.anchorOffset);
-  const anchor = range.toString().length;
-  range.setEnd(selection.focusNode, selection.focusOffset);
-  return { anchor, head: range.toString().length };
+  return {
+    anchor: domTextOffset(element, selection.anchorNode, selection.anchorOffset),
+    head: domTextOffset(element, selection.focusNode, selection.focusOffset),
+  };
 }
 
 const sorted = (items: OutlineItem[]) => [...items].sort((a, b) => a.position - b.position || a.id - b.id);
@@ -213,6 +217,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     return initial;
   });
   const [completing, setCompleting] = useState<number | null>(null);
+  const [pendingCompletion, setPendingCompletion] = useState<{ ids: Set<number>; done: boolean } | null>(null);
   const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
@@ -498,30 +503,51 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${item.id}"]`)); }
   };
   const complete = (id: number) => void run(async () => {
-    await save();
-    id = documentStore.resolve(id)!;
-    const task = records.current.find(row => row.id === id);
-    if (!task) return;
-    if (task.completed_at) {
-      const result = await api<{ reopened: number[]; operation_id: string | null }>(`/tasks/${id}/reopen`, 'POST', { completed_at: task.completed_at, expected_revision: task.revision, record_history: true });
-      recordEdit(result.operation_id, crypto.randomUUID());
-      onReopen(result.reopened);
-      await refresh(); return;
-    }
-    let finishing = task;
-    while (finishing.parent_id !== null) {
-      const parent = records.current.find(row => row.id === finishing.parent_id);
-      if (!parent || (parent.completed_child_count ?? 0) + 1 !== parent.child_count) break;
-      finishing = parent;
-    }
-    if (finishing.parent_id === null) setCompleting(finishing.id);
     try {
-      const delay = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180;
-      const [result] = await Promise.all([api<{ task_ids: number[]; completed_at: string }>(`/tasks/${id}/complete?expected_revision=${task.revision}`, 'POST'), new Promise(resolve => setTimeout(resolve, delay))]);
+      await save();
+      id = documentStore.resolve(id)!;
+      const task = records.current.find(row => row.id === id);
+      if (!task) return;
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, reduced ? 0 : ms));
+      const affected = new Set([id]);
+      let finishing = task;
+      while (finishing.parent_id !== null) {
+        const parent = records.current.find(row => row.id === finishing.parent_id);
+        if (!parent || (!task.completed_at && (parent.completed_child_count ?? 0) + 1 !== parent.child_count)) break;
+        if (!task.completed_at || parent.completed_at) affected.add(parent.id);
+        finishing = parent;
+      }
+      // Keep the existing ring mounted while its angle changes. Roll back the
+      // local feedback if saving fails; server counts take over after refresh.
+      flushSync(() => setPendingCompletion({ ids: affected, done: !task.completed_at }));
+      if (task.completed_at) {
+        const [result] = await Promise.all([
+          api<{ reopened: number[]; operation_id: string | null }>(`/tasks/${id}/reopen`, 'POST', { completed_at: task.completed_at, expected_revision: task.revision, record_history: true }),
+          wait(TASK_PROGRESS_MS),
+        ]);
+        recordEdit(result.operation_id, crypto.randomUUID());
+        onReopen(result.reopened);
+        await refresh(); return;
+      }
+      const [result] = await Promise.all([
+        api<{ task_ids: number[]; completed_at: string }>(`/tasks/${id}/complete?expected_revision=${task.revision}`, 'POST'),
+        wait(task.parent_id === null ? 0 : TASK_PROGRESS_MS),
+      ]);
+      if (finishing.parent_id === null) {
+        setCompleting(finishing.id);
+        await wait(180);
+      }
       onComplete(result.task_ids, id, result.completed_at);
-      persist(blank(records.current, composer));
+      if (current.current.id !== null && result.task_ids.includes(current.current.id)) {
+        stageDraft();
+        persist(blank(records.current, composer));
+      }
       await refresh();
-    } finally { setCompleting(null); }
+      void documentStore.flush().catch(() => {});
+    } catch (error) {
+      entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
+    } finally { setCompleting(null); setPendingCompletion(null); }
   }, false);
 
   const beginBullet = () => {
@@ -531,7 +557,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     focus();
   };
 
-  const verticalBoundary = (direction: VerticalDirection, measuredX: number) => {
+  const navigateBoundary = (direction: VerticalDirection | 'left' | 'right', measuredX?: number) => {
+    if (lock.current) return false;
     const currentElement = surface.current?.querySelector('[contenteditable]')?.closest<HTMLElement>('li[data-outline-key]');
     if (!currentElement) return false;
     const elements = [...document.querySelectorAll<HTMLElement>('li[data-outline-key][data-item-id]')]
@@ -539,29 +566,34 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         !element.closest('[aria-hidden="true"]') && element.dataset.done !== 'true');
     const index = elements.indexOf(currentElement);
     if (index < 0) return false;
-    const step = direction === 'up' ? -1 : 1;
+    const step = direction === 'up' || direction === 'left' ? -1 : 1;
     let adjacent = elements[index + step];
     while (adjacent?.dataset.itemId === 'draft') adjacent = elements[elements.indexOf(adjacent) + step];
     if (!adjacent) { verticalX.current = null; return false; }
     const id = Number(adjacent.dataset.itemId);
     const outlineKey = adjacent.dataset.outlineKey;
     if (!Number.isInteger(id) || !outlineKey) { verticalX.current = null; return false; }
-    const x = verticalX.current ?? measuredX;
-    window.dispatchEvent(new CustomEvent('still-vertical-entry', { detail: { key: outlineKey, id, x, direction } }));
+    const vertical = (direction === 'up' || direction === 'down') && measuredX !== undefined
+      ? { x: verticalX.current ?? measuredX, direction } : undefined;
+    const offset = direction === 'left' ? Number.MAX_SAFE_INTEGER : 0;
+    void save().catch(() => {});
+    window.dispatchEvent(new CustomEvent('still-entry-navigation', { detail: {
+      key: outlineKey, id, vertical, selection: vertical ? undefined : { anchor: offset, head: offset },
+    } }));
     return true;
   };
 
   useEffect(() => {
     const navigate = (event: Event) => {
-      const detail = (event as CustomEvent<{ key: string; id: number; x: number; direction: VerticalDirection }>).detail;
+      const detail = (event as CustomEvent<{ key: string; id: number; vertical?: VerticalTarget; selection?: TextOffsets }>).detail;
       if (!detail || detail.key !== key) return;
       const row = records.current.find(item => item.id === detail.id);
       if (!row) return;
-      verticalX.current = detail.x;
-      select(row, undefined, undefined, undefined, { x: detail.x, direction: detail.direction });
+      verticalX.current = detail.vertical?.x ?? null;
+      select(row, undefined, undefined, detail.selection, detail.vertical);
     };
-    window.addEventListener('still-vertical-entry', navigate);
-    return () => window.removeEventListener('still-vertical-entry', navigate);
+    window.addEventListener('still-entry-navigation', navigate);
+    return () => window.removeEventListener('still-entry-navigation', navigate);
   });
 
   useEffect(() => {
@@ -572,7 +604,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const adjacentEntry = (backwards: boolean) => {
     const currentElement = surface.current?.querySelector('[contenteditable]')?.closest('li');
     const elements = [...surface.current?.querySelectorAll<HTMLElement>('li[data-outline-key][data-item-id]') ?? []]
-      .filter(el => el.offsetParent !== null && !el.closest('[aria-hidden="true"]') && el.dataset.done !== 'true');
+      .filter(el => el.offsetParent !== null && getComputedStyle(el).visibility !== 'hidden' && !el.closest('[aria-hidden="true"]') && el.dataset.done !== 'true');
     const index = elements.findIndex(el => el === currentElement);
     const adjacent = elements[index + (backwards ? -1 : 1)];
     return records.current.find(row => row.id === Number(adjacent?.dataset.itemId));
@@ -593,14 +625,18 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     restoringFocus.current = true;
     const ownId = stageDraft();
     if (ownId === null) {
-      const offset = backwards ? markdownText(other.content).length : 0;
+      const offset = backwards ? Number.MAX_SAFE_INTEGER : 0;
       activate(other, { anchor: offset, head: offset });
     } else {
       const own = records.current.find(row => row.id === ownId)!;
       const first = backwards ? other : own, second = backwards ? own : other;
       const content = mergeMarkdown(first.content, second.content);
       const tags = [...new Set([...first.tags ?? [], ...second.tags ?? []])];
-      const offset = markdownText(first.content).length;
+      const firstText = backwards
+        ? surface.current?.querySelector<HTMLElement>(`[data-item-id="${first.id}"] > div > [role="group"]`)
+        : surface.current?.querySelector<HTMLElement>('[role="textbox"]');
+      const offset = firstText ? domTextOffset(firstText, firstText, firstText.childNodes.length)
+        : markdownText(first.content, activeTag ? [activeTag] : []).length;
       documentStore.enqueue([
         { kind: entryKind(first), id: first.id, content, tags },
         { kind: entryKind(second), id: second.id, delete: true },
@@ -617,7 +653,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     if (snapshot.id !== null) documentStore.enqueue([{ kind: snapshot.kind, id: snapshot.id, delete: true }]);
     const other = previous ?? next;
     if (other) {
-      const offset = previous ? markdownText(other.content).length : 0;
+      const offset = previous ? Number.MAX_SAFE_INTEGER : 0;
       activate(records.current.find(row => row.id === other.id) ?? other, { anchor: offset, head: offset });
     } else {
       flushSync(() => persist({ ...blank(records.current, true, snapshot.parentId, snapshot.afterId, snapshot.kind), beforeId: snapshot.beforeId }));
@@ -727,15 +763,19 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   };
   const renderToggle = (id: number | null, content: string) => {
     const row = items.find(item => item.id === id);
-    const childCount = row?.child_count ?? items.filter(item => item.parent_id === id).length;
-    const doneCount = row?.completed_child_count ?? items.filter(item => item.parent_id === id && item.completed_at).length;
+    const unsavedChild = draft.active && draft.id === null && draft.parentId === id && !!(draft.content.trim() || draft.tags.length);
+    const childCount = (row?.child_count ?? items.filter(item => item.parent_id === id).length) + Number(unsavedChild);
+    let doneCount = row?.completed_child_count ?? items.filter(item => item.parent_id === id && item.completed_at).length;
+    if (pendingCompletion) for (const child of items) {
+      if (child.parent_id === id && pendingCompletion.ids.has(child.id)) doneCount += Number(pendingCompletion.done) - Number(!!child.completed_at);
+    }
     const rowKind = row ? entryKind(row) : draft.kind;
-    if (id === null || !childCount && !(draft.active && draft.parentId === id && (draft.content.trim() || draft.tags.length))) return null;
+    if (unsavedChild && row?.completed_at && draft.kind === 'tasks') doneCount++;
+    if (id === null || !childCount) return null;
     const open = isExpanded(id);
     const pinned = expanded.has(id) || draftInside(id) || (!!row?.completed_at && rowKind === 'tasks' && !collapsed.has(id));
     const taskParent = rowKind === 'tasks';
-    const showPie = taskParent && doneCount > 0;
-    return <Disclosure type="button" data-focus-chrome $open={open} $pie={showPie} $done={!!row?.completed_at} $progress={childCount ? doneCount / childCount : 0} disabled={busy} aria-expanded={open}
+    return <Disclosure type="button" data-focus-chrome $open={open} $task={taskParent} $done={!!row?.completed_at} $progress={childCount ? doneCount / childCount : 0} disabled={busy} aria-expanded={open}
       aria-description={taskParent ? `${doneCount} of ${childCount} children completed` : undefined}
       aria-label={`${pinned ? 'Collapse' : 'Expand'} ${markdownText(content) || 'bullet'}`}
       onPointerEnter={event => {
@@ -754,7 +794,14 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
             return next;
           });
         }
-      }} />;
+      }} >
+      {taskParent && <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+        <path d={Array.from({ length: Math.max(1, childCount) }, (_, index) => {
+          const angle = index * 2 * Math.PI / Math.max(1, childCount);
+          return `M6 6L${6 + Math.sin(angle) * 6} ${6 - Math.cos(angle) * 6}`;
+        }).join(' ')} fill="none" stroke="currentColor" strokeWidth=".75" opacity=".22" />
+      </svg>}
+    </Disclosure>;
   };
 
   const inputLabel = draft.mode === 'edit' ? draft.kind === 'notes' ? 'Edit note' : 'Edit to-do' : draft.kind === 'notes' ? 'New journal bullet' : 'New to-do';
@@ -763,7 +810,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const row = items.find(item => item.id === id);
     const rowKind = row ? entryKind(row) : draft.kind;
     if (rowKind === 'tasks' && id !== null) {
-      const done = !!row?.completed_at;
+      const done = pendingCompletion?.ids.has(id) ? pendingCompletion.done : !!row?.completed_at;
       return toggle ?? <Checkbox type="button" data-focus-chrome data-preview-suppressed={suppressedPreviews.has(id) || undefined} $checked={done} $suppressPreview={suppressedPreviews.has(id)} aria-pressed={done} disabled={busy} aria-label={`${done ? 'Reopen' : 'Complete'} ${markdownText(content)}`}
         onPointerLeave={event => {
           const button = event.currentTarget;
@@ -931,7 +978,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
     $leaving={completing === draft.id && completing !== null}>
     <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed subtask' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
-      onBoundary={boundary} onVerticalBoundary={verticalBoundary} onSelectDocument={selectDocument}
+      onBoundary={boundary} onVerticalBoundary={navigateBoundary} onHorizontalBoundary={navigateBoundary} onSelectDocument={selectDocument}
       onEnter={advance} onSelectEntry={selected => updateEntrySelection(selected ? { key: gestureKey, dragX: 0 } : null)} onDeleteEntry={deleteCurrentEntry}
       onChange={(content, tags) => {
         verticalX.current = null;
@@ -973,7 +1020,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         } else if (event.key === 'Backspace' && current.current.mode === 'new' && !current.current.content && !current.current.tags.length && !current.current.id) {
           event.preventDefault(); dismissEmptyDraft();
         } else if (event.key === 'Escape' && draft.mode === 'edit') {
-          event.preventDefault(); persist(blank(records.current, composer)); focus();
+          event.preventDefault();
+          void save().catch(() => {});
+          restoringFocus.current = true;
+          flushSync(() => persist(blank(records.current, composer)));
+          focus();
         }
       }} /></Row>
     {draft.id !== null && <Branch data-branch-for={draft.id} $open={isExpanded(draft.id)} $editing={draftInside(draft.id)} aria-hidden={!isExpanded(draft.id)}>{renderChildren(draft.id, depth + 1)}</Branch>}

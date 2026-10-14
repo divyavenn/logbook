@@ -12,6 +12,7 @@ import { normalizeTag } from '../tagSyntax';
 import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
+import { textPositions, type TextOffsets } from '../textSelection';
 import { Code2, Link2 } from 'lucide-react';
 
 const Surface = styled.div`
@@ -90,7 +91,8 @@ function sharedMarks(doc: DocumentNode, from: number, to: number): Mark[] {
 
 type LinkMode = 'shortcut' | 'insert' | 'context';
 export type VerticalDirection = 'up' | 'down';
-export type TextOffsets = { anchor: number; head: number };
+export type { TextOffsets } from '../textSelection';
+const entryEdge = (doc: DocumentNode, start: boolean) => start ? TextSelection.atStart(doc).from : TextSelection.atEnd(doc).to;
 export type RichTextHandle = {
   focus: (options?: FocusOptions, selection?: TextOffsets) => void;
   focusAt: (x: number, direction: VerticalDirection, options?: FocusOptions) => void;
@@ -105,19 +107,20 @@ type Props = {
   onEnter: () => void;
   onBoundary?: (direction: 'backspace' | 'delete') => void;
   onVerticalBoundary?: (direction: VerticalDirection, x: number) => boolean;
+  onHorizontalBoundary?: (direction: 'left' | 'right') => boolean;
   onSelectDocument?: () => void;
   onSelectEntry?: (selected: boolean) => void;
   onDeleteEntry?: () => void;
 };
 
-export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry }: Props) {
+export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry }: Props) {
   const { tags } = useJournalContext();
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
-  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry });
-  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry };
+  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry });
+  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry };
   const entrySelected = useRef(false);
   const lastSnapshot = useRef(JSON.stringify([value, bulletTags]));
   const linkOpen = useRef(false);
@@ -153,7 +156,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
           if (['deleteContentBackward', 'deleteContentForward'].includes(inputEvent.inputType)) {
             if (entrySelected.current) { event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true; }
             const backwards = inputEvent.inputType === 'deleteContentBackward';
-            if (view.state.selection.empty && view.state.selection.from === (backwards ? 1 : view.state.doc.content.size - 1)) {
+            if (view.state.selection.empty && view.state.selection.from === entryEdge(view.state.doc, backwards)) {
               event.preventDefault(); callbacks.current.onBoundary?.(backwards ? 'backspace' : 'delete'); return true;
             }
           }
@@ -175,7 +178,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         },
         mousedown(view, event) {
           if (event.button !== 0 || !(event.target instanceof Element)) return false;
-          const end = view.coordsAtPos(view.state.doc.content.size - 1);
+          const end = view.coordsAtPos(entryEdge(view.state.doc, false));
           if (event.detail === 2 && event.clientX >= end.left - 3 && event.clientY >= end.top && event.clientY <= end.bottom) {
             event.preventDefault();
             editor?.commands.selectAll();
@@ -308,29 +311,40 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         if (pending && event.key === 'Escape') { event.preventDefault(); suggest(null); return true; }
         const mod = event.metaKey || event.ctrlKey;
         if (!event.altKey && (event.metaKey && ['ArrowUp', 'ArrowDown'].includes(event.key) || event.ctrlKey && ['Home', 'End'].includes(event.key))) {
-          const edge = event.key === 'ArrowUp' || event.key === 'Home' ? 1 : view.state.doc.content.size - 1;
+          const edge = entryEdge(view.state.doc, event.key === 'ArrowUp' || event.key === 'Home');
           event.preventDefault();
           view.dispatch(view.state.tr.setSelection(TextSelection.between(
-            view.state.doc.resolve(event.shiftKey ? view.state.selection.anchor : edge), view.state.doc.resolve(edge))));
+            view.state.doc.resolve(event.shiftKey ? view.state.selection.anchor : edge), view.state.doc.resolve(edge))).scrollIntoView());
           return true;
         }
         const historyKey = mod && !event.altKey && ['z', 'y'].includes(event.key.toLowerCase());
         if (historyKey && event.repeat) { event.preventDefault(); return true; }
         const historyDirection = historyShortcutDirection(event);
-        if (!mod && !event.shiftKey && editor && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
+        if (!mod && !event.altKey && !event.shiftKey && editor && (event.key === 'ArrowLeft' || event.key === 'ArrowRight') &&
             selectTypedTag(editor, event.key === 'ArrowLeft' ? 'left' : 'right')) {
           event.preventDefault(); return true;
         }
         if (!mod && !event.altKey && !event.shiftKey && view.state.selection.empty &&
+            (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+          const left = event.key === 'ArrowLeft';
+          if (view.state.selection.head === entryEdge(view.state.doc, left) && callbacks.current.onHorizontalBoundary?.(left ? 'left' : 'right')) {
+            event.preventDefault(); return true;
+          }
+        }
+        if (!mod && !event.altKey && !event.shiftKey && view.state.selection.empty &&
             (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
           const direction: VerticalDirection = event.key === 'ArrowUp' ? 'up' : 'down';
-          if (view.endOfTextblock(direction)) {
+          const { $head } = view.state.selection;
+          const outerBlock = direction === 'up'
+            ? $head.start() === entryEdge(view.state.doc, true)
+            : $head.end() === entryEdge(view.state.doc, false);
+          if (outerBlock && view.endOfTextblock(direction)) {
             const x = view.coordsAtPos(view.state.selection.head).left;
             if (callbacks.current.onVerticalBoundary?.(direction, x)) {
               event.preventDefault(); return true;
             }
-            const edge = direction === 'up' ? 1 : view.state.doc.content.size - 1;
-            event.preventDefault(); view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, edge)));
+            const edge = entryEdge(view.state.doc, direction === 'up');
+            event.preventDefault(); view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, edge)).scrollIntoView());
             return true;
           }
         }
@@ -344,7 +358,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
           if (previousSelectAll.current) { previousSelectAll.current = false; event.preventDefault(); callbacks.current.onSelectDocument?.(); return true; }
           previousSelectAll.current = true;
         } else if (!['Meta', 'Control', 'Shift', 'Alt'].includes(event.key)) previousSelectAll.current = false;
-        if (view.state.selection.empty) {
+        if (!mod && !event.altKey && !event.shiftKey && view.state.selection.empty) {
           const { $from, from } = view.state.selection;
           const beforeTag = $from.nodeBefore?.type.name === 'journalTag';
           const afterTag = $from.nodeAfter?.type.name === 'journalTag';
@@ -355,10 +369,10 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
             event.preventDefault(); view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, from))); return true;
           }
         }
-        if (!mod && !event.shiftKey && view.state.selection.empty) {
+        if (!mod && !event.altKey && !event.shiftKey && view.state.selection.empty) {
           const { from } = view.state.selection;
-          const direction = event.key === 'Backspace' && from === 1 ? 'backspace'
-            : event.key === 'Delete' && from === view.state.doc.content.size - 1 ? 'delete' : null;
+          const direction = event.key === 'Backspace' && from === entryEdge(view.state.doc, true) ? 'backspace'
+            : event.key === 'Delete' && from === entryEdge(view.state.doc, false) ? 'delete' : null;
           if (direction && callbacks.current.onBoundary) { event.preventDefault(); callbacks.current.onBoundary(direction); return true; }
         }
         if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c') {
@@ -387,7 +401,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       commitTypedTags(editor);
     },
     onSelectionUpdate({ editor }) {
-      if (entrySelected.current && (editor.state.selection.from > 1 || editor.state.selection.to < editor.state.doc.content.size - 1)) {
+      if (entrySelected.current && (editor.state.selection.from > entryEdge(editor.state.doc, true) || editor.state.selection.to < entryEdge(editor.state.doc, false))) {
         entrySelected.current = false; callbacks.current.onSelectEntry?.(false);
       }
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;
@@ -510,40 +524,22 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
   useImperativeHandle(ref, () => ({
     selection() {
       if (!editor || editor.isDestroyed) return;
+      const positions = textPositions(editor.state.doc);
       const domSelection = window.getSelection();
       if (domSelection?.anchorNode && domSelection.focusNode && editor.view.dom.contains(domSelection.anchorNode) && editor.view.dom.contains(domSelection.focusNode)) {
-        const offsetAt = (node: Node, offset: number) => {
-          const range = document.createRange(); range.selectNodeContents(editor.view.dom); range.setEnd(node, offset); return range.toString().length;
-        };
+        const offsetAt = (node: Node, offset: number) => positions.offsetAt(editor.view.posAtDOM(node, offset));
         return { anchor: offsetAt(domSelection.anchorNode, domSelection.anchorOffset), head: offsetAt(domSelection.focusNode, domSelection.focusOffset) };
       }
       const { anchor, head } = editor.state.selection;
-      const offsetAt = (position: number) => editor.state.doc.textBetween(0, position, '\n', '\ufffc').length;
-      return { anchor: offsetAt(anchor), head: offsetAt(head) };
+      return { anchor: positions.offsetAt(anchor), head: positions.offsetAt(head) };
     },
     focus(options, selection) {
       if (!editor || editor.isDestroyed) return;
       editor.view.dom.focus({ ...options, preventScroll: true });
       if (selection) {
-        // Saved HTML and ProseMirror use different offsets. Count visible text
-        // in both so a mouse selection survives entering the editor.
-        const positionAt = (offset: number) => {
-          let remaining = offset;
-          let position = 1;
-          let found = false;
-          editor.state.doc.descendants((node, pos) => {
-            if (found) return false;
-            const length = node.isText ? node.nodeSize : node.type.name === 'journalTag' ? String(node.attrs.name).length + 1 : node.type.name === 'hardBreak' ? 1 : 0;
-            if (length) {
-              position = pos + (node.isText ? Math.min(remaining, length) : remaining > 0 ? node.nodeSize : 0);
-              if (remaining <= length) found = true;
-              else remaining -= length;
-            }
-            return !found;
-          });
-          return position;
-        };
-        editor.commands.setTextSelection({ from: positionAt(selection.anchor), to: positionAt(selection.head) });
+        const { positionAt } = textPositions(editor.state.doc);
+        editor.view.dispatch(editor.state.tr.setSelection(TextSelection.between(
+          editor.state.doc.resolve(positionAt(selection.anchor)), editor.state.doc.resolve(positionAt(selection.head)))));
       }
       editor.view.focus();
       if (!options?.preventScroll) editor.view.dispatch(editor.state.tr.scrollIntoView());
@@ -564,7 +560,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
         left: Math.max(rect.left + 1, Math.min(x, rect.right - 1)),
         top: Math.max(rect.top + 1, Math.min(y, rect.bottom - 1)),
       });
-      const fallback = direction === 'up' ? editor.state.doc.content.size - 1 : 1;
+      const fallback = entryEdge(editor.state.doc, direction !== 'up');
       editor.commands.setTextSelection(point?.pos ?? fallback);
       element.focus({ ...options, preventScroll: true });
       if (!options?.preventScroll) editor.view.dispatch(editor.state.tr.scrollIntoView());
