@@ -35,5 +35,5 @@ test('password-only gate blurs the journal and unlocks without a username', asyn
   await expect(page.getByTestId('auth-surface')).toHaveCSS('filter', 'blur(0px)');
   await expect(page.getByTestId('auth-surface')).not.toHaveAttribute('inert');
   await expect(page.getByTestId('auth-surface')).not.toHaveAttribute('aria-hidden');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeVisible();
 });

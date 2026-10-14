@@ -1,11 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
-import { api, errorMessage, getJournal, localDate, recoverEarlierDrafts, timerDuration } from './api';
+import { errorMessage, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
+import { recoverEarlierDrafts } from './entryDrafts';
+import { storage } from './storage';
 import { FocusSound } from './audio';
-import type { JournalData, JournalDay, Session } from './types';
+import type { JournalData, JournalDay } from './types';
 import { Button, Muted, TextButton, press } from './styles';
-import { Journal, Todos } from './components/Journal';
+import { Journal, Tasks } from './components/Journal';
 import { TagTabs } from './components/TagTabs';
 import { JournalContext, flushDrafts } from './JournalContext';
 import { Modal } from './components/Modal';
@@ -16,7 +18,7 @@ import { usePager } from './usePager';
 import { entryError } from './entryFeedback';
 
 const JOURNAL_PAGE_SIZE = 14;
-const MOBILE_VIEWS = ['todos', 'log', 'tags'] as const;
+const MOBILE_VIEWS = ['tasks', 'log', 'tags'] as const;
 const REPOSITORY_URL = import.meta.env.VITE_REPOSITORY_URL || 'https://github.com/divyavenn/still';
 const SessionsModal = lazy(() => import('./components/SessionsModal').then(module => ({ default: module.SessionsModal })));
 const StatsModal = lazy(() => import('./components/StatsModal').then(module => ({ default: module.StatsModal })));
@@ -30,8 +32,8 @@ const Page = styled.div<{ $focusing: boolean }>`
   --left-margin: calc((100vw - var(--document-width)) * .54);
   --right-margin: calc(100vw - var(--document-width) - var(--left-margin));
   --page-top: 48px;
-  --todo-heading-height: 44px;
-  @media(pointer: coarse) { --todo-heading-height: 48px; }
+  --task-heading-height: 44px;
+  @media(pointer: coarse) { --task-heading-height: 48px; }
   height: 100dvh; overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column;
   background-color: var(--current-page-paper);
   [data-focus-chrome] { opacity: ${({ $focusing }) => $focusing ? 'var(--focus-chrome-opacity)' : 'var(--chrome-opacity)'}; transition: opacity 180ms ease-out; }
@@ -66,7 +68,7 @@ const Page = styled.div<{ $focusing: boolean }>`
   `}
   @media ${compactViewport} {
     --document-width: min(680px, calc(100vw - max(24px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right))));
-    --page-top: max(16px, env(safe-area-inset-top)); --todo-heading-height: 36px;
+    --page-top: max(16px, env(safe-area-inset-top)); --task-heading-height: 36px;
     --left-margin: max(24px, env(safe-area-inset-left), calc((100vw - var(--document-width)) * .54));
     --right-margin: calc(100vw - var(--document-width) - var(--left-margin));
     scrollbar-width: none;
@@ -246,10 +248,10 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   locked?: boolean; load?: boolean; onReady?: () => void; onLoadError?: () => void;
 }) {
   const [data, setData] = useState<JournalData | null>(null);
-  const [night, setNight] = useState(() => localStorage.getItem('still-theme') === 'night');
+  const [night, setNight] = useState(() => storage.getItem('still-theme') === 'night');
   useEffect(() => {
     document.documentElement.dataset.theme = night ? 'night' : 'day';
-    localStorage.setItem('still-theme', night ? 'night' : 'day');
+    storage.setItem('still-theme', night ? 'night' : 'day');
   }, [night]);
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const tagRef = useRef<string | null>(null);
@@ -292,7 +294,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerIntent, setTimerIntent] = useState<'start' | 'stop' | null>(null);
   const [audible, setAudible] = useState(false);
-  const [volume, setVolume] = useState(() => Math.max(0, Math.min(1, Number(localStorage.getItem('still-volume') ?? '0.22') || 0)));
+  const [volume, setVolume] = useState(() => Math.max(0, Math.min(1, Number(storage.getItem('still-volume') ?? '0.22') || 0)));
   const sound = useRef(new FocusSound());
   const openedModals = useRef(new Set<string>());
   if (sessionsDate) openedModals.current.add('sessions');
@@ -302,6 +304,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const timerLock = useRef(false);
   const clockOffset = useRef(0);
   const generation = useRef(0);
+  const refreshRequest = useRef<AbortController | null>(null);
+  const refreshResult = useRef<Promise<void> | null>(null);
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
   const notify = useCallback((text: string) => setMessage(text), []);
@@ -359,19 +363,33 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       if (quietStatusTimer.current) clearTimeout(quietStatusTimer.current);
     };
   }, []);
-  const refresh = useCallback(async (includeHistory = true) => {
+  const loadJournal = useCallback(async (includeHistory: boolean) => {
     const sequence = ++generation.current;
+    refreshRequest.current?.abort();
+    const request = new AbortController();
+    refreshRequest.current = request;
+    const current = () => sequence === generation.current && !request.signal.aborted;
     const tag = tagRef.current;
-    let response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag });
+    let response: JournalData;
     try {
-      if (await recoverEarlierDrafts(response.today)) response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag });
-    } catch { notify('Could not save an earlier draft. Retrying automatically.'); }
-    while (includeHistory && loadedThrough.current && response.next_cursor && response.next_cursor > loadedThrough.current) {
-      const more = await getJournal({ before: response.next_cursor, limit: JOURNAL_PAGE_SIZE, tag });
-      response.days.push(...more.days);
-      response.next_cursor = more.next_cursor;
+      response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag }, request.signal);
+      if (!current()) return;
+      const recovered = await recoverEarlierDrafts(response.today);
+      if (!current()) return;
+      if (recovered) response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag }, request.signal);
+      while (current() && includeHistory && loadedThrough.current && response.next_cursor && response.next_cursor > loadedThrough.current) {
+        const cursor = response.next_cursor;
+        const more = await getJournal({ before: cursor, limit: JOURNAL_PAGE_SIZE, tag }, request.signal);
+        if (!current()) return;
+        response.days.push(...more.days);
+        // Stop if a bad cursor would fetch the same page forever.
+        response.next_cursor = more.next_cursor && more.next_cursor < cursor ? more.next_cursor : null;
+      }
+    } catch (error) {
+      if (isAbortError(error) || !current()) return;
+      throw error;
     }
-    if (sequence !== generation.current) return;
+    if (!current()) return;
     if (tagRef.current && !response.tags?.some(tag => tag.name === tagRef.current)) {
       tagRef.current = null; loadedThrough.current = null; setActiveTag(null); return;
     }
@@ -383,7 +401,20 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       return { ...response, days: [...response.days, ...cachedDays], next_cursor: cachedDays.length ? previous.next_cursor : response.next_cursor };
     });
     setError('');
-  }, [notify]);
+  }, []);
+  const refresh = useCallback(async (includeHistory = true) => {
+    let pending = loadJournal(includeHistory);
+    refreshResult.current = pending;
+    // Keep local edits on screen until the newest refresh has finished.
+    // A cancelled request must not tell the save queue that fresh data arrived.
+    for (;;) {
+      await pending;
+      const latest = refreshResult.current;
+      if (latest === null || latest === pending) return;
+      pending = latest;
+    }
+  }, [loadJournal]);
+  useEffect(() => () => { refreshRequest.current?.abort(); }, []);
   useEffect(() => {
     const applied = () => { void refresh().catch(e => entryError(e)); };
     const failed = (event: Event) => entryError((event as CustomEvent<string>).detail);
@@ -446,12 +477,12 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     timerLock.current = true; setTimerIntent(stopping ? 'stop' : 'start'); setTimerBusy(true);
     try {
       if (active) {
-        await api<Session>('/timer/stop', 'POST', { session_id: active.id });
+        await stopTimer(active.id);
         sound.current.stop(); setAudible(false);
         setData(current => current ? { ...current, active_session: null } : current);
       } else {
-        if (localStorage.getItem('still-muted') !== 'true') void sound.current.start(volume).then(() => setAudible(true)).catch(() => notify('Audio paused. Open the timer’s sound menu to resume.'));
-        const started = await api<Session>('/timer/start', 'POST');
+        if (storage.getItem('still-muted') !== 'true') void sound.current.start(volume).then(() => setAudible(true)).catch(() => notify('Audio paused. Open the timer’s sound menu to resume.'));
+        const started = await startTimer();
         setData(current => current ? { ...current, active_session: started } : current);
       }
       await refresh();
@@ -459,8 +490,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     finally { timerLock.current = false; setTimerIntent(null); setTimerBusy(false); }
   };
   const toggleSound = async () => {
-    if (audible) { sound.current.stop(); setAudible(false); localStorage.setItem('still-muted', 'true'); }
-    else { try { await sound.current.start(volume); setAudible(true); localStorage.setItem('still-muted', 'false'); } catch { notify('Your browser couldn’t start audio. The timer is still tracking your focus.'); } }
+    if (audible) { sound.current.stop(); setAudible(false); storage.setItem('still-muted', 'true'); }
+    else { try { await sound.current.start(volume); setAudible(true); storage.setItem('still-muted', 'false'); } catch { notify('Your browser couldn’t start audio. The timer is still tracking your focus.'); } }
   };
   const secondsForDay = (day: JournalDay) => {
     if (!active || !data || day.date !== data.today) return day.focused_seconds;
@@ -527,13 +558,13 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       {paged ? <>
         <ShortHeader>
           <MobileTabs role="tablist" aria-label="Mobile views">
-            <MobileTab id="mobile-tab-todos" type="button" role="tab" aria-controls="mobile-panel-todos" aria-selected={mobileView === 'todos'} $active={mobileView === 'todos'} onClick={() => selectMobileView('todos')}>to do</MobileTab>
+            <MobileTab id="mobile-tab-tasks" type="button" role="tab" aria-controls="mobile-panel-tasks" aria-selected={mobileView === 'tasks'} $active={mobileView === 'tasks'} onClick={() => selectMobileView('tasks')}>tasks</MobileTab>
             <MobileTab id="mobile-tab-log" type="button" role="tab" aria-controls="mobile-panel-log" aria-selected={mobileView === 'log'} $active={mobileView === 'log'} onClick={() => selectMobileView('log')}>log</MobileTab>
             <MobileTab id="mobile-tab-tags" type="button" role="tab" aria-controls="mobile-panel-tags" aria-selected={mobileView === 'tags'} $active={mobileView === 'tags'} onClick={() => selectMobileView('tags')}>tags</MobileTab>
           </MobileTabs>
         </ShortHeader>
         <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}>
-          <MobilePane id="mobile-panel-todos" role="tabpanel" aria-labelledby="mobile-tab-todos" aria-hidden={mobileView !== 'todos'} inert={mobileView !== 'todos'}>{data ? <Todos key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} /> : null}</MobilePane>
+          <MobilePane id="mobile-panel-tasks" role="tabpanel" aria-labelledby="mobile-tab-tasks" aria-hidden={mobileView !== 'tasks'} inert={mobileView !== 'tasks'}>{data ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} /> : null}</MobilePane>
           <MobilePane id="mobile-panel-log" role="tabpanel" aria-labelledby="mobile-tab-log" aria-hidden={mobileView !== 'log'} inert={mobileView !== 'log'}>{data && <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
             <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate}
               sessionsEnabled={false} showHistory secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
@@ -551,7 +582,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         </MobilePager>
       </> : <>
         {!data ? <ConnectionState><Muted>{error || 'Loading…'}</Muted>{error && <Button onClick={() => { setError(''); void refresh().catch(e => setError(errorMessage(e))); }}>Retry</Button>}</ConnectionState> :
-          <Todos key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} />}
+          <Tasks key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} />}
       {data &&
         <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
         <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate} secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
@@ -568,7 +599,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     </Suspense>
     <Modal open={soundOpen} onClose={() => setSoundOpen(false)} title="Focus sound" compact><SoundMenu>
       <TextButton aria-label={audible ? 'Mute focus sound' : 'Play focus sound'} onClick={() => void toggleSound()}>{audible ? 'Mute' : 'Play sound'}</TextButton>
-      <input aria-label="Focus sound volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={e => { const value = Number(e.target.value); setVolume(value); localStorage.setItem('still-volume', String(value)); sound.current.setVolume(value); }} />
+      <input aria-label="Focus sound volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={e => { const value = Number(e.target.value); setVolume(value); storage.setItem('still-volume', String(value)); sound.current.setVolume(value); }} />
     </SoundMenu></Modal>
     <Modal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} title="Keyboard shortcuts" compact><ShortcutPanel>
       <ShortcutRows data-testid="shortcut-rows">

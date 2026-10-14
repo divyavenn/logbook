@@ -20,6 +20,7 @@ jobs:
       - run: .venv/bin/python -m pip install -r backend/requirements.lock.txt
       - run: npm ci
       - run: npm test
+      - run: npm run test:editor-model
       - run: npm run build
       - run: npx playwright install --with-deps chrome
       - run: npx playwright test

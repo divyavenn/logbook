@@ -1,9 +1,10 @@
-export type EntryKind = 'notes' | 'tasks';
-export type StoredEntryKind = 'note' | 'task';
+export const ENTRY_KINDS = { note: 'notes', task: 'tasks' } as const;
+export type StoredEntryKind = keyof typeof ENTRY_KINDS;
+export type EntryKind = typeof ENTRY_KINDS[StoredEntryKind];
 
 export type OutlineItem = {
   id: number;
-  kind?: EntryKind | StoredEntryKind;
+  kind: EntryKind;
   content: string;
   parent_id: number | null;
   position: number;
@@ -16,8 +17,8 @@ export type OutlineItem = {
   completed_child_count?: number;
 };
 
-export type JournalEntry = Omit<OutlineItem, 'kind'> & { kind: EntryKind };
-export type Task = OutlineItem;
+export type JournalEntry = OutlineItem;
+export type Task = OutlineItem & { kind: 'tasks' };
 export type Session = {
   id: number;
   started_at: string;
@@ -67,18 +68,12 @@ export type JournalData = {
   next_cursor: string | null;
 };
 
-export type CalendarEventResponse = Omit<CalendarEvent, 'location' | 'description' | 'links'> & {
-  location?: string | null;
-  description?: string | null;
-  links?: string[];
-};
-export type JournalDayResponse = DayMetrics & {
-  entries?: OutlineItem[];
-  notes?: OutlineItem[];
-  tasks?: OutlineItem[];
-  events?: CalendarEventResponse[];
-};
-export type JournalResponse = Omit<JournalData, 'days'> & { days: JournalDayResponse[] };
+export type SearchHit = OutlineItem & { date: string | null };
+export type SearchResults = { results: SearchHit[]; next_offset: number | null };
+export type SessionInput = { started_at: string; duration_seconds: number };
+export type CompletionResult = { task_ids: number[]; completed_at: string; items: Task[] };
+export type ReopenResult = { reopened: number[]; operation_id: string | null; items: Task[] };
+export type DocumentResult = { items: (OutlineItem | null)[]; operation_id: string | null };
 
 export type DailyStat = DayMetrics & { completed_task_count: number; note_count: number };
 export type Stats = {

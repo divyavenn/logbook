@@ -5,7 +5,7 @@ const today = '2026-09-17';
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/journal?*', route => route.fulfill({ json: {
     today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null,
-    tasks: [{ id: 9001, content: 'First to-do', tags: [], parent_id: null, position: 0 }],
+    tasks: [{ id: 9001, content: 'First task', tags: [], parent_id: null, position: 0 }],
     days: [
       { date: today, focused_seconds: 0, notes: Array.from({ length: 30 }, (_, i) => ({ id: 9100 + i, content: `Current note ${i}`, tags: [], parent_id: null, position: i })) },
       { date: '2026-09-16', focused_seconds: 0, notes: [{ id: 9200, content: 'Older note', tags: [], parent_id: null, position: 0 }] },
@@ -13,11 +13,11 @@ test.beforeEach(async ({ page }) => {
   } }));
 });
 
-test('global timer stays fixed at the top right while to-dos stack above the log', async ({ page }) => {
+test('global timer stays fixed at the top right while tasks stack above the log', async ({ page }) => {
   await page.goto('/');
   const timer = page.getByRole('button', { name: 'Start focus timer', exact: true });
   const readout = page.getByTestId('compact-timer-time');
-  const task = page.getByRole('group', { name: 'First to-do', exact: true });
+  const task = page.getByRole('group', { name: 'First task', exact: true });
   const note = page.getByRole('group', { name: 'Current note 0', exact: true });
   for (const width of [1440, 1280, 1024, 900, 760, 641]) {
     await page.setViewportSize({ width, height: 900 });
@@ -41,7 +41,7 @@ test('global timer stays fixed at the top right while to-dos stack above the log
   await page.screenshot({ path: '/tmp/still-layout-desktop.png' });
 });
 
-test('stacked to-dos keep a generous creation area and wrap within the document', async ({ page }) => {
+test('stacked tasks keep a generous creation area and wrap within the document', async ({ page }) => {
   await page.unroute('**/api/journal?*');
   let tasks: Array<{ id: number; content: string; tags: string[]; parent_id: null; position: number }> = [];
   await page.route('**/api/journal?*', route => route.fulfill({ json: {
@@ -49,14 +49,14 @@ test('stacked to-dos keep a generous creation area and wrap within the document'
     days: [{ date: today, focused_seconds: 0, notes: [{ id: 9300, content: 'Width reference', tags: [], parent_id: null, position: 0 }] }],
   } }));
   await page.goto('/');
-  const emptyArea = page.getByRole('button', { name: 'Add to-do', exact: true });
+  const emptyArea = page.getByRole('button', { name: 'Add task', exact: true });
   await expect(emptyArea).toBeVisible();
   expect((await emptyArea.boundingBox())!.height).toBeGreaterThan(80);
-  await expect(page.getByRole('textbox', { name: 'New to-do', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'New task', exact: true })).toHaveCount(0);
   await emptyArea.click({ position: { x: 20, y: (await emptyArea.boundingBox())!.height - 10 } });
-  await expect(page.getByRole('textbox', { name: 'New to-do', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New task', exact: true })).toBeFocused();
 
-  tasks = [{ id: 9301, content: 'A deliberately very long to-do entry that keeps going until it has to wrap before reaching the timer at the established outer edge of the document', tags: [], parent_id: null, position: 0 }];
+  tasks = [{ id: 9301, content: 'A deliberately very long task entry that keeps going until it has to wrap before reaching the timer at the established outer edge of the document', tags: [], parent_id: null, position: 0 }];
   await page.reload();
   const task = (await page.getByRole('group', { name: tasks[0].content, exact: true }).boundingBox())!;
   const main = (await page.getByRole('main').boundingBox())!;
@@ -82,7 +82,7 @@ test('narrow or short viewports use three swipe panes with the timer always visi
     await page.setViewportSize(size);
     const tabs = page.getByRole('tablist', { name: 'Mobile views' });
     await expect(tabs).toBeVisible();
-    await expect(tabs.getByRole('tab')).toHaveText(['to do', 'log', 'tags']);
+    await expect(tabs.getByRole('tab')).toHaveText(['tasks', 'log', 'tags']);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(timer).toBeInViewport();
     await expect(timerReadout).toHaveText('00:00:00');
@@ -121,10 +121,10 @@ test('narrow or short viewports use three swipe panes with the timer always visi
     await expect(page.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'all', exact: true })).toBeVisible();
-    await page.getByRole('tab', { name: 'to do', exact: true }).click();
-    await expect(page.getByRole('tab', { name: 'to do', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('group', { name: 'First to-do', exact: true })).toBeInViewport();
-    expect((await page.getByRole('group', { name: 'First to-do', exact: true }).boundingBox())!.height).toBeLessThanOrEqual(40);
+    await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await expect(page.getByRole('tab', { name: 'tasks', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('group', { name: 'First task', exact: true })).toBeInViewport();
+    expect((await page.getByRole('group', { name: 'First task', exact: true }).boundingBox())!.height).toBeLessThanOrEqual(40);
     await page.getByRole('tab', { name: 'log', exact: true }).click();
     await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = 0; });
     await expect(page.getByRole('group', { name: 'Current note 0', exact: true })).toBeInViewport();
@@ -147,7 +147,7 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
     expect(mobileMain.x).toBe(24);
     expect(440 - mobileMain.x - mobileMain.width).toBe(16);
     await expect(mobile.getByRole('navigation', { name: 'Tags' })).toHaveCount(0);
-    const composer = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
+    const composer = mobile.getByRole('textbox', { name: 'New note', exact: true });
     await expect(composer).toBeFocused();
     await composer.fill('Mobile typing');
 

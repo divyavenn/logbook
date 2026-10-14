@@ -8,7 +8,7 @@ from markdown_it import MarkdownIt
 from pydantic import BaseModel, Field
 
 from .stats import parse, slices, stamp
-from .tags import bullet_dict
+from .tags import entry_dict
 from .tasks import visible_tasks
 
 
@@ -28,9 +28,9 @@ class AgentQuery(BaseModel):
     timezone: str = Field('UTC', description="IANA timezone for sessions and day boundaries. Notes retain their recorded date.")
     before: date | None = Field(None, description="Exclusive date cursor. Follow next_url to retain the original query.")
     limit: int = Field(30, ge=1, le=100, description="Calendar days per page, newest first, including zero days.")
-    tag: str | None = Field(None, max_length=65, description="Match a tag; includes matching bullets, descendants, and ancestor context.")
+    tag: str | None = Field(None, max_length=65, description="Match a tag; includes matching entries, descendants, and ancestor context.")
     q: str | None = Field(None, max_length=200, description="Case-insensitive literal substring in Markdown, rendered text, or link URLs. Combined with tag using AND.")
-    tasks: Literal['visible', 'all', 'none'] = Field('visible', description="Current to-do snapshot, all tasks including archived completions, or none. Tasks are not date-filtered and are omitted by next_url.")
+    tasks: Literal['visible', 'all', 'none'] = Field('visible', description="Current task snapshot, all tasks including archived completions, or none. Tasks are not date-filtered and are omitted by next_url.")
 
 
 class AgentLink(BaseModel):
@@ -38,8 +38,8 @@ class AgentLink(BaseModel):
     url: str
 
 
-class AgentBullet(BaseModel):
-    id: int = Field(description="Stable ID within kind; the pair (kind, id) is unique.")
+class AgentEntry(BaseModel):
+    id: int = Field(description="Stable entry ID, including when its kind changes.")
     kind: Literal['note', 'task']
     parent_id: int | None
     position: int
@@ -51,7 +51,7 @@ class AgentBullet(BaseModel):
     updated_at: str | None
     completed_at: str | None
     source_task_id: int | None
-    children: list['AgentBullet']
+    children: list['AgentEntry']
 
 
 class AgentSession(BaseModel):
@@ -77,8 +77,8 @@ class AgentFocus(BaseModel):
 
 class AgentDay(BaseModel):
     date: date
-    focus: AgentFocus = Field(description="Unfiltered totals for this calendar day, even when q/tag filters bullets.")
-    bullets: list[AgentBullet]
+    focus: AgentFocus = Field(description="Unfiltered totals for this calendar day, even when q/tag filters entries.")
+    bullets: list[AgentEntry]
 
 
 class AgentJournal(BaseModel):
@@ -87,7 +87,7 @@ class AgentJournal(BaseModel):
     timezone: str
     query: AgentQuery
     days: list[AgentDay]
-    tasks: list[AgentBullet]
+    tasks: list[AgentEntry]
     next_cursor: date | None
     next_url: str | None = Field(description="Next JSON page, or null when complete. Tasks are returned only on the initial request.")
 
@@ -115,7 +115,7 @@ def parsed_content(content):
     return ''.join(text), links
 
 
-def bullet_tree(rows, kind, tag, query):
+def entry_tree(rows, kind, tag, query):
     children = defaultdict(list)
     by_id = {row['id']: row for row in rows}
     parsed = {row['id']: parsed_content(row['content']) for row in rows}
@@ -162,7 +162,7 @@ def read_journal(db, query, zone, now):
     if selected:
         for row in db.execute('''SELECT entries.*, days.date FROM entries JOIN days ON entries.day_id = days.id
                                 WHERE days.date BETWEEN ? AND ? ORDER BY entries.position, entries.id''', (selected[-1], selected[0])):
-            (notes_by_day if row['kind'] == 'note' else tasks_by_day)[row['date']].append(bullet_dict(row))
+            (notes_by_day if row['kind'] == 'note' else tasks_by_day)[row['date']].append(entry_dict(row))
         lower_utc = stamp(datetime.combine(date.fromisoformat(selected[-1]), time.min, zone))
         upper_utc = stamp(datetime.combine(upper + timedelta(days=1), time.min, zone))
         sessions = db.execute('''SELECT * FROM sessions WHERE started_at < ?
@@ -184,30 +184,30 @@ def read_journal(db, query, zone, now):
         sessions = by_session_day[day]
         completed = [row['seconds_on_day'] for row in sessions if row['status'] == 'completed']
         running = sum(row['seconds_on_day'] for row in sessions if row['status'] == 'running')
-        bullets = [
-            *bullet_tree(notes_by_day[day], 'note', query.tag, query.q),
-            *bullet_tree(tasks_by_day[day], 'task', query.tag, query.q),
+        entries = [
+            *entry_tree(notes_by_day[day], 'note', query.tag, query.q),
+            *entry_tree(tasks_by_day[day], 'task', query.tag, query.q),
         ]
-        bullets.sort(key=lambda row: (row['position'], row['id']))
-        days.append({'date': day, 'bullets': bullets, 'focus': {
+        entries.sort(key=lambda row: (row['position'], row['id']))
+        days.append({'date': day, 'bullets': entries, 'focus': {
             'completed_seconds': sum(completed), 'running_seconds': running, 'total_seconds': sum(completed) + running,
             'longest_completed_session_seconds': max(completed, default=0), 'completed_session_count': len(completed), 'sessions': sessions,
         }})
     tasks = []
     if query.tasks == 'all':
-        tasks = [bullet_dict(row) for row in db.execute("SELECT * FROM entries WHERE kind = 'task' ORDER BY day_id, position, id")]
+        tasks = [entry_dict(row) for row in db.execute("SELECT * FROM entries WHERE kind = 'task' ORDER BY day_id, position, id")]
     elif query.tasks == 'visible':
         tasks = visible_tasks(db)
     cursor = selected[-1] if selected and selected[-1] > start.isoformat() else None
     next_query = {**query.model_dump(mode='json', exclude_none=True), 'before': cursor, 'tasks': 'none'}
     return AgentJournal(
         generated_at=stamp(now), timezone=zone.key, query=query, days=days,
-        tasks=bullet_tree(tasks, 'task', query.tag, query.q), next_cursor=cursor,
+        tasks=entry_tree(tasks, 'task', query.tag, query.q), next_cursor=cursor,
         next_url='/api/agent/journal?' + urlencode(next_query) if cursor else None,
     )
 
 
-def markdown_journal(journal):
+def markdown_journal(journal: AgentJournal) -> str:
     import json
 
     lines = ['# Logbook', '', '```json', json.dumps({
@@ -216,7 +216,7 @@ def markdown_journal(journal):
         'next_url': journal.next_url.replace('/api/agent/journal?', '/journal.md?') if journal.next_url else None,
     }, indent=2, ensure_ascii=False), '```', '']
 
-    def bullets(rows, depth=0):
+    def append_entries(rows: list[AgentEntry], depth: int = 0) -> None:
         for row in rows:
             indent = '    ' * depth
             marker = ('[x] ' if row.completed_at else '[ ] ') if row.kind == 'task' else ''
@@ -226,11 +226,11 @@ def markdown_journal(journal):
             metadata = {'id': f'{row.kind}:{row.id}', 'parent_id': row.parent_id, 'tags': row.tags,
                         'matched': row.matched, 'source_task_id': row.source_task_id, 'completed_at': row.completed_at}
             lines.extend([f'{indent}    ', f'{indent}    Metadata: `{json.dumps(metadata, ensure_ascii=False)}`'])
-            bullets(row.children, depth + 1)
+            append_entries(row.children, depth + 1)
 
     if journal.query.tasks != 'none':
-        lines.extend(['## To-dos (current snapshot, not date-filtered)', ''])
-        bullets(journal.tasks)
+        lines.extend(['## Tasks (current snapshot, not date-filtered)', ''])
+        append_entries(journal.tasks)
         lines.append('')
     for day in journal.days:
         focus = day.focus
@@ -242,6 +242,6 @@ def markdown_journal(journal):
         for session in focus.sessions:
             lines.append(f'| {session.id} | {session.status} | {session.started_at} | {session.seconds_on_day:g} | {session.duration_seconds:g} |')
         lines.append('')
-        bullets(day.bullets)
+        append_entries(day.bullets)
         lines.append('')
     return '\n'.join(lines)

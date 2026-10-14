@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Download } from 'lucide-react';
 import styled from 'styled-components';
-import { api, dateObject, duration, errorMessage, localDate } from '../api';
+import { getStats, dateObject, duration, errorMessage, localDate } from '../api';
 import type { Stats } from '../types';
 import { InlineError, Muted } from '../styles';
 import { Modal } from './Modal';
@@ -96,7 +96,7 @@ export function StatsModal({ open, onClose }: { open: boolean; onClose: () => vo
     let cancelled = false;
     setLoading(true); setError('');
     const end = new Date(); const start = new Date(); start.setDate(end.getDate() - range + 1);
-    api<Stats>(`/stats?start=${localDate(start)}&end=${localDate(end)}`).then(data => { if (!cancelled) setStats(data); })
+    getStats(localDate(start), localDate(end)).then(data => { if (!cancelled) setStats(data); })
       .catch(e => { if (!cancelled) setError(errorMessage(e)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, range]);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import styled from 'styled-components';
-import { api, dateObject, duration, errorMessage, localDate, timerDuration } from '../api';
+import { dateObject, deleteSession, duration, errorMessage, getSessions, localDate, saveSession, timerDuration } from '../api';
 import type { Session } from '../types';
 import { InlineError } from '../styles';
 import { Modal } from './Modal';
@@ -45,7 +45,7 @@ export function SessionsModal({ date, onClose, onChange }: {
   const [loadedAt, setLoadedAt] = useState(Date.now());
   const load = useCallback(async () => {
     if (!date) return;
-    const rows = await api<Session[]>(`/sessions?date=${date}`);
+    const rows = await getSessions(date);
     setSessions(rows); setLoadedAt(Date.now()); setNow(Date.now());
   }, [date]);
   useEffect(() => {
@@ -65,7 +65,7 @@ export function SessionsModal({ date, onClose, onChange }: {
     if (!date || !/^\d{2}:\d{2}$/.test(started)) { setError('Enter a start time.'); return; }
     setBusy(true); setError('');
     try {
-      await api(editing === 'new' ? '/sessions' : `/sessions/${editing}`, editing === 'new' ? 'POST' : 'PATCH', {
+      await saveSession(editing, {
         started_at: originalStart && started === inputTime(originalStart) ? originalStart : new Date(`${originalStart ? localDate(new Date(originalStart)) : date}T${started}:00`).toISOString(), duration_seconds: seconds,
       });
       setEditing(null); await load(); await onChange();
@@ -87,7 +87,7 @@ export function SessionsModal({ date, onClose, onChange }: {
       <TimeButton type="button" disabled={!session.ended_at} aria-label={`Edit duration of session ${session.id}`} onClick={() => edit(session)}>{duration(runningSeconds(session))}</TimeButton>
       <SymbolButton type="button" disabled={!session.ended_at || busy} aria-label={`Delete session ${session.id}`} onClick={async () => {
         setBusy(true); setError('');
-        try { await api(`/sessions/${session.id}`, 'DELETE'); setSessions(current => current.filter(row => row.id !== session.id)); await onChange(); }
+        try { await deleteSession(session.id); setSessions(current => current.filter(row => row.id !== session.id)); await onChange(); }
         catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
       }}><span aria-hidden="true">×</span></SymbolButton>
     </SessionRow>)}{editing === 'new' && editRow('new')}</SessionList>

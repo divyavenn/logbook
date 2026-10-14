@@ -31,7 +31,7 @@ test('parent progress retains completed children, finishes automatically, and ca
   expect(data.notes.filter((note: { source_task_id: number | null }) => note.source_task_id === first.id)).toHaveLength(0);
 });
 
-test('reopening a completed nested task returns its whole tree to to-dos', async ({ page, request }) => {
+test('reopening a completed nested task returns its whole tree to tasks', async ({ page, request }) => {
   const parent = await (await request.post('/api/tasks', { data: { content: 'Return project' } })).json();
   const first = await (await request.post('/api/tasks', { data: { content: 'Return first', parent_id: parent.id } })).json();
   const second = await (await request.post('/api/tasks', { data: { content: 'Return second', parent_id: parent.id } })).json();
@@ -41,11 +41,11 @@ test('reopening a completed nested task returns its whole tree to to-dos', async
   await expect(page.getByRole('button', { name: 'Expand Return project', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Expand Return project', exact: true }).click();
   await page.getByRole('button', { name: 'Reopen Return first', exact: true }).click();
-  const todos = page.getByRole('region', { name: 'to do', exact: true });
-  await expect(todos.getByRole('group', { name: 'Return project', exact: true })).toBeVisible();
-  await todos.getByRole('button', { name: 'Expand Return project', exact: true }).click();
-  await expect(todos.getByRole('button', { name: 'Complete Return first', exact: true })).toBeVisible();
-  await expect(todos.getByRole('button', { name: 'Reopen Return second', exact: true })).toBeVisible();
+  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  await expect(tasks.getByRole('group', { name: 'Return project', exact: true })).toBeVisible();
+  await tasks.getByRole('button', { name: 'Expand Return project', exact: true }).click();
+  await expect(tasks.getByRole('button', { name: 'Complete Return first', exact: true })).toBeVisible();
+  await expect(tasks.getByRole('button', { name: 'Reopen Return second', exact: true })).toBeVisible();
 });
 
 test('a reopened root task animates into its saved position ahead of the composer', async ({ page, request }) => {
@@ -55,9 +55,9 @@ test('a reopened root task animates into its saved position ahead of the compose
   await page.goto('/');
   await page.getByRole('button', { name: 'Reopen Reopen arrival', exact: true }).click();
 
-  const todos = page.getByRole('region', { name: 'to do', exact: true });
-  const row = todos.locator(`[data-item-id="${task.id}"]`);
-  const composer = todos.locator('[data-item-id="draft"]');
+  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  const row = tasks.locator(`[data-item-id="${task.id}"]`);
+  const composer = tasks.locator('[data-item-id="draft"]');
   await expect(row).toBeVisible();
   await expect(row).toHaveCSS('animation-name', 'none');
   await expect(row).toHaveCSS('transition-property', 'opacity, transform');
@@ -74,20 +74,20 @@ test('a new subtask added in the logbook starts checked and can reopen its tree'
   await request.post(`/api/tasks/${parent.id}/complete`);
   await page.goto('/');
   await page.getByRole('group', { name: 'Extended project', exact: true }).click();
-  await page.getByRole('textbox', { name: 'Edit to-do', exact: true }).press('Meta+ArrowDown');
-  await page.getByRole('textbox', { name: 'Edit to-do', exact: true }).press('Enter');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  await page.getByRole('textbox', { name: 'Edit task', exact: true }).press('Meta+ArrowDown');
+  await page.getByRole('textbox', { name: 'Edit task', exact: true }).press('Enter');
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('Finished follow-up');
   await composer.press('Meta+ArrowDown');
   await composer.press('Tab');
-  const subtask = page.getByRole('textbox', { name: 'New completed subtask', exact: true });
+  const subtask = page.getByRole('textbox', { name: 'New completed child task', exact: true });
   await expect(subtask).toBeFocused();
   await subtask.press('Meta+ArrowDown');
   await subtask.press('Enter');
   await expect(page.getByRole('button', { name: 'Reopen Finished follow-up', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Reopen Finished follow-up', exact: true }).click();
-  const todos = page.getByRole('region', { name: 'to do', exact: true });
-  await expect(todos.getByRole('group', { name: 'Extended project', exact: true })).toBeVisible();
+  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  await expect(tasks.getByRole('group', { name: 'Extended project', exact: true })).toBeVisible();
 });
 
 test('completed tasks share note ordering and normal logbook text editing', async ({ page, request }) => {
@@ -106,7 +106,7 @@ test('completed tasks share note ordering and normal logbook text editing', asyn
   await expect(completed).toHaveCSS('text-decoration-line', 'none');
   expect(await completed.evaluate(el => getComputedStyle(el).color)).toBe(await before.evaluate(el => getComputedStyle(el).color));
   await completed.click();
-  const editor = page.getByRole('textbox', { name: 'Edit to-do', exact: true });
+  const editor = page.getByRole('textbox', { name: 'Edit task', exact: true });
   await editor.fill('Mixed edited task'); await editor.press('Enter');
   await expect(page.getByRole('group', { name: 'Mixed edited task', exact: true })).toBeVisible();
   await page.getByRole('group', { name: 'Mixed edited task', exact: true }).click();
@@ -114,7 +114,7 @@ test('completed tasks share note ordering and normal logbook text editing', asyn
   await expect(page.getByRole('group', { name: 'Mixed edited task', exact: true })).toHaveCount(0);
 });
 
-test('merging, grouped selection, and document undo cross bullet boundaries', async ({ page, request }) => {
+test('merging, grouped selection, and document undo cross entry boundaries', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   const parent = await (await request.post('/api/notes', { data: { date: today, content: 'Navigation root' } })).json();
   await request.post('/api/notes', { data: { date: today, content: 'Alpha', parent_id: parent.id } });
@@ -161,7 +161,7 @@ test('merging, grouped selection, and document undo cross bullet boundaries', as
 
 test('document undo ignores editable fields and repeating shortcuts', async ({ page }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('Protected from accidental undo');
   await composer.dispatchEvent('keydown', { key: 'z', code: 'KeyZ', metaKey: true, repeat: true, bubbles: true, cancelable: true });
   await expect(composer).toHaveText('Protected from accidental undo');
@@ -234,7 +234,7 @@ for (const key of ['Backspace', 'Delete'] as const) {
 
 test('an inline tag stays at its typed position without leaving a gap in the text', async ({ page, request }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.pressSequentially('Start #stable-chip finish');
   await expect(composer).toHaveText(/Start #stable-chip\sfinish/);
   await composer.press('Meta+ArrowDown');
@@ -267,7 +267,7 @@ test('medium layouts stay readable and selected tags stay in the hover sidebar',
   await page.getByRole('navigation', { name: 'Tags' }).hover();
   const tag = page.getByRole('button', { name: '#visible-filter', exact: true });
   await tag.click();
-  await page.getByRole('textbox', { name: 'New journal bullet', exact: true }).click();
+  await page.getByRole('textbox', { name: 'New note', exact: true }).click();
   await page.mouse.move(620, 800);
   await expect(tag).toBeHidden();
   await page.getByRole('navigation', { name: 'Tags' }).hover();

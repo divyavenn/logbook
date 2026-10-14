@@ -2,7 +2,7 @@ import { expect, test } from './fixtures';
 
 test('new entries appear without entrance motion or blinking', async ({ page }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('A steady arrival'); await composer.press('Enter');
   const entry = page.getByRole('group', { name: 'A steady arrival', exact: true }).locator('xpath=ancestor::li[1]');
   await expect(entry).toBeVisible();
@@ -21,10 +21,10 @@ test('midnight retires the previous day composer and leaves only today active', 
       : [{ date: '2026-09-21', focused_seconds: 0, notes: [] }, { date: '2026-09-20', focused_seconds: 0, notes: [] }],
   } }));
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toHaveCount(1);
   today = '2026-09-21';
   await page.clock.runFor(2000);
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toHaveCount(1);
   await expect(page.getByRole('region', { name: /2026-09-20/ }).getByRole('textbox')).toHaveCount(0);
 });
 
@@ -34,7 +34,7 @@ test('outdenting keeps the returned revision so the next edit saves normally', a
   await page.goto('/');
   await page.getByRole('button', { name: 'Expand Revision parent', exact: true }).click();
   await page.getByRole('group', { name: 'Revision child', exact: true }).click();
-  const editor = page.getByRole('textbox', { name: 'Edit to-do', exact: true });
+  const editor = page.getByRole('textbox', { name: 'Edit task', exact: true });
   await editor.press('Shift+Tab');
   await expect(editor).toBeFocused();
   await editor.fill('Revision child moved');
@@ -126,7 +126,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     const row = await (await request.post(`/api/${kind}`, { data: { date: today, content: 'Alpha **Omega**' } })).json();
     await page.goto('/');
     await page.locator(`[data-kind="${kind}"][data-item-id="${row.id}"] [role="group"]`).click();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await expect(editor).toBeFocused();
     await editor.evaluate(element => {
       const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!;
@@ -134,7 +134,7 @@ for (const kind of ['notes', 'tasks'] as const) {
       const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
     });
     await editor.press('Enter');
-    const next = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+    const next = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
     await expect(next).toBeFocused();
     await expect(next).toHaveText('Omega');
     await expect(next.locator('strong')).toHaveText('Omega');
@@ -157,9 +157,9 @@ for (const kind of ['notes', 'tasks'] as const) {
       if (nested) await page.getByRole('button', { name: `Expand Enter parent ${kind}`, exact: true }).click();
       const row = (id: number) => page.locator(`[data-kind="${kind}"][data-item-id="${id}"] [role="group"]`).first();
       await row(first.id).focus(); await row(first.id).press('Enter');
-      const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+      const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
       await expect(editor).toBeFocused(); await editor.press('Meta+ArrowDown'); await editor.press('Enter');
-      const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+      const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
       await expect(composer).toBeFocused(); await expect(composer).toBeEditable();
       await expect(composer.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', nested ? '1' : '0');
       const text = `Inserted ${nested ? 'nested' : 'root'} ${kind}`;
@@ -180,14 +180,14 @@ for (const kind of ['notes', 'tasks'] as const) {
     }
   });
 
-  test(`Backspace joins ${kind} and continues into the preceding bullet from an empty draft`, async ({ page, request }) => {
+  test(`Backspace joins ${kind} and continues into the preceding entry from an empty draft`, async ({ page, request }) => {
     const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
     const first = await (await request.post(`/api/${kind}`, { data: { date: today, content: `First ${kind}` } })).json();
     const second = await (await request.post(`/api/${kind}`, { data: { date: today, content: 'Second', after_id: first.id } })).json();
     await page.goto('/');
     const saved = (id: number) => page.locator(`[data-kind="${kind}"][data-item-id="${id}"] [role="group"]`).first();
     await saved(second.id).focus(); await saved(second.id).press('Enter');
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await expect(editor).toBeFocused();
     await editor.press('Meta+ArrowUp'); await editor.press('Backspace');
     await expect(editor).toHaveText(`First ${kind}Second`);
@@ -196,7 +196,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(editor).toHaveText(`First ${kind.slice(0, -1)}Second`);
     await editor.press('Meta+ArrowDown');
     await editor.press('Enter');
-    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
     await expect(composer).toBeFocused(); await composer.press('Backspace');
     await expect(editor).toBeFocused();
     await expect.poll(() => editor.evaluate(element => {
@@ -234,7 +234,7 @@ test('mobile insertParagraph advances from a saved entry without losing its text
       return { dispatched: element.dispatchEvent(event), prevented: event.defaultPrevented };
     });
     expect(result).toEqual({ dispatched: false, prevented: true });
-    const next = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
+    const next = mobile.getByRole('textbox', { name: 'New note', exact: true });
     await expect(next).toBeFocused();
     await expect(next.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
     await expect(mobile.getByRole('group', { name: 'Mobile saved entry with more text', exact: true })).toBeVisible();
@@ -251,7 +251,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
-    await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
     const rootIds = () => mobile.locator('[data-outline-kind="tasks"] > ul > li[data-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-item-id')));
     const preview = mobile.getByRole('group', { name: 'First mobile task', exact: true });
     await expect(preview).toBeInViewport();
@@ -259,7 +259,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
     await expect.poll(rootIds).toEqual([String(first.id), String(last.id), 'draft']);
     const previewBox = (await preview.boundingBox())!;
     await preview.click();
-    const editor = mobile.getByRole('textbox', { name: 'Edit to-do', exact: true });
+    const editor = mobile.getByRole('textbox', { name: 'Edit task', exact: true });
     await expect(editor).toBeFocused();
     const editorBox = (await editor.boundingBox())!;
     expect(editorBox.x).toBeCloseTo(previewBox.x, 0);
@@ -270,7 +270,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
       const event = new InputEvent('beforeinput', { bubbles: true, cancelable: true, composed: true, inputType: 'insertParagraph' });
       element.dispatchEvent(event);
     });
-    const next = mobile.getByRole('textbox', { name: 'New to-do', exact: true });
+    const next = mobile.getByRole('textbox', { name: 'New task', exact: true });
     await expect(next).toBeFocused();
     await expect.poll(rootIds).toEqual([String(first.id), 'draft', String(last.id)]);
 
@@ -290,7 +290,7 @@ test('mobile entry swipes change panes until a hold selects the entry for indent
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
-    await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
     const row = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
     await expect(row).toBeInViewport();
     await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
@@ -309,14 +309,14 @@ test('mobile entry swipes change panes until a hold selects the entry for indent
     await expect(mobile.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
     expect(((await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>).find(task => task.id === second.id)?.parent_id).toBeNull();
 
-    await mobile.getByRole('tab', { name: 'to do', exact: true }).click();
+    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
     await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
     await swipe(row, 90, 165, true);
     await expect.poll(async () => {
       const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
       return tasks.find(task => task.id === second.id)?.parent_id;
     }).toBe(first.id);
-    await expect(mobile.getByRole('tab', { name: 'to do', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(mobile.getByRole('tab', { name: 'tasks', exact: true })).toHaveAttribute('aria-selected', 'true');
 
     const expandParent = mobile.getByRole('button', { name: 'Expand Swipe parent', exact: true });
     await expect(expandParent).toBeVisible();
@@ -328,7 +328,7 @@ test('mobile entry swipes change panes until a hold selects the entry for indent
       const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
       return tasks.find(task => task.id === second.id)?.parent_id;
     }).toBeNull();
-    await expect(mobile.getByRole('tab', { name: 'to do', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(mobile.getByRole('tab', { name: 'tasks', exact: true })).toHaveAttribute('aria-selected', 'true');
   } finally {
     await context.close();
   }
@@ -339,7 +339,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
     const parent = await (await request.post(`/api/${kind}`, { data: { date: today, content: `Empty Tab parent ${kind}` } })).json();
     await page.goto('/');
-    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
 
     await composer.press('Tab');
 
@@ -370,7 +370,7 @@ test('inline tags keep their caret position and move with the trailing half of a
     const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
   });
   await editor.press('Enter');
-  const next = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const next = page.getByRole('textbox', { name: 'New note', exact: true });
   await expect(next.locator('[data-tag="move"]')).toBeVisible();
   await expect(next).toHaveText('#move after tail');
   await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
@@ -383,13 +383,13 @@ test('inline tags keep their caret position and move with the trailing half of a
   ]));
 });
 
-test('clicking beneath a past date opens an end bullet and abandoned empty drafts disappear', async ({ page, request }) => {
+test('clicking beneath a past date opens an end entry and abandoned empty drafts disappear', async ({ page, request }) => {
   const date = '2026-09-01';
   await request.post('/api/notes', { data: { date, content: 'Historical starting point' } });
   await page.goto('/');
   const day = page.getByRole('region', { name: new RegExp(`, ${date}$`) });
-  const add = day.getByRole('button', { name: 'Add journal bullet', exact: true });
-  const editor = day.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const add = day.getByRole('button', { name: 'Add note', exact: true });
+  const editor = day.getByRole('textbox', { name: 'New note', exact: true });
   await add.click(); await expect(editor).toBeFocused();
   await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
   await expect(editor).toBeHidden();
@@ -420,7 +420,7 @@ test('typing after Enter stays in the new row while the previous save is pending
     } else await route.continue();
   });
   await page.goto('/');
-  const editor = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const editor = page.getByRole('textbox', { name: 'New note', exact: true });
   await editor.fill('Before response');
   await editor.press('Enter');
   await expect.poll(() => held).toBe(true);
@@ -445,7 +445,7 @@ test('editing a saved entry after inserting before it uses its latest revision',
   await saved(first.id).click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
   await editor.press('Meta+ArrowDown'); await editor.press('Enter');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('Inserted before target');
 
   // Selecting the target saves the draft first. That insertion changes the
@@ -492,11 +492,13 @@ test('Backspace merges a completed task into the preceding note', async ({ page,
   await page.goto('/');
   const row = page.locator(`[data-kind="tasks"][data-item-id="${task.id}"] [role="group"]`).first();
   await row.focus(); await row.press('Enter');
-  const editor = page.getByRole('textbox', { name: 'Edit to-do', exact: true });
+  const editor = page.getByRole('textbox', { name: 'Edit task', exact: true });
   await editor.press('Meta+ArrowUp'); await editor.press('Backspace');
   await expect(page.getByRole('textbox', { name: 'Edit note', exact: true })).toHaveText('Mixed note mixed task');
-  const exported = await (await request.get('/api/export')).json();
-  expect(exported.tasks.some((row: { id: number }) => row.id === task.id)).toBe(false);
+  await expect.poll(async () => {
+    const exported = await (await request.get('/api/export')).json();
+    return exported.tasks.some((row: { id: number }) => row.id === task.id);
+  }).toBe(false);
 });
 
 test('recovery applies an earlier completed-task draft through the unified endpoint', async ({ page, request }) => {

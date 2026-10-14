@@ -181,7 +181,7 @@ def test_markdown_discovery_schema_and_content_negotiation(client):
     schema = client.get('/openapi.json').json()
     assert set(schema['paths']['/journal.md']['get']['responses']['200']['content']) == {'text/markdown'}
     assert schema['paths']['/api/agent/journal']['get']['responses']['200']['content']['application/json']['schema']['$ref'].endswith('/AgentJournal')
-    assert 'children' in schema['components']['schemas']['AgentBullet']['properties']
+    assert 'children' in schema['components']['schemas']['AgentEntry']['properties']
     as_json = client.get('/', params=query, headers={'Accept': 'application/json'})
     assert as_json.json() == client.get('/api/agent/journal', params=query).json()
     as_markdown = client.get('/', params=query, headers={'Accept': 'text/markdown'})

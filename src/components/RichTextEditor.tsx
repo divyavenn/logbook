@@ -4,7 +4,7 @@ import { Markdown } from '@tiptap/markdown';
 import type { Mark, Node as DocumentNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import styled from 'styled-components';
-import { formattingExtensions, documentWithTags, serializeBullet, richTextStyles, safeHref } from '../markdown';
+import { formattingExtensions, documentWithTags, serializeEntry, richTextStyles, safeHref } from '../markdown';
 import { Field } from '../styles';
 import { Modal } from './Modal';
 import { useJournalContext } from '../JournalContext';
@@ -14,10 +14,11 @@ import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
 import { domText, textPositions, type TextOffsets } from '../textSelection';
 import { Code2, Link2 } from 'lucide-react';
+import type { EntryFormat } from '../entryFormatting';
 
 const Surface = styled.div`
   flex: 1; min-width: 0;
-  .tiptap { ${richTextStyles}; min-height: var(--bullet-row-height, 40px); padding: var(--bullet-padding, 7px 0); outline: none; caret-color: var(--ink); }
+  .tiptap { ${richTextStyles}; min-height: var(--entry-row-height, 40px); padding: var(--entry-padding, 7px 0); outline: none; caret-color: var(--ink); }
   .tiptap:focus-visible { outline: none; }
 `;
 const LinkForm = styled.form`display: grid; gap: 8px; margin: 0;`;
@@ -117,7 +118,7 @@ type Props = {
   onDeleteEntry?: () => void;
 };
 
-export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry }: Props) {
+export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry }: Props) {
   const { tags } = useJournalContext();
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
@@ -126,7 +127,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
   const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry });
   callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry };
   const entrySelected = useRef(false);
-  const lastSnapshot = useRef(JSON.stringify([value, bulletTags]));
+  const lastSnapshot = useRef(JSON.stringify([value, entryTags]));
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
   const restoreLinkSelection = useRef<{ from: number; to: number } | null>(null);
@@ -143,12 +144,12 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
   const publishEditorValue = (currentEditor: Editor) => {
     commitTypedTags(currentEditor, true);
     const visiblyEmpty = !currentEditor.view.dom.textContent?.trim() && !currentEditor.view.dom.querySelector('[data-tag]');
-    const bullet = visiblyEmpty ? { content: '', tags: [] as string[] } : serializeBullet(currentEditor.getJSON());
-    callbacks.current.onChange(bullet.content, bullet.tags);
+    const entry = visiblyEmpty ? { content: '', tags: [] as string[] } : serializeEntry(currentEditor.getJSON());
+    callbacks.current.onChange(entry.content, entry.tags);
   };
   const editor: Editor | null = useEditor({
     extensions: [...formattingExtensions(), Markdown, TagDecorations],
-    content: documentWithTags(value, bulletTags), injectCSS: false, immediatelyRender: true,
+    content: documentWithTags(value, entryTags), injectCSS: false, immediatelyRender: true,
     // Literal punctuation stays literal; formatting comes from shortcuts or rich paste.
     enableInputRules: false, enablePasteRules: false,
     editable: !readOnly,
@@ -408,9 +409,9 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       // Formatting changes the document while leaving its full selection in
       // place. Keep the row highlight until typing or navigation collapses it.
       if (entrySelected.current && !entireEntrySelected(editor)) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
-      const bullet = serializeBullet(editor.getJSON());
-      lastSnapshot.current = JSON.stringify([bullet.content, bullet.tags]);
-      callbacks.current.onChange(bullet.content, bullet.tags);
+      const entry = serializeEntry(editor.getJSON());
+      lastSnapshot.current = JSON.stringify([entry.content, entry.tags]);
+      callbacks.current.onChange(entry.content, entry.tags);
       updateSuggestion(editor);
       commitTypedTags(editor);
     },
@@ -619,21 +620,21 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
       // At the end of a heading, quote, or code block, its empty closing
       // structure is not content to carry into the next entry.
       if (from === to && !text(to, doc.content.size)) return {
-        before: serializeBullet(doc.toJSON()), after: { content: '', tags: [] },
+        before: serializeEntry(doc.toJSON()), after: { content: '', tags: [] },
       };
       return {
-        before: text(0, from) ? serializeBullet(doc.cut(0, from).toJSON()) : { content: '', tags: [] },
-        after: text(to, doc.content.size) ? serializeBullet(doc.cut(to, doc.content.size).toJSON()) : { content: '', tags: [] },
+        before: text(0, from) ? serializeEntry(doc.cut(0, from).toJSON()) : { content: '', tags: [] },
+        after: text(to, doc.content.size) ? serializeEntry(doc.cut(to, doc.content.size).toJSON()) : { content: '', tags: [] },
       };
     },
   }), [editor]);
   useEffect(() => {
-    const snapshot = JSON.stringify([value, bulletTags]);
+    const snapshot = JSON.stringify([value, entryTags]);
     if (editor && snapshot !== lastSnapshot.current) {
-      editor.commands.setContent(documentWithTags(value, bulletTags), { emitUpdate: false });
+      editor.commands.setContent(documentWithTags(value, entryTags), { emitUpdate: false });
       lastSnapshot.current = snapshot;
     }
-  }, [editor, value, bulletTags]);
+  }, [editor, value, entryTags]);
   useEffect(() => { editor?.setEditable(!readOnly, false); }, [editor, readOnly]);
   useEffect(() => { editor?.view.dom.setAttribute('aria-label', label); }, [editor, label]);
 
@@ -642,7 +643,7 @@ export function RichTextEditor({ ref, value, tags: bulletTags, label, readOnly, 
     restoreLinkSelection.current = range;
   };
 
-  const formatSelection = (format: 'bold' | 'italic' | 'underline' | 'code') => {
+  const formatSelection = (format: EntryFormat) => {
     if (!editor) return;
     const chain = editor.chain().focus();
     if (format === 'bold') chain.toggleBold().run();

@@ -1,4 +1,7 @@
 import type { OutlineItem } from './types';
+import { MAX_ENTRY_DEPTH } from './entryTree';
+
+export const TASK_PROGRESS_MS = 240;
 
 export function completionPreview(rows: OutlineItem[], targets: Map<number, boolean>) {
   const preview = new Map(targets);
@@ -9,7 +12,7 @@ export function completionPreview(rows: OutlineItem[], targets: Map<number, bool
   }
   // Propagate leaf intents up the tree. Counts include children hidden by the
   // current view, while deltas only touch children the user actually changed.
-  for (let pass = 0; pass < 8; pass++) {
+  for (let pass = 0; pass < MAX_ENTRY_DEPTH; pass++) {
     let changed = false;
     for (const row of rows) {
       const group = children.get(row.id);

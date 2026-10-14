@@ -3,7 +3,7 @@ import { expect, test } from './fixtures';
 test('continuous typing keeps the new row and caret in the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 540 });
   await page.goto('/');
-  const editor = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const editor = page.getByRole('textbox', { name: 'New note', exact: true });
   await editor.click();
   for (let row = 1; row <= 30; row++) {
     await page.keyboard.type(`Line ${row}`);
@@ -45,7 +45,7 @@ for (const kind of ['notes', 'tasks'] as const) {
       await expect(page.getByRole('group', { name: 'First', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '1');
       await expect(page.getByRole('group', { name: 'Second', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '1');
       await expect(page.getByRole('group', { name: 'After', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
-      await expect(page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true })).toBeFocused();
+      await expect(page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true })).toBeFocused();
     } finally { release(); }
     await expect.poll(async () => {
       const rows = (await (await request.get('/api/export')).json())[kind] as Array<{ content: string; parent_id: number | null; position: number }>;
@@ -62,7 +62,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await page.getByRole('button', { name: 'Expand Root', exact: true }).click();
     await page.getByRole('button', { name: 'Expand Parent', exact: true }).click();
     await page.getByRole('group', { name: 'Child', exact: true }).click();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await page.keyboard.press('Meta+ArrowUp');
     await page.keyboard.press('Backspace');
     await expect(editor.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '1');
@@ -204,7 +204,7 @@ test('a failed save shakes its entry, logs the error, and recovers the queued te
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await page.route('**/api/document/edit*', route => route.fulfill({ status: 503, json: { detail: 'Save temporarily unavailable' } }));
   await page.goto('/');
-  const editor = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const editor = page.getByRole('textbox', { name: 'New note', exact: true });
   await editor.fill('Keep my unsaved entry');
   await editor.press('Enter');
   const entry = page.getByRole('group', { name: 'Keep my unsaved entry', exact: true }).locator('xpath=ancestor::li[1]');
@@ -338,7 +338,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await page.goto('/');
     const row = page.locator(`[data-kind="${kind}"][data-item-id="${item.id}"]`);
     await row.getByRole('group').click();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     const selectEntry = async () => {
       await editor.press('Meta+ArrowDown');
       const box = (await editor.boundingBox())!;
@@ -398,7 +398,7 @@ test('inline tag pills sit slightly lower in both saved text and the editor', as
 
 test('search can reopen during its exit transition without losing keyboard focus', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
   await page.keyboard.press('Meta+f');
   const dialog = page.getByRole('dialog', { name: 'Search journal', exact: true });
   const search = dialog.getByRole('textbox');
@@ -412,5 +412,5 @@ test('search can reopen during its exit transition without losing keyboard focus
   await expect(search).toHaveValue('Immediately usable');
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
 });

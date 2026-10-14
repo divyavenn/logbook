@@ -2,6 +2,7 @@
 import uuid
 
 from fastapi import HTTPException
+from .entry_kinds import api_kind
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS document_operations (
@@ -22,7 +23,7 @@ FIELDS = ['kind', 'content', 'tags', 'day_id', 'parent_id', 'position', 'created
 def snapshot(db):
     result = {'notes': {}, 'tasks': {}}
     for row in db.execute('SELECT * FROM entries'):
-        result['notes' if row['kind'] == 'note' else 'tasks'][row['id']] = dict(row)
+        result[api_kind(row['kind'])][row['id']] = dict(row)
     return result
 
 
@@ -74,7 +75,7 @@ def restore(db, operation, redo=False):
     for _, row in desired.items():
         if row is None:
             continue
-        actual = current['notes' if row['kind'] == 'note' else 'tasks'].get(row['id'])
+        actual = current[api_kind(row['kind'])].get(row['id'])
         restored = {**row, 'parent_id': None,
                     'revision': max(row.get('revision') or 1, (actual or {}).get('revision') or 0) + 1}
         db.execute(f"INSERT INTO entries({','.join(columns)}) VALUES ({','.join('?' for _ in columns)}) "

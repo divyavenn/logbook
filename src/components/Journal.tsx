@@ -7,11 +7,11 @@ import { Outline } from './Outline';
 import { useJournalContext } from '../JournalContext';
 import { compactViewport, fullViewport } from '../layout';
 
-const SectionTitle = styled.button`font-size: 20px; line-height: 1.4; margin-bottom: 4px; font-weight: 500; border: 0; padding: 0; height: calc(var(--todo-heading-height) - 4px); background: transparent; text-align: left;`;
-const TodoSection = styled.section`
-  align-self: stretch; display: flex; flex-direction: column; flex-shrink: 0; min-width: 180px; min-height: calc(var(--todo-heading-height) + 100px); width: 100%; padding: 0 12px 4px 8px; margin-bottom: 16px;
+const SectionTitle = styled.button`font-size: 20px; line-height: 1.4; margin-bottom: 4px; font-weight: 500; border: 0; padding: 0; height: calc(var(--task-heading-height) - 4px); background: transparent; text-align: left;`;
+const TaskSection = styled.section`
+  align-self: stretch; display: flex; flex-direction: column; flex-shrink: 0; min-width: 180px; min-height: calc(var(--task-heading-height) + 100px); width: 100%; padding: 0 12px 4px 8px; margin-bottom: 16px;
   @media ${compactViewport} {
-    min-width: 0; min-height: calc(var(--todo-heading-height) + 36px); padding: 0; margin: 0;
+    min-width: 0; min-height: calc(var(--task-heading-height) + 36px); padding: 0; margin: 0;
   }
 `;
 const DayBlock = styled.section<{ $today: boolean; $showHistory: boolean }>`
@@ -124,14 +124,14 @@ function linkLabel(value: string) {
   catch { return value; }
 }
 
-export function Todos({ tasks, refresh, notify }: { tasks: Task[] } & Actions) {
+export function Tasks({ tasks, refresh, notify }: { tasks: Task[] } & Actions) {
   const [folded, setFolded] = useState(false);
   const { target } = useJournalContext();
   const section = useRef<HTMLElement>(null);
   useEffect(() => { if (target?.kind === 'tasks') setFolded(false); }, [target]);
-  return <TodoSection ref={section} aria-labelledby="todo-title"><SectionTitle id="todo-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand to-dos' : 'Fold to-dos'} onClick={() => setFolded(value => !value)}>to do</SectionTitle>
+  return <TaskSection ref={section} aria-labelledby="task-title"><SectionTitle id="task-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand tasks' : 'Fold tasks'} onClick={() => setFolded(value => !value)}>tasks</SectionTitle>
     {!folded && <Body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} notify={notify} /></Body>}
-  </TodoSection>;
+  </TaskSection>;
 }
 
 export function Journal({ days, today, refresh, notify, openSessions, sessionsEnabled = true, showHistory = false, secondsForDay, loadMore, hasMore, scrollRoot }: {
@@ -171,7 +171,7 @@ export function Journal({ days, today, refresh, notify, openSessions, sessionsEn
       return <DayBlock key={day.date} $today={isToday || !!targeted} $showHistory={showHistory} aria-label={`${title}, ${day.date}`}
         onClick={event => {
           if ((event.target as Element).closest('button, a, input, [contenteditable], [role="group"], [data-calendar-event]') || window.getSelection()?.toString()) return;
-          window.dispatchEvent(new CustomEvent('still-new-bullet', { detail: `still-draft-${day.date}` }));
+          window.dispatchEvent(new CustomEvent('still-new-entry', { detail: `still-draft-${day.date}` }));
         }}>
         <DateHead type="button" data-focus-chrome aria-label={`Focus sessions for ${day.date}`} disabled={!sessionsEnabled}
           onClick={() => { if (sessionsEnabled) openSessions(day.date); }} title={sessionsEnabled ? 'View and edit focus sessions' : undefined}>

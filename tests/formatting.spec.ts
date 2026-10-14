@@ -14,7 +14,7 @@ async function saveAtEnd(editor: Locator) {
   await editor.press('Enter');
 }
 async function openTaskComposer(page: Page) {
-  await page.getByRole('button', { name: 'Add to-do', exact: true }).click();
+  await page.getByRole('button', { name: 'Add task', exact: true }).click();
 }
 async function rows(page: Page, kind: 'notes' | 'tasks') {
   return (await (await page.request.get('/api/export')).json())[kind] as { id: number; content: string; parent_id: number | null; source_task_id?: number }[];
@@ -31,7 +31,7 @@ test('mobile text selection exposes a compact formatting toolbar', async ({ brow
       } });
     });
     expect(await mobile.evaluate(() => [window.visualViewport?.offsetLeft, window.visualViewport?.width])).toEqual([32, 376]);
-    const editor = mobile.getByRole('textbox', { name: 'New journal bullet', exact: true });
+    const editor = mobile.getByRole('textbox', { name: 'New note', exact: true });
     await editor.fill('Mobile formatting reaches the right edge');
     await editor.press('Meta+ArrowRight');
     await editor.press('Shift+ArrowLeft');
@@ -70,7 +70,7 @@ for (const kind of ['notes', 'tasks'] as const) {
       await page.goto('/');
       const preview = page.locator(`[data-kind="${kind}"][data-item-id="${item.id}"] [role="group"]`).first();
       await preview.focus(); await preview.press('Enter');
-      const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+      const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
       await expect(editor).toBeFocused();
       await editor.press('Meta+ArrowUp');
       for (let i = 0; i < scenario.caret; i++) await editor.press('ArrowRight');
@@ -91,7 +91,7 @@ for (const kind of ['notes', 'tasks'] as const) {
   test(`formatting shortcuts render and persist as Markdown in ${kind}`, async ({ page }) => {
     await page.goto('/');
     if (kind === 'tasks') await openTaskComposer(page);
-    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
     const formats = [
       ['bold', 'Meta+b', 'strong', '**'],
       ['italic', 'Meta+i', 'em', '*'],
@@ -123,7 +123,7 @@ test('link shortcut inserts a labeled link at the caret or links selected text',
     readText: async () => { throw new DOMException('Denied', 'NotAllowedError'); },
   } }));
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await expect(composer).toBeFocused();
   await composer.press('Meta+k');
   const dialog = page.getByRole('dialog', { name: 'Link', exact: true });
@@ -219,7 +219,7 @@ test('link field prefills clipboard URLs and never overwrites typing', async ({ 
   });
   await page.goto('/');
   await openTaskComposer(page);
-  const composer = page.getByRole('textbox', { name: 'New to-do', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New task', exact: true });
   await composer.press('Meta+k');
   const dialog = page.getByRole('dialog', { name: 'Link', exact: true });
   const label = dialog.getByRole('textbox', { name: 'Link label', exact: true });
@@ -247,7 +247,7 @@ test('link field prefills clipboard URLs and never overwrites typing', async ({ 
 
 test('undo, redo and literal code backticks survive reload', async ({ page }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('Reversible formatting');
   await selectAll(composer); await composer.press('Meta+b');
   await expect(composer.locator('strong')).toHaveCount(1);
@@ -269,7 +269,7 @@ test('undo, redo and literal code backticks survive reload', async ({ page }) =>
 
 test('retired finish and clear-formatting shortcuts are inert', async ({ page }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('Keep this bold');
   await selectAll(composer);
   await composer.press('Meta+b');
@@ -283,7 +283,7 @@ test('retired finish and clear-formatting shortcuts are inert', async ({ page })
 
 test('plain text and safe pasted formatting retain content through editing and reload', async ({ page }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   const literal = 'Use <JIRA link>, <b>literal tag</b>, &amp;, **literal stars**, ++plain plus++, ~~plain tildes~~';
   await composer.fill(literal);
   await saveAtEnd(composer);
@@ -313,7 +313,7 @@ test('plain text and safe pasted formatting retain content through editing and r
 test('Ctrl shortcuts work on Windows and block formatting saves valid Markdown', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(navigator, 'platform', { get: () => 'Win32' }));
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await expect(composer).toBeFocused();
   await composer.fill('Windows bold');
   await composer.press('Control+a'); await composer.press('Control+b');
@@ -387,7 +387,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await page.mouse.down();
     await page.mouse.move(kind === 'tasks' ? points.x : points.end, points.y, { steps: 8 });
     await page.mouse.up();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await expect(editor).toBeFocused();
     await page.keyboard.press('Meta+Shift+c');
     await expect(editor.locator('code')).toHaveText('this code');
@@ -422,7 +422,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await urlField.fill('https://example.com/changed');
     await urlField.press('Enter');
     await expect(dialog).toBeHidden();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await expect(editor).toBeFocused();
     await expect(editor.getByRole('link')).toHaveText(`Short ${kind}`);
     await expect(editor.getByRole('link')).toHaveAttribute('href', 'https://example.com/changed');

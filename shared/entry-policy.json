@@ -1,0 +1,6 @@
+{
+  "max_depth": 8,
+  "max_content_length": 10000,
+  "max_tags": 50,
+  "max_client_id_length": 80
+}

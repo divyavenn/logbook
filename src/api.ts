@@ -1,4 +1,9 @@
-import type { CalendarEvent, CalendarEventResponse, CalendarSubscription, EntryKind, JournalData, JournalDay, JournalEntry, JournalResponse, OutlineItem } from './types';
+import * as decode from './apiDecoders';
+import { array, boolean, object, type Decoder } from './validation';
+import type { DocumentChange } from './entryChanges';
+import type { CalendarSubscription, CompletionResult, DocumentResult, JournalData, ReopenResult, SearchResults, Session, SessionInput, Stats } from './types';
+
+export { normalizeJournal } from './apiDecoders';
 
 export const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -10,93 +15,92 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, method: HttpMethod = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+async function request(path: string, method: HttpMethod = 'GET', body?: unknown, signal?: AbortSignal): Promise<unknown> {
   const url = new URL(`/api${path}`, window.location.origin);
-  url.searchParams.set('timezone', timezone);
+  if (!url.pathname.startsWith('/api/auth/')) url.searchParams.set('timezone', timezone);
   let response: Response;
   try {
     response = await fetch(url, {
-      method, headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined, signal,
+      method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body), signal,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new Error('Couldn’t connect. Your draft is safe on this device; try again in a moment.');
+    throw new Error('Couldn’t connect. Please try again in a moment.');
   }
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('still-auth-required'));
     const error: unknown = await response.json().catch(() => null);
-    const detail = typeof error === 'object' && error !== null && 'detail' in error ? (error as { detail?: unknown }).detail : null;
+    const detail = typeof error === 'object' && error !== null && 'detail' in error ? error.detail : null;
     throw new ApiError(typeof detail === 'string' ? detail : 'Couldn’t save that. Check the values and try again.', response.status);
   }
-  return response.status === 204 ? undefined as T : await response.json() as T;
+  return response.status === 204 ? undefined : response.json();
 }
 
-const normalizedItem = (item: OutlineItem): OutlineItem => ({
-  ...item,
-  parent_id: item.parent_id ?? null,
-  position: item.position ?? 0,
-  revision: item.revision ?? 1,
-  tags: item.tags ?? [],
-});
-
-const normalizedKind = (kind: OutlineItem['kind'], fallback: EntryKind): EntryKind =>
-  kind === 'task' || kind === 'tasks' ? 'tasks' : kind === 'note' || kind === 'notes' ? 'notes' : fallback;
-
-const normalizedEntry = (item: OutlineItem, fallback: EntryKind): JournalEntry => ({
-  ...normalizedItem(item),
-  kind: normalizedKind(item.kind, fallback),
-});
-
-const normalizedEvent = ({ links, ...event }: CalendarEventResponse): CalendarEvent => ({
-  ...event,
-  location: event.location ?? null,
-  description: event.description ?? null,
-  links: [...new Set(links ?? [])],
-});
-
-const normalizedDay = (day: JournalResponse['days'][number]): JournalDay => {
-  const entries = day.entries?.length
-    ? day.entries.map(item => normalizedEntry(item, 'notes'))
-    : [
-        ...(day.notes ?? []).map(item => normalizedEntry(item, 'notes')),
-        ...(day.tasks ?? []).map(item => normalizedEntry(item, 'tasks')),
-      ];
-  return {
-    date: day.date,
-    focused_seconds: day.focused_seconds ?? 0,
-    longest_session_seconds: day.longest_session_seconds ?? 0,
-    session_count: day.session_count ?? 0,
-    entries,
-    events: (day.events ?? []).map(normalizedEvent),
-  };
-};
-
-export function normalizeJournal(response: JournalResponse): JournalData {
-  return {
-    ...response,
-    tag: response.tag ?? null,
-    tags: response.tags ?? [],
-    tasks: (response.tasks ?? []).map(normalizedItem),
-    days: response.days.map(normalizedDay),
-  };
+async function decoded<T>(path: string, decoder: Decoder<T>, method: HttpMethod = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const value = await request(path, method, body, signal);
+  try { return decoder(value); }
+  catch (error) {
+    console.error('Unexpected API response:', path, error);
+    throw new Error('The server returned data we couldn’t read. Please try again.');
+  }
 }
+export function isAbortError(error: unknown): boolean { return error instanceof DOMException && error.name === 'AbortError'; }
 
 export type JournalQuery = { limit?: number; before?: string; on?: string; tag?: string | null };
-export async function getJournal(query: JournalQuery = {}): Promise<JournalData> {
+export async function getJournal(query: JournalQuery = {}, signal?: AbortSignal): Promise<JournalData> {
   const parameters = new URLSearchParams();
   if (query.limit !== undefined) parameters.set('limit', String(query.limit));
   if (query.before) parameters.set('before', query.before);
   if (query.on) parameters.set('on', query.on);
   if (query.tag) parameters.set('tag', query.tag);
   const suffix = parameters.size ? `?${parameters}` : '';
-  return normalizeJournal(await api<JournalResponse>(`/journal${suffix}`));
+  return decoded(`/journal${suffix}`, decode.normalizeJournal, 'GET', undefined, signal);
 }
 
-export const getCalendarSubscriptions = (): Promise<CalendarSubscription[]> => api('/calendars');
+export function editEntries(changes: readonly DocumentChange[], requestId: string): Promise<DocumentResult> {
+  return decoded('/document/edit', decode.documentResult, 'POST', { changes, request_id: requestId });
+}
+export function completeTask(id: number, expectedRevision?: number): Promise<CompletionResult> {
+  const query = expectedRevision === undefined ? '' : `?expected_revision=${expectedRevision}`;
+  return decoded(`/tasks/${id}/complete${query}`, decode.completion, 'POST');
+}
+export type ReopenTaskInput = { completed_at?: string | null; expected_revision?: number; record_history?: boolean };
+export function reopenTask(id: number, input: ReopenTaskInput = {}): Promise<ReopenResult> {
+  return decoded(`/tasks/${id}/reopen`, decode.reopen, 'POST', input);
+}
+export async function restoreDocumentHistory(operations: readonly string[], redo: boolean): Promise<void> {
+  await request('/document/history', 'POST', { operations, redo });
+}
+export function searchEntries(query: string, offset = 0, signal?: AbortSignal): Promise<SearchResults> {
+  return decoded(`/search?${new URLSearchParams({ q: query, offset: String(offset) })}`, decode.search, 'GET', undefined, signal);
+}
+export function getStats(start: string, end: string, signal?: AbortSignal): Promise<Stats> {
+  return decoded(`/stats?${new URLSearchParams({ start, end })}`, decode.stats, 'GET', undefined, signal);
+}
+export function getSessions(date: string, signal?: AbortSignal): Promise<Session[]> {
+  return decoded(`/sessions?${new URLSearchParams({ date })}`, value => array(value, decode.session), 'GET', undefined, signal);
+}
+export function saveSession(id: number | 'new', input: SessionInput): Promise<Session> {
+  return decoded(id === 'new' ? '/sessions' : `/sessions/${id}`, decode.session, id === 'new' ? 'POST' : 'PATCH', input);
+}
+export async function deleteSession(id: number): Promise<void> { await request(`/sessions/${id}`, 'DELETE'); }
+export function startTimer(): Promise<Session> { return decoded('/timer/start', decode.session, 'POST'); }
+export function stopTimer(id: number): Promise<Session> { return decoded('/timer/stop', decode.session, 'POST', { session_id: id }); }
+export const getCalendarSubscriptions = (): Promise<CalendarSubscription[]> => decoded('/calendars', value => array(value, decode.calendarSubscription));
 export const addCalendarSubscription = (url: string, signal?: AbortSignal): Promise<CalendarSubscription> =>
-  api('/calendars', 'POST', { url }, signal);
-export const deleteCalendarSubscription = (id: number): Promise<void> => api(`/calendars/${id}`, 'DELETE');
+  decoded('/calendars', decode.calendarSubscription, 'POST', { url }, signal);
+export async function deleteCalendarSubscription(id: number): Promise<void> { await request(`/calendars/${id}`, 'DELETE'); }
+export function getAuthStatus(signal?: AbortSignal): Promise<{ enabled: boolean; authenticated: boolean }> {
+  return decoded('/auth/status', value => {
+    const status = object(value);
+    return { enabled: boolean(status.enabled), authenticated: boolean(status.authenticated) };
+  }, 'GET', undefined, signal);
+}
+export async function login(password: string): Promise<boolean> {
+  try { await request('/auth/login', 'POST', { password }); return true; }
+  catch (error) { if (error instanceof ApiError && error.status === 401) return false; throw error; }
+}
 
 export function localDate(value = new Date()) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
@@ -117,43 +121,3 @@ export function timerDuration(seconds: number) {
   return [hours, minutes, total % 60].map(value => String(value).padStart(2, '0')).join(':');
 }
 export function errorMessage(error: unknown) { return error instanceof Error ? error.message : 'Something went wrong. Please try again.'; }
-
-let recovery: Promise<boolean> | null = null;
-/** Recover pending drafts whose composer disappeared at midnight or while the page was closed. */
-export function recoverEarlierDrafts(today: string): Promise<boolean> {
-  if (recovery) return recovery;
-  recovery = (async () => {
-    let changed = false;
-    for (const key of Object.keys(localStorage)) {
-      if (!/^still-draft-\d{4}-\d{2}-\d{2}$/.test(key) || key === `still-draft-${today}`) continue;
-      try {
-        const raw = localStorage.getItem(key);
-        if (!raw) continue;
-        const draft = JSON.parse(raw) as { id: number | null; kind?: 'notes' | 'tasks'; revision?: number | null; requestId?: string; content: string; saved: string; tags?: string[]; savedTags?: string[]; clientId?: string; parentId?: number | null; afterId?: number | null };
-        if (typeof draft.content !== 'string' || typeof draft.saved !== 'string') continue;
-        if (draft.content !== draft.saved || JSON.stringify(draft.tags ?? []) !== JSON.stringify(draft.savedTags ?? [])) {
-          if (!draft.clientId) draft.clientId = crypto.randomUUID();
-          if (!draft.requestId) draft.requestId = crypto.randomUUID();
-          localStorage.setItem(key, JSON.stringify(draft));
-          const kind = draft.kind === 'tasks' ? 'tasks' : 'notes';
-          const change = draft.content.trim() || draft.tags?.length ? {
-            kind, id: draft.id, content: draft.content, tags: draft.tags, date: key.slice('still-draft-'.length), client_id: draft.clientId,
-            parent_id: draft.parentId ?? null, after_id: draft.afterId ?? null, expected_revision: draft.revision ?? null,
-          } : { kind, id: draft.id, delete: true, expected_revision: draft.revision ?? null };
-          await api('/document/edit', 'POST', { changes: [change], request_id: draft.requestId });
-          changed = true;
-          // An unmounting composer can still be finishing a save. Do not erase newer recovery data.
-          const latest = localStorage.getItem(key);
-          if (latest === JSON.stringify(draft)) localStorage.removeItem(key);
-        } else {
-          localStorage.removeItem(key);
-        }
-      } catch {
-        // One malformed or conflicting draft must not block recovery of the rest.
-        continue;
-      }
-    }
-    return changed;
-  })().finally(() => { recovery = null; });
-  return recovery;
-}

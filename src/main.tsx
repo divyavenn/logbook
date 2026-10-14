@@ -5,8 +5,10 @@ import App from './App';
 import { GlobalStyle } from './styles';
 import { PasswordGate } from './components/PasswordGate';
 import { installTouchHaptics } from './haptics';
+import { getAuthStatus, login } from './api';
+import { storage } from './storage';
 
-document.documentElement.dataset.theme = localStorage.getItem('still-theme') === 'night' ? 'night' : 'day';
+document.documentElement.dataset.theme = storage.getItem('still-theme') === 'night' ? 'night' : 'day';
 
 const AppSurface = styled.div<{ $blurred: boolean; $blocked: boolean }>`
   min-height: 100dvh; filter: blur(${({ $blurred }) => $blurred ? '7px' : '0'});
@@ -20,9 +22,7 @@ function Root() {
   useEffect(() => installTouchHaptics(), []);
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/auth/status').then(async response => {
-      if (!response.ok) throw new Error();
-      const status = await response.json() as { enabled: boolean; authenticated: boolean };
+    getAuthStatus().then(status => {
       if (!cancelled) setState(status.enabled && !status.authenticated ? 'locked' : 'ready');
     }).catch(() => { if (!cancelled) setState('locked'); });
     const lock = () => setState('locked');
@@ -30,11 +30,7 @@ function Root() {
     return () => { cancelled = true; window.removeEventListener('still-auth-required', lock); };
   }, []);
   const authenticate = useCallback(async (password: string) => {
-    const response = await fetch('/api/auth/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }),
-    });
-    if (response.status === 401) return false;
-    if (!response.ok) throw new Error();
+    if (!await login(password)) return false;
     setState('unlocking'); return true;
   }, []);
   useEffect(() => {

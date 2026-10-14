@@ -9,6 +9,7 @@ import { JournalTag } from './tagEditor';
 import { DOMParser as ProseMirrorDOMParser, Slice } from '@tiptap/pm/model';
 import { Transform } from '@tiptap/pm/transform';
 import { textPositions } from './textSelection';
+import type { EntryFormat } from './entryFormatting';
 
 export function safeHref(value: string): string | null {
   if (/^[\s\u0000-\u001f]/.test(value) || /[\u0000-\u001f\u007f]/.test(value)) return null;
@@ -71,8 +72,8 @@ export function mergeMarkdown(first: string, second: string) {
   return markdownSerializer.serialize(schema.nodeFromJSON(a));
 }
 
-type SelectedBullet = { content: string; tags: string[]; from: number; to: number };
-export function replaceBulletRange(first: SelectedBullet, last: SelectedBullet, text = '', html = '', hiddenTags: string[] = []) {
+type SelectedEntry = { content: string; tags: string[]; from: number; to: number };
+export function replaceEntryRange(first: SelectedEntry, last: SelectedEntry, text = '', html = '', hiddenTags: string[] = []) {
   const a = schema.nodeFromJSON(documentWithTags(first.content, first.tags.filter(tag => !hiddenTags.includes(tag)), hiddenTags));
   const b = schema.nodeFromJSON(documentWithTags(last.content, last.tags.filter(tag => !hiddenTags.includes(tag)), hiddenTags));
   const doc = first === last ? a : schema.topNodeType.create(null, a.content.append(b.content));
@@ -83,17 +84,17 @@ export function replaceBulletRange(first: SelectedBullet, last: SelectedBullet, 
   const caret = tr.mapping.map(from, -1);
   if (html || text.includes('\n')) {
     // Keep clipboard whitespace until after the fragments have been joined.
-    // Serializing a standalone bullet first would trim its boundary spaces.
+    // Serializing a standalone entry first would trim its boundary spaces.
     const insert = pastedDocument(text, html);
     tr.replaceRange(caret, caret, Slice.maxOpen(insert.content));
   } else if (text) tr.insert(caret, schema.text(text, marks));
   const offset = textPositions(tr.doc).offsetAt(tr.mapping.map(from, 1));
-  const result = serializeBullet(tr.doc.toJSON());
+  const result = serializeEntry(tr.doc.toJSON());
   // A filtered-out tag is context, not selected text.
   result.tags = [...new Set([...result.tags, ...hiddenTags.filter(tag => first.tags.includes(tag) || last.tags.includes(tag))])];
   return { ...result, offset };
 }
-export function formatMarkdown(content: string, format: string) {
+export function formatMarkdown(content: string, format: EntryFormat) {
   const doc = parseMarkdown(content), texts: JSONContent[] = [];
   const visit = (node: JSONContent) => { if (node.type === 'text') texts.push(node); node.content?.forEach(visit); };
   visit(doc);
@@ -114,8 +115,8 @@ function pastedDocument(text: string, html: string) {
   });
   return schema.nodeFromJSON({ type: 'doc', content: [{ type: 'paragraph', content }] });
 }
-export function pastedBullet(text: string, html = '') {
-  return serializeBullet(pastedDocument(text, html).toJSON());
+export function pastedEntry(text: string, html = '') {
+  return serializeEntry(pastedDocument(text, html).toJSON());
 }
 function hideTags(node: JSONContent, hidden: Set<string>): JSONContent | null {
   if (node.type === 'codeBlock' || node.marks?.some(mark => mark.type === 'code' || mark.type === 'link')) return node;
@@ -189,7 +190,7 @@ export function documentWithTags(content: string, tags: string[], hiddenTags: st
   return document;
 }
 
-export function serializeBullet(document: JSONContent): { content: string; tags: string[] } {
+export function serializeEntry(document: JSONContent): { content: string; tags: string[] } {
   const tags = new Set<string>();
   const visit = (node: JSONContent): JSONContent | null => {
     if (node.type === 'journalTag') {
@@ -230,13 +231,13 @@ const inlineTagStyles = css`
 const TagBubble = styled.span`${inlineTagStyles}`;
 
 export const richTextStyles = css`
-  font-size: var(--bullet-size, 18px); line-height: var(--bullet-line-height, 1.4); overflow-wrap: anywhere; white-space: pre-wrap;
+  font-size: var(--entry-size, 18px); line-height: var(--entry-line-height, 1.4); overflow-wrap: anywhere; white-space: pre-wrap;
   .journal-tag { ${inlineTagStyles} }
   .journal-tag-query::after { content: var(--tag-completion, ''); color: var(--link); }
   .journal-tag.ProseMirror-selectednode { outline: none; color: var(--paper); }
   .journal-tag.ProseMirror-selectednode::before { background: var(--tag-ink); }
   p { margin: 0; }
-  p + p { margin-top: var(--bullet-paragraph-gap, .4em); }
+  p + p { margin-top: var(--entry-paragraph-gap, .4em); }
   strong { font-weight: 700; }
   em { font-style: italic; }
   u { text-underline-offset: 2px; }

@@ -9,11 +9,11 @@ for (const kind of ['notes', 'tasks'] as const) {
   test(`typed tags become removable inline atoms and metadata in ${kind}`, async ({ page, request }) => {
     await page.goto('/');
     if (kind === 'tasks') {
-      const add = page.getByRole('button', { name: 'Add to-do', exact: true });
+      const add = page.getByRole('button', { name: 'Add task', exact: true });
       await expect(add).toBeVisible();
       await add.click();
     }
-    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
     await composer.pressSequentially(`A tagged ${kind} #unique-${kind}`);
     await composer.press('Enter');
     await expect(composer).toHaveText('');
@@ -42,7 +42,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await page.reload();
     await expect(preview.locator('[data-tag]')).toBeVisible();
     await preview.click();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await editor.evaluate(element => {
       const tag = element.querySelector('[data-tag]')!;
       const range = document.createRange(); range.setStartAfter(tag); range.collapse(true);
@@ -65,7 +65,7 @@ for (const kind of ['notes', 'tasks'] as const) {
 
 test('arrow keys treat a freshly typed tag as one character without adding spaces', async ({ page, request }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.pressSequentially('before #cursor-chip');
   await expect(composer.locator('.journal-tag-query')).toHaveText('#cursor-chip');
   await composer.press('ArrowLeft');
@@ -90,7 +90,7 @@ test('autocomplete cycles existing tags with arrows and keeps code literal', asy
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Tag vocabulary', tags: ['alpha', 'alpine', 'alto', 'beta'] } });
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.pressSequentially('Read #');
   const suggestions = page.getByRole('listbox', { name: 'Tags', exact: true });
   await expect(composer.locator('.journal-tag-query')).toHaveText('#');
@@ -129,7 +129,7 @@ test('autocomplete cycles existing tags with arrows and keeps code literal', asy
   expect(a11y.violations).toEqual([]);
 });
 
-test('swipe tags page highlights the selected tag and filters to-dos and log entries', async ({ page, request }) => {
+test('swipe tags page highlights the selected tag and filters tasks and log entries', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Mobile focused note', tags: ['mobile'] } });
   await request.post('/api/notes', { data: { date: today, content: 'Other mobile note', tags: ['other'] } });
@@ -139,7 +139,7 @@ test('swipe tags page highlights the selected tag and filters to-dos and log ent
   await page.goto('/');
 
   const tabs = page.getByRole('tablist', { name: 'Mobile views' });
-  await expect(tabs.getByRole('tab')).toHaveText(['to do', 'log', 'tags']);
+  await expect(tabs.getByRole('tab')).toHaveText(['tasks', 'log', 'tags']);
   await tabs.getByRole('tab', { name: 'tags', exact: true }).click();
   const mobile = page.getByRole('button', { name: '#mobile', exact: true });
   await expect(mobile.locator('span')).toHaveCSS('translate', '0px -1px');
@@ -149,7 +149,7 @@ test('swipe tags page highlights the selected tag and filters to-dos and log ent
   await expect(mobile).toHaveCSS('border-color', 'rgb(24, 113, 186)');
   await expect(mobile).toHaveCSS('color', 'rgb(24, 113, 186)');
 
-  await tabs.getByRole('tab', { name: 'to do', exact: true }).click();
+  await tabs.getByRole('tab', { name: 'tasks', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Mobile focused task', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Other mobile task', exact: true })).toHaveCount(0);
   await tabs.getByRole('tab', { name: 'log', exact: true }).click();
@@ -205,7 +205,7 @@ test('hover tabs filter nested notes and tasks, hide the active tag, and preserv
     const data = await (await request.get('/api/export')).json();
     return data.notes.find((item: { id: number }) => item.id === parent.id)?.tags;
   }).toEqual(['focused']);
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('New filtered note'); await composer.press('Enter');
   await expect(page.getByRole('group', { name: 'New filtered note', exact: true })).toBeVisible();
   await expect.poll(async () => {
@@ -235,24 +235,24 @@ test('completion animates out and in while preserving tag metadata', async ({ pa
   expect(data.tasks.find((item: { id: number }) => item.id === task.id).tags).toEqual(['animation']);
 });
 
-test('to-do region expands for all rows and leaves a usable journal below', async ({ page, request }) => {
+test('task region expands for all rows and leaves a usable journal below', async ({ page, request }) => {
   for (let i = 0; i < 28; i++) await request.post('/api/tasks', { data: { content: `Expanding task ${i}` } });
   await page.goto('/');
-  const todos = page.getByRole('region', { name: 'to do', exact: true });
-  await expect(todos).toHaveCSS('overflow-y', 'visible');
-  const dimensions = await todos.evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight }));
+  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  await expect(tasks).toHaveCSS('overflow-y', 'visible');
+  const dimensions = await tasks.evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight }));
   expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client + 1);
   await page.getByRole('group', { name: 'Expanding task 27', exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('group', { name: 'Expanding task 27', exact: true })).toBeVisible();
   const journal = page.getByTestId('log-scroll');
   expect((await journal.boundingBox())!.height).toBeGreaterThanOrEqual(240);
   await journal.scrollIntoViewIfNeeded();
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeVisible();
 });
 
 test('a tag-only entry stores its inline atom, and deleting it removes the final tab', async ({ page, request }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.pressSequentially('#only-chip'); await composer.press('Enter');
   await expect(composer).toHaveText('');
   const preview = page.getByRole('group', { name: '#only-chip', exact: true });

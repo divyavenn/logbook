@@ -6,6 +6,12 @@ export type SelectionEdit = {
   focus?: () => void;
 };
 
+declare global {
+  interface WindowEventMap {
+    'still-replace-entry-selection': CustomEvent<SelectionEdit>;
+  }
+}
+
 // Capture every boundary before any outline changes its DOM. Different dates
 // remain separate outlines, but participate in the same selection gesture.
 export function selectedEntryRanges(): EntryRange[] {

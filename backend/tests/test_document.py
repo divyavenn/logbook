@@ -2,6 +2,35 @@ from .test_app import client  # noqa: F401
 from .test_hierarchy import create
 
 
+def test_invalid_timezone_is_rejected_before_opening_a_write_transaction(client, monkeypatch):
+    import backend.documents as documents
+
+    def unexpected_connection():
+        raise AssertionError('Invalid input must be rejected before opening storage')
+
+    monkeypatch.setattr(documents, 'connection', unexpected_connection)
+    response = client.post('/api/document/edit?timezone=not-a-zone', json={
+        'changes': [{'kind': 'tasks', 'content': 'Task'}],
+    })
+    assert response.status_code == 422
+
+
+def test_batch_and_individual_entry_inputs_share_limits(client):
+    for fields in [{'client_id': 'x' * 81}, {'parent_id': -1}, {'tags': ['tag'] * 51}]:
+        direct = client.post('/api/tasks', json={'content': 'Task', **fields})
+        grouped = client.post('/api/document/edit', json={'changes': [{'kind': 'tasks', 'content': 'Task', **fields}]})
+        assert direct.status_code == grouped.status_code == 422
+    assert client.post('/api/document/edit', json={'changes': [{'kind': 'tasks', 'id': 1, 'move': True, 'delete': True}]}).status_code == 422
+
+
+def test_entry_response_schemas_are_published(client):
+    paths = client.get('/openapi.json').json()['paths']
+    for path in ['/api/journal', '/api/search', '/api/tasks/{task_id}/complete', '/api/document/edit']:
+        method = 'get' if path in ['/api/journal', '/api/search'] else 'post'
+        schema = paths[path][method]['responses']['200']['content']['application/json']['schema']
+        assert '$ref' in schema
+
+
 def batch(client, changes):
     response = client.post('/api/document/edit', json={'changes': changes})
     assert response.status_code == 200, response.text

@@ -12,7 +12,7 @@ test('tag collection opens only in the outer half-margin, dims the page, and ret
     } });
   });
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
   const main = (await page.getByRole('main').boundingBox())!;
   const rightMargin = 1280 - main.x - main.width;
   expect(main.x).toBeGreaterThan(rightMargin);

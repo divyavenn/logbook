@@ -1,22 +1,17 @@
 import { ApiError } from './api';
 import { editDocument } from './documentHistory';
-import type { EntryKind, OutlineItem } from './types';
+import type { OutlineItem } from './types';
+import type { DocumentChange, OutlineChange } from './entryChanges';
+import { orderedEntries as ordered } from './entryTree';
+import { readOutlineRecovery, type PendingEdit } from './outlineRecovery';
+import { storage } from './storage';
+export type { OutlineChange } from './entryChanges';
 
-export type OutlineChange = {
-  id: number; kind: EntryKind; create?: boolean; delete?: boolean; move?: boolean;
-  content?: string; tags?: string[]; date?: string; client_id?: string;
-  parent_id?: number | null; after_id?: number | null; before_id?: number | null;
-  target_kind?: EntryKind;
-  allow_empty?: boolean;
-};
-type Edit = { changes: OutlineChange[]; key: string; requestId: string };
-const ordered = (rows: OutlineItem[]) => [...rows].sort((a, b) => a.position - b.position || a.id - b.id);
-
-// Structural editing is local and synchronous. The durable queue sends each
-// operation in order, resolving new row IDs and sibling revisions as it goes.
+// Show edits right away, then save them in order. Replace temporary entry IDs
+// with server IDs before sending the next edit.
 export class OutlineDocument {
   private base: OutlineItem[] = [];
-  private edits: Edit[] = [];
+  private edits: PendingEdit[] = [];
   private aliases = new Map<number, number>();
   private pending: Promise<void> | null = null;
   private nextId = -1;
@@ -28,14 +23,10 @@ export class OutlineDocument {
 
   constructor(key: string) {
     this.storageKey = `still-pending-edits:${key}`;
-    try {
-      const saved = JSON.parse(localStorage.getItem(this.storageKey) ?? 'null');
-      if (saved && Array.isArray(saved.edits) && Array.isArray(saved.aliases) && Number.isInteger(saved.nextId)) {
-        this.edits = saved.edits;
-        this.aliases = new Map(saved.aliases);
-        this.nextId = saved.nextId;
-      }
-    } catch { /* An invalid recovery record must not prevent opening the list. */ }
+    const saved = readOutlineRecovery(this.storageKey);
+    this.edits = saved.edits;
+    this.aliases = new Map(saved.aliases);
+    this.nextId = saved.nextId;
   }
 
   resolve = (id: number | null): number | null => id === null ? null : this.aliases.get(id) ?? id;
@@ -45,18 +36,18 @@ export class OutlineDocument {
   allocate() { return this.nextId--; }
   rebase(items: OutlineItem[]) {
     this.base = items;
-    // A reload may happen after the server committed a create but before its
-    // response arrived. Match its idempotency key before painting a second row.
+    // The server may have saved a new entry before the page closed. Match its
+    // client ID so restoring the pending edit does not show the entry twice.
     for (const edit of this.edits) for (const change of edit.changes) {
-      if (!change.create || change.id >= 0 || !change.client_id || this.aliases.has(change.id)) continue;
+      if (change.type !== 'create' || change.id >= 0 || this.aliases.has(change.id)) continue;
       const existing = items.find(row => row.client_id === change.client_id);
       if (existing) this.aliases.set(change.id, existing.id);
     }
     return this.items();
   }
   private persist() {
-    if (this.edits.length) localStorage.setItem(this.storageKey, JSON.stringify({ edits: this.edits, aliases: [...this.aliases], nextId: this.nextId }));
-    else localStorage.removeItem(this.storageKey);
+    if (this.edits.length) storage.setItem(this.storageKey, JSON.stringify({ version: 2, edits: this.edits, aliases: [...this.aliases], nextId: this.nextId }));
+    else storage.removeItem(this.storageKey);
   }
 
   items() {
@@ -68,7 +59,9 @@ export class OutlineDocument {
       const siblings = group(parentId, row.id);
       const before = siblings.findIndex(item => item.id === beforeId);
       const after = siblings.findIndex(item => item.id === afterId);
-      const index = before >= 0 ? before : after >= 0 ? after + 1 : siblings.length;
+      let index = siblings.length;
+      if (before >= 0) index = before;
+      else if (after >= 0) index = after + 1;
       row.parent_id = parentId;
       siblings.splice(index, 0, row);
       siblings.forEach((item, position) => { item.position = position; });
@@ -77,7 +70,7 @@ export class OutlineDocument {
     for (const edit of this.edits) for (const change of edit.changes) {
       const id = this.resolve(change.id)!;
       let row = rows.find(item => item.id === id);
-      if (change.delete) {
+      if (change.type === 'delete') {
         if (!row) continue;
         const children = group(id);
         const siblings = group(row.parent_id).flatMap(item => item.id === id ? children : [item]);
@@ -85,7 +78,7 @@ export class OutlineDocument {
         rows = rows.filter(item => item.id !== id);
         continue;
       }
-      if (!row && change.create) {
+      if (!row && change.type === 'create') {
         row = { id, kind: change.kind, content: change.content ?? '', tags: change.tags ?? [],
           parent_id: this.resolve(change.parent_id ?? null), position: rows.length, revision: 1, client_id: change.client_id };
         const parent = rows.find(item => item.id === row!.parent_id);
@@ -93,11 +86,11 @@ export class OutlineDocument {
         rows.push(row);
       }
       if (!row) continue;
-      if (change.content !== undefined) row.content = change.content;
-      if (change.tags) row.tags = change.tags;
-      if (change.create || change.move) {
+      if ('content' in change) row.content = change.content;
+      if ('tags' in change && change.tags) row.tags = change.tags;
+      if (change.type === 'create' || change.type === 'move') {
         place(row, this.resolve(change.parent_id ?? null), this.resolve(change.after_id ?? null), this.resolve(change.before_id ?? null));
-        if (change.move && change.target_kind) {
+        if (change.type === 'move') {
           const parent = rows.find(item => item.id === row!.parent_id);
           const tree = new Set([row.id]);
           for (let added = true; added;) {
@@ -132,7 +125,7 @@ export class OutlineDocument {
     });
   }
 
-  enqueue(changes: OutlineChange[], key = crypto.randomUUID()) {
+  enqueue(changes: OutlineChange[], key: string = crypto.randomUUID()) {
     if (!changes.length) return;
     this.edits.push({ changes, key, requestId: crypto.randomUUID() });
     this.persist();
@@ -145,17 +138,7 @@ export class OutlineDocument {
       while (this.edits.length) {
         const edit = this.edits[0];
         try {
-          const send = () => editDocument(edit.changes.map(change => {
-            const id = this.resolve(change.id)!;
-            const creating = change.create && id < 0;
-            if (id < 0 && !creating) throw new Error('The preceding entry has not saved yet.');
-            const parentId = this.resolve(change.parent_id ?? null), afterId = this.resolve(change.after_id ?? null), beforeId = this.resolve(change.before_id ?? null);
-            if ([parentId, afterId, beforeId].some(value => value !== null && value < 0)) throw new Error('The preceding entry has not saved yet.');
-            const latest = this.base.find(row => row.id === id);
-            const { create: _create, target_kind: _targetKind, ...payload } = change;
-            return { ...payload, id: creating ? null : id, parent_id: parentId, after_id: afterId, before_id: beforeId,
-              expected_revision: creating ? undefined : latest?.revision };
-          }), edit.key, edit.requestId);
+          const send = () => editDocument(edit.changes.map(change => this.requestChange(change)), edit.key, edit.requestId);
           let results;
           try { results = await send(); }
           catch (error) {
@@ -166,12 +149,12 @@ export class OutlineDocument {
           }
           results.forEach((row, index) => {
             const change = edit.changes[index];
-            if (row && change.create && change.id < 0) this.aliases.set(change.id, row.id);
+            if (row && change.type === 'create' && change.id < 0) this.aliases.set(change.id, row.id);
           });
           this.persist();
           this.remapped();
-          // Keep the optimistic operation until the server snapshot is in
-          // React; otherwise an acknowledged row can blink out for one frame.
+          // Keep the local edit visible until React has the saved copy.
+          // Removing it sooner can make an entry briefly disappear.
           await this.refresh();
           await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
           this.edits.shift();
@@ -185,5 +168,22 @@ export class OutlineDocument {
     };
     this.pending = work().finally(() => { this.pending = null; });
     return this.pending;
+  }
+
+  private requestChange(change: OutlineChange): DocumentChange {
+    const id = this.resolve(change.id)!;
+    const creating = change.type === 'create' && id < 0;
+    if (id < 0 && !creating) throw new Error('The preceding entry has not saved yet.');
+    const identity = { id, kind: change.kind, expected_revision: this.base.find(row => row.id === id)?.revision };
+    if (change.type === 'delete') return { ...identity, delete: true };
+    if (change.type === 'update') return { ...identity, content: change.content, tags: change.tags, allow_empty: change.allow_empty };
+    const parent_id = this.resolve(change.parent_id ?? null);
+    const after_id = this.resolve(change.after_id ?? null);
+    const before_id = this.resolve(change.before_id ?? null);
+    if ([parent_id, after_id, before_id].some(value => value !== null && value < 0)) throw new Error('The preceding entry has not saved yet.');
+    if (change.type === 'move') return { ...identity, move: true, parent_id, after_id, before_id };
+    const content = { content: change.content, tags: change.tags, allow_empty: change.allow_empty };
+    if (!creating) return { ...identity, ...content };
+    return { kind: change.kind, ...content, parent_id, after_id, before_id, date: change.date, client_id: change.client_id };
   }
 }

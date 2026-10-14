@@ -16,6 +16,7 @@ test('timer responds before the network and touch controls request haptic feedba
   });
   await page.goto('/');
   const start = page.getByRole('button', { name: 'Start focus timer', exact: true });
+  await expect(start).not.toHaveAttribute('aria-disabled', 'true');
   await start.evaluate(element => element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', pointerId: 1, isPrimary: true })));
   expect(await page.evaluate(() => (window as typeof window & { hapticPatterns: VibratePattern[] }).hapticPatterns)).toEqual([14]);
   await start.click();

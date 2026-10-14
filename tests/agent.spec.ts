@@ -32,7 +32,7 @@ test('a reader without JavaScript can discover and query the complete saved docu
 
 test('agent discovery adds no visible controls to the interactive document', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
   await expect(page.getByRole('link', { name: 'Read the logbook', exact: true })).toHaveCount(0);
   await expect(page.locator('head link[rel="service-desc"]')).toHaveAttribute('href', '/openapi.json');
 });

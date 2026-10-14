@@ -1,7 +1,7 @@
 import { expect, test } from './fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
-test('to-do text stays vertically aligned when editing', async ({ page, request }) => {
+test('task text stays vertically aligned when editing', async ({ page, request }) => {
   await request.post('/api/tasks', { data: { content: 'Keep this line still' } });
   await page.goto('/');
   const row = page.getByRole('group', { name: 'Keep this line still', exact: true });
@@ -15,12 +15,12 @@ test('to-do text stays vertically aligned when editing', async ({ page, request 
   });
   const before = await textTop(row);
   await row.click();
-  const editor = page.getByRole('textbox', { name: 'Edit to-do', exact: true });
+  const editor = page.getByRole('textbox', { name: 'Edit task', exact: true });
   await expect(editor).toBeVisible();
   expect(await textTop(editor)).toBeCloseTo(before, 0);
 });
 
-test('nested to-dos use a clear indent and reveal progressively', async ({ page, request }) => {
+test('nested tasks use a clear indent and reveal progressively', async ({ page, request }) => {
   const parent = await (await request.post('/api/tasks', { data: { content: 'Indented parent' } })).json();
   await request.post('/api/tasks', { data: { content: 'First nested task', parent_id: parent.id } });
   await request.post('/api/tasks', { data: { content: 'Second nested task', parent_id: parent.id } });
@@ -37,22 +37,22 @@ test('nested to-dos use a clear indent and reveal progressively', async ({ page,
   expect(await second.locator('xpath=..').evaluate(element => getComputedStyle(element).transitionDelay)).toContain('0.035s');
 });
 
-test('untouched bullets and to-dos disappear on blur or Backspace', async ({ page, request }) => {
+test('untouched bullets and tasks disappear on blur or Backspace', async ({ page, request }) => {
   await page.goto('/');
-  const note = page.getByRole('textbox', { name: 'New journal bullet', exact: true });
+  const note = page.getByRole('textbox', { name: 'New note', exact: true });
   await note.press('Backspace');
   await expect(note).toBeHidden();
-  await page.getByRole('region', { name: /^Today,/ }).getByRole('button', { name: 'Add journal bullet', exact: true }).click();
+  await page.getByRole('region', { name: /^Today,/ }).getByRole('button', { name: 'Add note', exact: true }).click();
   await expect(note).toBeFocused();
   await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
   await expect(note).toBeHidden();
 
-  const task = page.getByRole('textbox', { name: 'New to-do', exact: true });
-  await page.getByRole('button', { name: 'Add to-do', exact: true }).click();
+  const task = page.getByRole('textbox', { name: 'New task', exact: true });
+  await page.getByRole('button', { name: 'Add task', exact: true }).click();
   await expect(task).toBeFocused();
   await task.press('Backspace');
   await expect(task).toBeHidden();
-  await page.getByRole('button', { name: 'Add to-do', exact: true }).click();
+  await page.getByRole('button', { name: 'Add task', exact: true }).click();
   await expect(task).toBeFocused();
   await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
   await expect(task).toBeHidden();
@@ -116,13 +116,13 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(childRow).toBeVisible();
     await expect(page.getByRole('group', { name: `Folded grandchild ${kind}`, exact: true })).toBeHidden();
     await childRow.click();
-    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit to-do', exact: true });
+    const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
     await expect(editor).toBeFocused();
     await editor.fill(`Saved child ${kind}`);
     await page.getByRole('button', { name: `Collapse Fold ${kind}`, exact: true }).click();
     await expect(expand).toHaveAttribute('aria-expanded', 'false');
     await expect(editor).toBeHidden();
-    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New journal bullet' : 'New to-do', exact: true });
+    const composer = page.getByRole('textbox', { name: kind === 'notes' ? 'New note' : 'New task', exact: true });
     await expect(composer.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
     const stored = (await (await request.get('/api/export')).json())[kind];
     expect(stored.find((row: { id: number }) => row.id === child.id).content).toBe(`Saved child ${kind}`);
@@ -136,11 +136,11 @@ for (const kind of ['notes', 'tasks'] as const) {
   });
 }
 
-test('write, autosave, complete a to-do, use the timer, and edit sessions', async ({ page, request }) => {
+test('write, autosave, complete a task, use the timer, and edit sessions', async ({ page, request }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet' });
+  const composer = page.getByRole('textbox', { name: 'New note' });
   await expect(composer).toBeFocused();
   await expect(page.locator('link[rel="stylesheet"]')).toHaveCount(0);
   await expect(page.getByRole('main').locator('svg, img')).toHaveCount(0);
@@ -160,10 +160,10 @@ test('write, autosave, complete a to-do, use the timer, and edit sessions', asyn
   await expect(composer).toHaveText('');
   await expect(page.getByRole('group', { name: 'Made space for the important work.', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Add to-do', exact: true }).click();
-  await page.getByRole('textbox', { name: 'New to-do' }).fill('overdue trainings');
-  await page.getByRole('textbox', { name: 'New to-do' }).press('Meta+ArrowDown');
-  await page.getByRole('textbox', { name: 'New to-do' }).press('Enter');
+  await page.getByRole('button', { name: 'Add task', exact: true }).click();
+  await page.getByRole('textbox', { name: 'New task' }).fill('overdue trainings');
+  await page.getByRole('textbox', { name: 'New task' }).press('Meta+ArrowDown');
+  await page.getByRole('textbox', { name: 'New task' }).press('Enter');
   await page.getByRole('button', { name: 'Complete overdue trainings', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Complete overdue trainings', exact: true })).toHaveCount(0);
   await expect(page.getByRole('group', { name: 'overdue trainings', exact: true })).toBeVisible();
@@ -216,7 +216,7 @@ test('write, autosave, complete a to-do, use the timer, and edit sessions', asyn
 
 test('recovers a failed autosave without losing the draft', async ({ page }) => {
   await page.goto('/');
-  const composer = page.getByRole('textbox', { name: 'New journal bullet' });
+  const composer = page.getByRole('textbox', { name: 'New note' });
   await expect(composer).toBeFocused();
   await page.route('**/api/document/edit?*', route => route.abort());
   await composer.fill('This thought stays safe through a connection failure.');
@@ -237,28 +237,28 @@ test('narrow screens use the same three-pane journal as short screens', async ({
   previous.setUTCDate(previous.getUTCDate() - 1);
   await request.post('/api/notes', { data: { date: previous.toISOString().slice(0, 10), content: 'Older narrow note' } });
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
   await page.screenshot({ path: 'test-results/journal-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 440, height: 700 });
   await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
   await expect(page.getByRole('region', { name: /^Today,/ })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Older narrow note', exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeVisible();
-  await page.getByRole('tab', { name: 'to do', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'to do', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Add to-do', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
+  await page.getByRole('tab', { name: 'tasks', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'tasks', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add task', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'log', exact: true }).click();
   await page.screenshot({ path: 'test-results/compact-notes.png' });
   await page.setViewportSize({ width: 260, height: 180 });
   await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
-  await expect(page.getByRole('region', { name: /^Today,/ }).getByRole('button', { name: 'Add journal bullet', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: /^Today,/ }).getByRole('button', { name: 'Add note', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Start focus timer' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open focus statistics' })).toBeHidden();
   expect(await page.locator('body').evaluate(el => el.scrollWidth)).toBeLessThanOrEqual(260);
   await page.screenshot({ path: 'test-results/timer-only.png' });
 });
 
-test('creates a fresh day at midnight and focuses its new bullet', async ({ page }) => {
+test('creates a fresh day at midnight and focuses its new entry', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-16T23:59:58-07:00') });
   await page.route('**/api/journal?*', async route => {
     const today = await page.evaluate(() => {
@@ -271,12 +271,12 @@ test('creates a fresh day at midnight and focuses its new bullet', async ({ page
   await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-16' })).toBeVisible();
   await page.clock.runFor(3000);
   await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-17' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
 });
 
 test('journal and statistics meet automated accessibility checks', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
   await page.waitForTimeout(160); // Let initial hover/color transitions reach their contrast-stable state.
   const journal = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
   expect(journal.violations).toEqual([]);
@@ -302,7 +302,7 @@ test('recovers a draft from an earlier day into its original date', async ({ pag
   await page.goto('/');
   await expect(page.getByRole('group', { name: 'A thought from before midnight.', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: new RegExp(day) }).getByRole('group', { name: 'A thought from before midnight.', exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
 });
 
 test('loads older days automatically and saves edits to historical notes', async ({ page, request }) => {
@@ -317,10 +317,10 @@ test('loads older days automatically and saves edits to historical notes', async
     if (url.pathname === '/api/journal') pageRequests.push(url);
   });
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New journal bullet' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
   await page.waitForTimeout(350);
   const timer = page.getByRole('button', { name: 'Start focus timer' });
-  const todo = page.getByRole('region', { name: 'to do', exact: true });
+  const todo = page.getByRole('region', { name: 'tasks', exact: true });
   const main = await page.getByRole('main').boundingBox();
   const timerBefore = await timer.boundingBox();
   const todoBefore = await todo.boundingBox();

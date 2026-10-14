@@ -1,7 +1,8 @@
-"""Tags are JSON arrays on bullets; Markdown content contains only the note text."""
+"""Tags are JSON arrays on entries; Markdown content contains only the text."""
 import json
 import re
 import unicodedata
+from .entry_kinds import EntryKind, stored_kind
 
 NAME = re.compile(r'[\w][\w-]{0,63}', re.UNICODE)
 
@@ -17,7 +18,7 @@ def normalize_tags(values):
     return list(dict.fromkeys(normalize_tag(value) for value in values))
 
 
-def bullet_dict(row):
+def entry_dict(row):
     result = dict(row)
     if 'tags' in result and isinstance(result['tags'], str):
         result['tags'] = json.loads(result['tags'])
@@ -28,7 +29,7 @@ def initialize_tags(db):
     if db.execute('PRAGMA user_version').fetchone()[0] >= 5:
         return
     # Version 4's experimental index never changed user content. Replace it
-    # with the requested per-bullet tag arrays, preserving existing text.
+    # with the requested per-entry tag arrays, preserving existing text.
     for table in ('notes', 'tasks'):
         for suffix in ('insert', 'update', 'delete'):
             db.execute(f'DROP TRIGGER IF EXISTS {table}_tag_{suffix}')
@@ -37,7 +38,7 @@ def initialize_tags(db):
     for table in ('notes', 'tasks'):
         if 'tags' not in {r['name'] for r in db.execute(f'PRAGMA table_info({table})')}:
             db.execute(f"ALTER TABLE {table} ADD COLUMN tags TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(tags) AND json_type(tags) = 'array')")
-    # A bullet can consist only of tag chips. The API validates content OR tags.
+    # An entry can contain only tags. The API checks for text or tags.
     old_sql = {table: db.execute('SELECT sql FROM sqlite_master WHERE name = ?', (table,)).fetchone()[0] for table in ('tasks', 'notes')}
     if any('CHECK(length(trim(content)) > 0)' in sql for sql in old_sql.values()):
         definitions = [row[0] for row in db.execute("SELECT sql FROM sqlite_master WHERE tbl_name IN ('notes','tasks') AND type IN ('index','trigger') AND sql IS NOT NULL")]
@@ -52,7 +53,7 @@ def initialize_tags(db):
         for sql in definitions:
             db.execute(sql)
         if db.execute('PRAGMA foreign_key_check').fetchall():
-            raise RuntimeError('Tag migration would break a bullet reference')
+            raise RuntimeError('Tag migration would break an entry reference')
     db.execute('PRAGMA user_version = 5')
 
 
@@ -64,8 +65,8 @@ def list_tags(db):
         ) GROUP BY name ORDER BY name''')]
 
 
-def matching_ids(db, table, name):
-    kind = 'note' if table == 'notes' else 'task'
+def matching_ids(db, table: EntryKind, name: str) -> list[int]:
+    kind = stored_kind(table)
     return [r[0] for r in db.execute('''WITH RECURSIVE matching(id) AS (
         SELECT item.id FROM entries item WHERE item.kind = ? AND EXISTS(SELECT 1 FROM json_each(item.tags) WHERE value = ?)
         UNION SELECT child.id FROM entries child JOIN matching ON child.parent_id = matching.id WHERE child.kind = ?

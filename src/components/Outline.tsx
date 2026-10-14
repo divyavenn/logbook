@@ -1,180 +1,25 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import styled, { css } from 'styled-components';
-import { useJournalContext, registerDraftFlush } from '../JournalContext';
-import { api } from '../api';
+import { useJournalContext } from '../JournalContext';
 import type { EntryKind, OutlineItem } from '../types';
 import { VisuallyHidden } from '../styles';
-import { MarkdownContent, markdownText, richTextStyles, mergeMarkdown, formatMarkdown, pastedBullet, replaceBulletRange } from '../markdown';
+import { MarkdownContent, markdownText, mergeMarkdown, formatMarkdown, pastedEntry, replaceEntryRange } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
-import { documentUndo, editDocument, historyShortcutDirection, recordEdit } from '../documentHistory';
-import { compactViewport } from '../layout';
-import { haptic } from '../haptics';
+import { documentUndo, editDocument, historyShortcutDirection } from '../documentHistory';
+import { useEntryGestures, type EntrySelection } from '../useEntryGestures';
 import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
 import { domTextOffset } from '../textSelection';
-import { selectedEntryRanges, replaceEntrySelection, type SelectionEdit } from '../entrySelection';
-import { completionPreview, waitForMotion } from '../taskCompletion';
+import { selectedEntryRanges } from '../entrySelection';
+import { useRangeEditing } from '../useRangeEditing';
+import { useTaskCompletion } from '../useTaskCompletion';
+import { useOutlineDraft } from '../useOutlineDraft';
+import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
+import type { DocumentChange, OutlineChange } from '../entryChanges';
+import { formattingShortcut } from '../entryFormatting';
+import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text } from './OutlineStyles';
 
-const MAX_LEVELS = 8;
-const ENTRY_HOLD_MS = 360;
-const ENTRY_MOVE_THRESHOLD = 48;
-const TASK_PROGRESS_MS = 240;
-const OutlineSurface = styled.div`
-  position: relative; outline: none;
-  --bullet-size: 15px;
-  --bullet-row-height: 28px;
-  --bullet-padding: 4px 0;
-  --bullet-line-height: 1.2;
-  --bullet-paragraph-gap: .2em;
-  --bullet-marker-offset: .5px;
-  @media(pointer: coarse) { --bullet-size: 16px; --bullet-row-height: 44px; --bullet-padding: 10px 0; --bullet-line-height: 1.35; }
-  @media ${compactViewport} { --bullet-row-height: 36px; --bullet-padding: 6px 0; --bullet-line-height: 1.3; --bullet-paragraph-gap: .1em; }
-`;
-const List = styled.ul`list-style: none; padding: 0; margin: 0;`;
-const Children = styled(List)<{ $task: boolean }>`
-  padding-left: ${({ $task }) => $task ? '28px' : '32px'};
-  @media(max-width: 900px) { padding-left: ${({ $task }) => $task ? '20px' : '24px'}; }
-  @media(max-width: 440px) { padding-left: 12px; }
-  @media ${compactViewport} { padding-left: 9px; }
-`;
-const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--bullet-row-height);`;
-const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
-  min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
-  opacity: ${({ $leaving }) => $leaving ? 0 : 1};
-  transform: ${({ $leaving }) => $leaving ? 'translateY(-3px)' : 'none'};
-  transition-property: opacity, transform;
-  transition-duration: ${({ $leaving }) => $leaving ? '180ms' : '280ms'};
-  transition-timing-function: cubic-bezier(.2, 0, 0, 1);
-  ${({ $arriving }) => $arriving && css`@starting-style { opacity: 0; transform: translateY(-7px); }`}
-  > ${Row} { transition: background-color 120ms ease-out; }
-  &[data-drop-position="before"] > ${Row} { box-shadow: 0 -2px 0 var(--link); }
-  &[data-drop-position="after"] > ${Row} { box-shadow: 0 2px 0 var(--link); }
-  ${({ $gestureSelected }) => $gestureSelected && css`
-    user-select: none; -webkit-user-select: none;
-    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
-    > ${Row} .tiptap::selection, > ${Row} .tiptap *::selection { background: transparent; color: inherit; }
-  `}
-  @media(pointer: coarse) { touch-action: pan-y; }
-`;
-const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
-  display: grid; min-height: 0;
-  grid-template-rows: ${({ $open }) => $open ? '1fr' : '0fr'};
-  opacity: ${({ $open }) => $open ? 1 : 0};
-  transform: ${({ $open }) => $open ? 'none' : 'translateY(-3px)'};
-  visibility: ${({ $open }) => $open ? 'visible' : 'hidden'};
-  pointer-events: ${({ $open }) => $open ? 'auto' : 'none'};
-  transition-property: grid-template-rows, opacity, transform, visibility;
-  transition-duration: 320ms, 240ms, 320ms, 0s;
-  transition-timing-function: cubic-bezier(.2, 0, 0, 1);
-  transition-delay: ${({ $open }) => $open ? '0s' : '0s, 60ms, 0s, 320ms'};
-
-  > ${Children} { min-height: 0; overflow: hidden; }
-  > ${Children} > ${Item} > ${Row} {
-    opacity: ${({ $open }) => $open ? 1 : 0};
-    transform: ${({ $open }) => $open ? 'none' : 'translateY(-3px)'};
-    transition-property: opacity, transform;
-    transition-duration: 220ms, 280ms;
-    transition-timing-function: ease-out;
-  }
-  ${({ $open }) => $open && css`
-    > ${Children} > ${Item}:nth-child(2) > ${Row} { transition-delay: 35ms; }
-    > ${Children} > ${Item}:nth-child(3) > ${Row} { transition-delay: 70ms; }
-    > ${Children} > ${Item}:nth-child(4) > ${Row} { transition-delay: 105ms; }
-    > ${Children} > ${Item}:nth-child(n + 5) > ${Row} { transition-delay: 140ms; }
-  `}
-  ${({ $editing }) => $editing && css`
-    transition: none;
-    > ${Children} > ${Item} > ${Row} { transition: none; }
-  `}
-
-  @media (prefers-reduced-motion: reduce) {
-    transition: none;
-    > ${Children} > ${Item} > ${Row} { transition: none; }
-  }
-`;
-const ComposerTarget = styled.button<{ $floating: boolean }>`
-  display: block; width: 100%; min-height: var(--bullet-row-height); padding: 0; border: 0; background: transparent;
-  ${({ $floating }) => $floating && 'position: absolute; top: 100%; height: 20px; min-height: 20px;'}
-  @media(pointer: coarse) { min-height: 44px; }
-  @media ${compactViewport} { min-height: 36px; }
-`;
-const Marker = styled.span<{ $task: boolean }>`
-  display: flex; width: 40px; min-width: 40px; height: var(--bullet-row-height); align-items: center; justify-content: center; color: var(--ink);
-  &::before { content: ${({ $task }) => $task ? "''" : "'–'"}; font-size: 14px; translate: 0 var(--bullet-marker-offset);
-    ${({ $task }) => $task ? 'width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%;' : ''} }
-  @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }
-  @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
-`;
-const DraftItem = styled(Item)<{ $emptyTask: boolean }>`
-  ${({ $emptyTask }) => $emptyTask && css`
-    > ${Row} > ${Marker} { visibility: hidden; }
-    &:focus-within > ${Row} > ${Marker} { visibility: visible; }
-  `}
-`;
-const Checkbox = styled.button<{ $checked?: boolean; $suppressPreview?: boolean }>`
-  position: relative; display: flex; align-items: center; justify-content: center; width: 40px; min-width: 40px; height: var(--bullet-row-height);
-  border: 0; padding: 0; background: transparent; border-radius: 50%; color: var(--ink);
-  transition: transform 120ms ease-out; &:active { transform: scale(0.96); }
-  &:disabled { opacity: 1; }
-  &::before { content: ''; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; translate: 0 var(--bullet-marker-offset); transition-property: background-color, border-color; transition-duration: 120ms; transition-timing-function: ease-out; }
-  &::after { content: ''; position: absolute; width: 7px; height: 7px; background: currentColor;
-    mask: url('/icons/check-flaticon.svg') center / contain no-repeat;
-    -webkit-mask: url('/icons/check-flaticon.svg') center / contain no-repeat;
-    opacity: ${({ $checked }) => $checked ? 1 : 0}; scale: ${({ $checked }) => $checked ? 1 : .25}; translate: 0 var(--bullet-marker-offset);
-    filter: blur(${({ $checked }) => $checked ? 0 : 4}px);
-    transition-property: opacity, scale, filter; transition-duration: 150ms; transition-timing-function: cubic-bezier(.2, 0, 0, 1); }
-  @media (hover: hover) {
-    ${({ $checked, $suppressPreview }) => !$suppressPreview && css`
-      &:hover::before { background: transparent; border-color: var(--link); }
-      &:hover::after { opacity: ${$checked ? 0 : 1}; scale: ${$checked ? .25 : 1};
-        filter: blur(${$checked ? 4 : 0}px); background: var(--link); }
-    `}
-  }
-  @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }
-  @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
-`;
-const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolean; $progress: number }>`
-  position: relative; width: 40px; min-width: 40px; height: var(--bullet-row-height); padding: 0; border: 0;
-  display: grid; place-items: center; background: transparent; border-radius: 4px; color: ${({ $task, $done }) => $task && !$done ? 'var(--ink)' : 'var(--muted)'};
-  transition: color 140ms ease-out;
-  &::before { content: ''; width: 5px; height: 5px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; translate: 0 var(--bullet-marker-offset);
-    transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
-  ${({ $task, $progress }) => $task && css`
-    &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; transform: none;
-      background: conic-gradient(currentColor var(--task-progress), transparent 0);
-      opacity: ${$progress > 0 ? 1 : 0}; scale: ${$progress > 0 ? 1 : .25}; filter: blur(${$progress > 0 ? 0 : 4}px);
-      transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
-  `}
-  /* Match the task bubbles' 12px interior and rendered 1px borders. */
-  > svg { position: absolute; width: 14px; height: 14px; overflow: hidden; pointer-events: none; translate: 0 var(--bullet-marker-offset);
-    transform: rotate(${({ $open }) => $open ? 90 : 0}deg);
-    opacity: ${({ $progress }) => $progress > 0 ? 0 : 1}; scale: ${({ $progress }) => $progress > 0 ? .25 : 1}; filter: blur(${({ $progress }) => $progress > 0 ? 4 : 0}px);
-    transition: transform 140ms ease-out, opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
-  &:disabled { opacity: 1; }
-  @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px;
-  }
-  @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
-`;
-const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
-  ${richTextStyles}; cursor: text;
-  flex: ${({ $action }) => $action ? '0 1 auto' : '1'}; min-width: 0; min-height: var(--bullet-row-height); padding: var(--bullet-padding); border: 0; background: transparent; color: var(--ink);
-  ${({ $done }) => $done && css`color: var(--muted); text-decoration: line-through; a { color: var(--muted); }`}
-  text-align: left; line-height: var(--bullet-line-height); font-size: var(--bullet-size); white-space: pre-wrap; overflow-wrap: anywhere;
-  &:focus-visible { outline: none; }
-`;
-type Draft = {
-  active: boolean; mode: 'new' | 'edit'; id: number | null; content: string; saved: string;
-  kind: EntryKind;
-  clientId: ReturnType<typeof crypto.randomUUID>; requestId: ReturnType<typeof crypto.randomUUID>; revision: number | null;
-  parentId: number | null; afterId: number | null; beforeId?: number | null; placement: 'tail' | 'after'; hiddenTag: string | null; tags: string[]; savedTags: string[];
-};
 type VerticalTarget = { x: number; direction: VerticalDirection };
-type EntrySelection = { key: string; dragX: number };
-type EntryGesture = {
-  pointerId: number; key: string; element: HTMLElement; x: number; y: number; pager: HTMLElement | null; pagerLeft: number;
-  armed: boolean; paging: boolean; cancelled: boolean; timer: ReturnType<typeof setTimeout> | null;
-};
 type Props = {
   kind: EntryKind | 'mixed'; items: OutlineItem[]; day?: string; composer?: boolean;
   archived?: boolean; scope?: string;
@@ -196,61 +41,40 @@ function selectedTextOffsets(element?: HTMLElement, link?: HTMLElement): TextOff
   };
 }
 
-const sorted = (items: OutlineItem[]) => [...items].sort((a, b) => a.position - b.position || a.id - b.id);
-const siblings = (items: OutlineItem[], parentId: number | null) => sorted(items.filter(item => item.parent_id === parentId));
-const fresh = (items: OutlineItem[], active: boolean, kind: EntryKind, parentId: number | null = null, afterId?: number | null): Draft => ({
-  tags: [], savedTags: [], hiddenTag: null, active, mode: 'new', id: null, content: '', saved: '',
-  clientId: crypto.randomUUID(), requestId: crypto.randomUUID(), revision: null, parentId,
-  placement: afterId === undefined ? 'tail' : 'after',
-  kind,
-  afterId: afterId === undefined ? siblings(items, parentId).at(-1)?.id ?? null : afterId,
-});
-
 export function Outline({ kind, items: serverItems, day, composer = false, archived = false, scope, refresh }: Props) {
   const defaultKind: EntryKind = kind === 'mixed' ? 'notes' : kind;
   const key = scope ? `still-outline-${kind}-${scope}` : kind === 'tasks' ? 'still-outline-tasks' : `still-draft-${day}`;
   const [documentStore] = useState(() => new OutlineDocument(key));
   const [, renderDocument] = useState(0);
   const items = documentStore.rebase(serverItems);
-  const entryKind = (row: OutlineItem): EntryKind => {
-    const value = row.kind as string | undefined;
-    return value === 'task' || value === 'tasks' ? 'tasks' : value === 'note' || value === 'notes' ? 'notes' : defaultKind;
-  };
   const { activeTag, completed, onComplete, reopened, onReopen, target } = useJournalContext();
-  const blank = (rows: OutlineItem[], active: boolean, parentId: number | null = null, afterId?: number | null, draftKind: EntryKind = defaultKind): Draft =>
-    ({ ...fresh(rows, active, draftKind, parentId, afterId), hiddenTag: activeTag });
+  const { blank, draft, current, records, persist, stageDraft, save, saving } = useOutlineDraft({
+    key, documentStore, items, defaultKind, composer, day, activeTag,
+  });
   const [expanded, setExpanded] = useState(new Set<number>());
   const [previewed, setPreviewed] = useState(new Set<number>());
   const seenCompleted = useRef(new Set<number>());
   const [collapsed, setCollapsed] = useState(() => {
-    const initial = new Set(archived ? items.filter(row => entryKind(row) === 'tasks' && !!row.completed_at).map(row => row.id) : []);
+    const initial = new Set(archived ? items.filter(row => row.kind === 'tasks' && !!row.completed_at).map(row => row.id) : []);
     seenCompleted.current = new Set(initial);
     return initial;
   });
-  const [completing, setCompleting] = useState(new Set<number>());
-  const [pendingCompletion, setPendingCompletion] = useState(new Map<number, boolean>());
-  const completionTargets = useRef(new Map<number, boolean>());
-  const completionRunning = useRef(false);
-  const completionMotion = useRef<AbortController | null>(null);
-  const completionChangedAt = useRef(0);
   const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
-  const entryGesture = useRef<EntryGesture | null>(null);
   const [entrySelection, setEntrySelection] = useState<EntrySelection | null>(null);
   const entrySelectionRef = useRef<EntrySelection | null>(null);
   const updateEntrySelection = (next: EntrySelection | null) => {
     entrySelectionRef.current = next;
     setEntrySelection(next);
   };
-  const suppressClick = useRef(false);
   const draggedEntry = useRef<number | null>(null);
   const dropTarget = useRef<HTMLElement | null>(null);
   const [, setSelectedAll] = useState(false);
   const selectionActive = useRef(false);
   const surface = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const completedIds = new Set(archived ? items.filter(row => entryKind(row) === 'tasks' && !!row.completed_at).map(row => row.id) : []);
+    const completedIds = new Set(archived ? items.filter(row => row.kind === 'tasks' && !!row.completed_at).map(row => row.id) : []);
     const newlyCompleted = [...completedIds].filter(id => !seenCompleted.current.has(id));
     seenCompleted.current = completedIds;
     setCollapsed(previous => {
@@ -259,38 +83,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       return next.size === previous.size && [...next].every(id => previous.has(id)) ? previous : next;
     });
   }, [items, archived]);
-  const [draft, setDraft] = useState<Draft>(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(key) ?? 'null') as Partial<Draft> | null;
-      if (stored && (stored.content !== stored.saved || JSON.stringify(stored.tags ?? []) !== JSON.stringify(stored.savedTags ?? []) || documentStore.hasPending(stored.id ?? null)) && typeof stored.content === 'string') {
-        stored.id = documentStore.resolve(stored.id ?? null);
-        stored.parentId = documentStore.resolve(stored.parentId ?? null);
-        stored.afterId = documentStore.resolve(stored.afterId ?? null);
-        stored.beforeId = documentStore.resolve(stored.beforeId ?? null);
-        const row = items.find(item => item.id === stored.id);
-        return { ...blank(items, true), ...stored, placement: stored.placement ?? 'tail', requestId: stored.requestId ?? crypto.randomUUID(), revision: stored.revision ?? row?.revision ?? null,
-          kind: stored.kind ?? (row ? entryKind(row) : defaultKind), active: true, parentId: stored.parentId ?? row?.parent_id ?? null };
-      }
-      for (const row of items) {
-        const rowKind = entryKind(row);
-        const edit = localStorage.getItem(`still-edit-${rowKind}-${row.id}`);
-        if (edit !== null) return { ...blank(items, true), kind: rowKind, mode: 'edit', id: row.id, revision: row.revision, content: edit, saved: row.content, parentId: row.parent_id };
-      }
-      const oldTask = kind === 'tasks' ? localStorage.getItem('still-task-draft') : null;
-      if (oldTask) return { ...blank(items, true), content: oldTask };
-    } catch { /* Keep the journal usable if old local draft metadata is malformed. */ }
-    return blank(items, composer);
-  });
-  const current = useRef(draft);
-  const records = useRef(items);
-  records.current = items;
   useLayoutEffect(() => {
     if (!target || kind !== 'mixed' && target.kind !== kind) return;
     const item = records.current.find(row => row.id === target.id);
     if (!item) return;
-    const parents: number[] = [];
-    let parent = item.parent_id;
-    while (parent !== null) { parents.push(parent); parent = records.current.find(row => row.id === parent)?.parent_id ?? null; }
+    const parents = ancestorIds(records.current, item.parent_id);
     setExpanded(previous => new Set([...previous, ...parents]));
     const frame = requestAnimationFrame(() => requestAnimationFrame(() => {
       const row = document.querySelector<HTMLElement>(`[data-kind="${target.kind}"][data-item-id="${target.id}"] [role="group"]`);
@@ -308,21 +105,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const actionToken = useRef(0);
   const restoringFocus = useRef(false);
   const [busy, setBusy] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const previouslyComposer = useRef(composer);
-  const persist = useCallback((next: Draft) => {
-    current.current = next;
-    if (next.active) localStorage.setItem(key, JSON.stringify(next));
-    else localStorage.removeItem(key);
-    if (mounted.current) setDraft(next);
-  }, [key]);
-  useEffect(() => {
-    const value = current.current;
-    if (kind !== 'tasks' || !composer || !value.active || value.mode !== 'new' || value.placement !== 'tail' ||
-        value.id !== null || value.parentId !== null || value.content.trim() || value.tags.length) return;
-    const afterId = siblings(items, null).at(-1)?.id ?? null;
-    if (value.afterId !== afterId) persist({ ...value, afterId });
-  }, [items, kind, composer, persist]);
   const focus = () => {
     if (selectionActive.current) { restoringFocus.current = false; return; }
     if (pendingVertical.current) input.current?.focusAt(pendingVertical.current.x, pendingVertical.current.direction, { preventScroll: false });
@@ -358,66 +140,20 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   documentStore.failed = (error, ids) => {
     for (const id of ids) entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
   };
-  const stageDraft = useCallback((historyKey?: ReturnType<typeof crypto.randomUUID>) => {
-    const value = current.current;
-    if (!value.active || value.content === value.saved && JSON.stringify(value.tags) === JSON.stringify(value.savedTags)) return value.id;
-    if (!value.content.trim() && !value.tags.length) {
-      if (value.id !== null) documentStore.enqueue([{ kind: value.kind, id: value.id, delete: true }], historyKey ?? value.clientId);
-      persist({ ...value, id: null, revision: null, saved: '', savedTags: [] });
-      return null;
-    }
-    const id = value.id ?? documentStore.allocate();
-    documentStore.enqueue([{
-      id, kind: value.kind, create: value.id === null, content: value.content, tags: value.tags, date: day,
-      client_id: value.clientId, parent_id: value.parentId, after_id: value.afterId, before_id: value.beforeId,
-    }], historyKey ?? value.clientId);
-    persist({ ...value, id, saved: value.content, savedTags: value.tags });
-    return id;
-  }, [day, documentStore, persist]);
-  const save = useCallback(() => {
-    const id = stageDraft();
-    setSaving(true);
-    return documentStore.flush().then(() => documentStore.resolve(id)).finally(() => { if (mounted.current) setSaving(false); });
-  }, [documentStore, stageDraft]);
-  useEffect(() => {
-    const retry = () => { void documentStore.flush().catch(() => {}); };
-    retry();
-    window.addEventListener('online', retry);
-    return () => window.removeEventListener('online', retry);
-  }, [documentStore]);
-
-  useEffect(() => registerDraftFlush(save), [save]);
+  const { complete, completing, pendingCompletion } = useTaskCompletion({
+    document: documentStore, rows: () => records.current, locked: () => lock.current,
+    save, refresh, activeId: () => current.current.id,
+    clearActive: () => { stageDraft(); persist(blank(records.current, composer)); },
+    onComplete, onReopen,
+    onError: (error, id) => entryError(error, surface.current?.querySelector(`[data-item-id="${id}"]`)),
+  });
   useEffect(() => {
     const applied = () => {
-      completionTargets.current.clear(); completionMotion.current?.abort();
-      setCompleting(new Set()); setPendingCompletion(new Map());
       selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); persist(blank([], composer));
     };
     window.addEventListener('still-history-applied', applied);
     return () => window.removeEventListener('still-history-applied', applied);
   }, [composer, persist]);
-  useEffect(() => {
-    if (draft.kind !== 'notes' || !draft.active || draft.mode === 'edit') return;
-    const timeout = setTimeout(() => { void save().catch(() => {}); }, 700);
-    return () => clearTimeout(timeout);
-  }, [draft.content, draft.tags, draft.active, draft.mode, draft.kind, save]);
-  useEffect(() => {
-    if (!composer) {
-      const value = current.current;
-      const emptyNewDraft = value.active && value.mode === 'new' && value.id === null && !value.content.trim() && !value.tags.length;
-      if (emptyNewDraft) {
-        persist({ ...value, active: false });
-      } else if (previouslyComposer.current && defaultKind === 'notes') {
-        setDraft(previous => ({ ...previous, active: false }));
-        void save().then(() => persist(blank(records.current, false))).catch(() => {
-          current.current = { ...current.current, active: false };
-          setDraft(current.current);
-          // Keep the unsaved local copy for the earlier-day recovery worker.
-        });
-      }
-    }
-    previouslyComposer.current = composer;
-  }, [composer, defaultKind, persist, save]);
   useEffect(() => {
     mounted.current = true;
     const onFocus = () => {
@@ -426,14 +162,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const frame = requestAnimationFrame(() => {
       if (defaultKind === 'notes' && composer) input.current?.focus({ preventScroll: true });
     });
-    const flush = () => { void save().catch(() => {}); };
-    window.addEventListener('focus', onFocus); window.addEventListener('pagehide', flush);
+    window.addEventListener('focus', onFocus);
     return () => {
       mounted.current = false; cancelAnimationFrame(frame);
-      if (entryGesture.current?.timer) clearTimeout(entryGesture.current.timer);
-      completionMotion.current?.abort();
-      window.removeEventListener('focus', onFocus); window.removeEventListener('pagehide', flush);
-      void save().catch(() => {});
+      window.removeEventListener('focus', onFocus);
     };
   }, [composer, kind, save]);
 
@@ -456,7 +188,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const index = group.findIndex(item => item.id === row.id);
     restoringFocus.current = true;
     flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: row.id, content: row.content, saved: row.content,
-      kind: entryKind(row), revision: row.revision, tags: row.tags ?? [], savedTags: row.tags ?? [],
+      kind: row.kind, revision: row.revision, tags: row.tags ?? [], savedTags: row.tags ?? [],
       hiddenTag: activeTag && row.tags?.includes(activeTag) ? activeTag : null,
       parentId: row.parent_id, afterId: group[index - 1]?.id ?? null, beforeId: index === 0 ? group[1]?.id : null }));
     pendingSelection.current = selection;
@@ -473,12 +205,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     activate(latest, selection, vertical);
     if (contextLink) input.current?.editLink();
   };
-  const checkDepth = (id: number | null, parentId: number | null) => {
-    let level = 1, ancestor = parentId;
-    while (ancestor !== null) { level++; ancestor = records.current.find(item => item.id === ancestor)?.parent_id ?? null; }
-    const height = (parent: number): number => Math.max(0, ...records.current.filter(row => row.parent_id === parent).map(row => 1 + height(row.id)));
-    if (level + (id === null ? 0 : height(id)) > MAX_LEVELS) throw new Error(`Bullets support up to ${MAX_LEVELS} levels.`);
-  };
+  const checkDepth = (id: number | null, parentId: number | null) => checkEntryDepth(records.current, id, parentId);
   const moveDestination = (snapshot: { id: number | null; parentId: number | null; afterId: number | null }, outdent: boolean) => {
     const parent = records.current.find(item => item.id === snapshot.parentId);
     const group = siblings(records.current, snapshot.parentId);
@@ -488,7 +215,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const parentId = outdent ? parent!.parent_id : previous!.id;
     const afterId = outdent ? parent!.id : siblings(records.current, previous!.id).at(-1)?.id ?? null;
     const targetParent = parentId === null ? null : records.current.find(item => item.id === parentId);
-    const targetKind: EntryKind = targetParent ? entryKind(targetParent) : defaultKind;
+    const targetKind: EntryKind = targetParent ? targetParent.kind : defaultKind;
     checkDepth(snapshot.id, parentId);
     return { parentId, afterId, targetKind };
   };
@@ -499,7 +226,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const { parentId, afterId, targetKind } = destination;
     if (snapshot.id !== null) {
       const id = stageDraft();
-      if (id !== null) documentStore.enqueue([{ kind: snapshot.kind, id, move: true, parent_id: parentId, after_id: afterId, target_kind: targetKind }]);
+      if (id !== null) documentStore.enqueue([{ kind: snapshot.kind, id, type: 'move', parent_id: parentId, after_id: afterId, target_kind: targetKind }]);
     }
     restoringFocus.current = true;
     flushSync(() => {
@@ -517,92 +244,12 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const index = group.findIndex(row => row.id === latest.id);
       const destination = moveDestination({ id: latest.id, parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }, outdent);
       if (!destination) return;
-      documentStore.enqueue([{ kind: entryKind(latest), id: latest.id, move: true,
+      documentStore.enqueue([{ kind: latest.kind, id: latest.id, type: 'move',
         parent_id: destination.parentId, after_id: destination.afterId, target_kind: destination.targetKind }]);
       void documentStore.flush().catch(() => {});
     } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${item.id}"]`)); }
   };
-  const complete = (id: number) => {
-    if (lock.current) return;
-    id = documentStore.resolve(id)!;
-    const task = records.current.find(row => row.id === id);
-    if (!task) return;
-    const targets = completionTargets.current;
-    targets.set(id, !(targets.get(id) ?? !!task.completed_at));
-    completionChangedAt.current = performance.now();
-    completionMotion.current?.abort();
-    setCompleting(new Set());
-    setPendingCompletion(completionPreview(records.current, targets));
-    if (completionRunning.current) return;
-    completionRunning.current = true;
-    void (async () => {
-      const states = new Map<number, OutlineItem>();
-      try {
-        while (targets.size) {
-          await save();
-          for (const row of records.current) {
-            if (!states.has(row.id) || states.get(row.id)!.revision < row.revision) states.set(row.id, row);
-          }
-          for (const [temporaryId, desired] of [...targets]) {
-            const resolved = documentStore.resolve(temporaryId)!;
-            if (resolved !== temporaryId) { targets.delete(temporaryId); targets.set(resolved, desired); }
-          }
-          if (mounted.current) setPendingCompletion(completionPreview(records.current, targets));
-          const pending = [...targets].find(([taskId, desired]) => desired !== !!states.get(taskId)?.completed_at);
-          if (pending) {
-            const [taskId, desired] = pending;
-            const latest = states.get(taskId);
-            if (!latest) { targets.delete(taskId); continue; }
-            try {
-              if (desired) {
-                const result = await api<{ task_ids: number[]; completed_at: string; items: OutlineItem[] }>(`/tasks/${taskId}/complete?expected_revision=${latest.revision}`, 'POST');
-                for (const row of result.items) states.set(row.id, row);
-                onComplete(result.task_ids, taskId, result.completed_at);
-              } else {
-                const result = await api<{ reopened: number[]; operation_id: string | null; items: OutlineItem[] }>(`/tasks/${taskId}/reopen`, 'POST', {
-                  completed_at: latest.completed_at, expected_revision: latest.revision, record_history: true,
-                });
-                for (const row of result.items) states.set(row.id, row);
-                recordEdit(result.operation_id, crypto.randomUUID());
-                onReopen(result.reopened);
-              }
-            } catch (error) {
-              targets.set(taskId, !!latest.completed_at);
-              entryError(error, surface.current?.querySelector(`[data-item-id="${taskId}"]`));
-            }
-            continue;
-          }
-          // A new click cancels either visual wait and retargets the existing
-          // CSS transition. Save requests remain ordered, never animation-locked.
-          const motion = new AbortController();
-          completionMotion.current = motion;
-          const remaining = TASK_PROGRESS_MS - (performance.now() - completionChangedAt.current);
-          if (!await waitForMotion(remaining, motion.signal)) continue;
-          const exits = new Set(records.current.filter(row => row.parent_id === null && !row.completed_at && states.get(row.id)?.completed_at).map(row => row.id));
-          if (mounted.current) setCompleting(exits);
-          if (exits.size && !await waitForMotion(180, motion.signal)) continue;
-          const activeId = current.current.id;
-          if (activeId !== null && states.get(activeId)?.completed_at && completionPreview(records.current, targets).get(activeId) === true) {
-            stageDraft();
-            persist(blank(records.current, composer));
-          }
-          await refresh();
-          if (motion.signal.aborted) continue;
-          targets.clear();
-        }
-      } catch (error) {
-        targets.clear();
-        entryError(error, surface.current?.querySelector(`[data-item-id="${id}"]`));
-      } finally {
-        completionRunning.current = false;
-        completionMotion.current = null;
-        if (mounted.current) { setCompleting(new Set()); setPendingCompletion(new Map()); }
-        void documentStore.flush().catch(() => {});
-      }
-    })();
-  };
-
-  const beginBullet = () => {
+  const beginEntry = () => {
     void save().catch(() => {});
     restoringFocus.current = true;
     flushSync(() => persist(blank(records.current, true)));
@@ -649,9 +296,9 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   });
 
   useEffect(() => {
-    const append = (event: Event) => { if ((event as CustomEvent<string>).detail === key) beginBullet(); };
-    window.addEventListener('still-new-bullet', append);
-    return () => window.removeEventListener('still-new-bullet', append);
+    const append = (event: Event) => { if ((event as CustomEvent<string>).detail === key) beginEntry(); };
+    window.addEventListener('still-new-entry', append);
+    return () => window.removeEventListener('still-new-entry', append);
   });
   const adjacentEntry = (backwards: boolean) => {
     const currentElement = surface.current?.querySelector('[contenteditable]')?.closest('li');
@@ -690,8 +337,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const offset = firstText ? domTextOffset(firstText, firstText, firstText.childNodes.length)
         : markdownText(first.content, activeTag ? [activeTag] : []).length;
       documentStore.enqueue([
-        { kind: entryKind(first), id: first.id, content, tags },
-        { kind: entryKind(second), id: second.id, delete: true },
+        { kind: first.kind, id: first.id, type: 'update', content, tags },
+        { kind: second.kind, id: second.id, type: 'delete' },
       ]);
       activate(records.current.find(row => row.id === first.id)!, { anchor: offset, head: offset });
     }
@@ -702,7 +349,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const snapshot = current.current;
     restoringFocus.current = true;
     updateEntrySelection(null);
-    if (snapshot.id !== null) documentStore.enqueue([{ kind: snapshot.kind, id: snapshot.id, delete: true }]);
+    if (snapshot.id !== null) documentStore.enqueue([{ kind: snapshot.kind, id: snapshot.id, type: 'delete' }]);
     const other = previous ?? next;
     if (other) {
       const offset = previous ? Number.MAX_SAFE_INTEGER : 0;
@@ -721,106 +368,64 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     }
     void save().catch(() => {});
   };
-  useEffect(() => {
-    const apply = (event: Event) => {
-      const edit = (event as CustomEvent<SelectionEdit>).detail;
-      const ranges = edit.ranges.filter(range => range.key === key);
-      if (!ranges.length) return;
-      try {
-        const value = current.current;
-        const includesDraft = ranges.some(range => range.id === 'draft' || Number(range.id) === value.id);
-        const selected = ranges.map(range => {
-          if (range.id === 'draft' || Number(range.id) === value.id) return {
-            ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags, parentId: value.parentId,
-          };
-          const row = records.current.find(row => row.id === Number(range.id));
-          if (!row) throw new Error('The selected entry has changed.');
-          return { ...range, id: row.id, kind: entryKind(row), content: row.content, tags: row.tags, parentId: row.parent_id };
-        });
-        const first = selected[0], last = selected.at(-1)!;
-        const primary = edit.ranges[0].key === key;
-        const replacement = replaceBulletRange(first, last, primary ? edit.text : '', primary ? edit.html : '', activeTag ? [activeTag] : []);
-        if (!includesDraft) stageDraft();
-        else if (value.content.trim() || value.tags.length) {
-          const stagedId = stageDraft();
-          for (let index = 0; index < selected.length; index++) {
-            if (ranges[index].id === 'draft' || Number(ranges[index].id) === value.id) selected[index].id = stagedId;
-          }
-        }
-        const removeAll = !replacement.content.trim() && !replacement.tags.length;
-        const id = first.id ?? documentStore.allocate();
-        restoringFocus.current = true;
-        documentStore.enqueue([
-          ...(removeAll ? [] : [{ id, kind: first.kind, create: first.id === null, content: replacement.content, tags: replacement.tags, allow_empty: true,
-            date: day, client_id: first.id === null ? value.clientId : undefined, parent_id: first.parentId,
-            after_id: first.id === null ? value.afterId : undefined, before_id: first.id === null ? value.beforeId : undefined }]),
-          ...selected.slice(removeAll ? 0 : 1).flatMap(row => row.id === null ? [] : [{ id: row.id, kind: row.kind, delete: true }]),
-        ], edit.historyKey);
-        if (includesDraft) persist(blank(records.current, false));
-        if (primary) edit.focus = () => {
-          const row = records.current.find(row => row.id === documentStore.resolve(id));
-          if (row) activate(row, { anchor: replacement.offset, head: replacement.offset });
-          else {
-            flushSync(() => persist(blank(records.current, true, first.parentId)));
-            pendingSelection.current = { anchor: 0, head: 0 }; focus();
-          }
+  useRangeEditing(key, () => selectionActive.current, edit => {
+    const ranges = edit.ranges.filter(range => range.key === key);
+    if (!ranges.length) return;
+    try {
+      const value = current.current;
+      const includesDraft = ranges.some(range => range.id === 'draft' || Number(range.id) === value.id);
+      const selected = ranges.map(range => {
+        if (range.id === 'draft' || Number(range.id) === value.id) return {
+          ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags, parentId: value.parentId,
         };
-        else restoringFocus.current = false;
-        void documentStore.flush().catch(() => {});
-      } catch (error) { restoringFocus.current = false; entryError(error, surface.current?.querySelector(`[data-item-id="${ranges[0].id}"]`)); }
-    };
-    const ownedSelection = (event: Event) => {
-      if (selectionActive.current || event.defaultPrevented) return [];
-      const ranges = selectedEntryRanges();
-      return ranges.length >= 2 && ranges[0].key === key ? ranges : [];
-    };
-    const keydown = (event: KeyboardEvent) => {
-      if (event.isComposing) return;
-      const deleting = event.key === 'Backspace' || event.key === 'Delete';
-      const typing = event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
-      if (!deleting && !typing) return;
-      const ranges = ownedSelection(event);
-      if (!ranges.length) return;
-      event.preventDefault(); event.stopPropagation();
-      replaceEntrySelection(ranges, typing ? event.key : '');
-    };
-    const beforeinput = (event: Event) => {
-      const input = event as InputEvent;
-      if (input.isComposing || !['deleteContentBackward', 'deleteContentForward', 'insertText'].includes(input.inputType)) return;
-      const ranges = ownedSelection(event);
-      if (!ranges.length) return;
-      event.preventDefault(); event.stopPropagation();
-      replaceEntrySelection(ranges, input.inputType === 'insertText' ? input.data ?? '' : '');
-    };
-    const clipboard = (event: ClipboardEvent) => {
-      const ranges = ownedSelection(event);
-      if (!ranges.length || !event.clipboardData) return;
-      event.preventDefault(); event.stopPropagation();
-      if (event.type === 'paste') replaceEntrySelection(ranges, event.clipboardData.getData('text/plain'), event.clipboardData.getData('text/html'));
-      else {
-        event.clipboardData.setData('text/plain', ranges.map(range => range.text).join('\n'));
-        event.clipboardData.setData('text/html', ranges.map(range => range.html).join(''));
-        if (event.type === 'cut') replaceEntrySelection(ranges);
+        const row = records.current.find(row => row.id === Number(range.id));
+        if (!row) throw new Error('The selected entry has changed.');
+        return { ...range, id: row.id, kind: row.kind, content: row.content, tags: row.tags, parentId: row.parent_id };
+      });
+      const first = selected[0], last = selected.at(-1)!;
+      const primary = edit.ranges[0].key === key;
+      const replacement = replaceEntryRange(first, last, primary ? edit.text : '', primary ? edit.html : '', activeTag ? [activeTag] : []);
+      if (!includesDraft) stageDraft();
+      else if (value.content.trim() || value.tags.length) {
+        const stagedId = stageDraft();
+        for (let index = 0; index < selected.length; index++) {
+          if (ranges[index].id === 'draft' || Number(ranges[index].id) === value.id) selected[index].id = stagedId;
+        }
       }
-    };
-    window.addEventListener('still-replace-entry-selection', apply);
-    document.addEventListener('keydown', keydown, true);
-    document.addEventListener('beforeinput', beforeinput, true);
-    for (const type of ['copy', 'cut', 'paste']) document.addEventListener(type, clipboard as EventListener, true);
-    return () => {
-      window.removeEventListener('still-replace-entry-selection', apply);
-      document.removeEventListener('keydown', keydown, true);
-      document.removeEventListener('beforeinput', beforeinput, true);
-      for (const type of ['copy', 'cut', 'paste']) document.removeEventListener(type, clipboard as EventListener, true);
-    };
+      const removeAll = !replacement.content.trim() && !replacement.tags.length;
+      const id = first.id ?? documentStore.allocate();
+      restoringFocus.current = true;
+      const changes: OutlineChange[] = [];
+      if (!removeAll) {
+        const content = { id, kind: first.kind, content: replacement.content, tags: replacement.tags, allow_empty: true };
+        changes.push(first.id === null
+          ? { ...content, type: 'create', date: day, client_id: value.clientId, parent_id: first.parentId, after_id: value.afterId, before_id: value.beforeId }
+          : { ...content, type: 'update' });
+      }
+      for (const row of selected.slice(removeAll ? 0 : 1)) {
+        if (row.id !== null) changes.push({ id: row.id, kind: row.kind, type: 'delete' });
+      }
+      documentStore.enqueue(changes, edit.historyKey);
+      if (includesDraft) persist(blank(records.current, false));
+      if (primary) edit.focus = () => {
+        const row = records.current.find(row => row.id === documentStore.resolve(id));
+        if (row) activate(row, { anchor: replacement.offset, head: replacement.offset });
+        else {
+          flushSync(() => persist(blank(records.current, true, first.parentId)));
+          pendingSelection.current = { anchor: 0, head: 0 }; focus();
+        }
+      };
+      else restoringFocus.current = false;
+      void documentStore.flush().catch(() => {});
+    } catch (error) { restoringFocus.current = false; entryError(error, surface.current?.querySelector(`[data-item-id="${ranges[0].id}"]`)); }
   });
   const replaceDocument = (text = '', html = '') => void run(async () => {
     await save();
-    const bullet = pastedBullet(text, html);
-    const tags = [...new Set([...bullet.tags, ...(activeTag ? [activeTag] : [])])];
-    const changes: Record<string, unknown>[] = records.current.map(item => ({ kind: entryKind(item), id: item.id, delete: true }));
-    const hasContent = !!(bullet.content.trim() || bullet.tags.length);
-    if (hasContent) changes.push({ kind: defaultKind, content: bullet.content, tags, date: day, client_id: crypto.randomUUID() });
+    const entry = pastedEntry(text, html);
+    const tags = [...new Set([...entry.tags, ...(activeTag ? [activeTag] : [])])];
+    const changes: DocumentChange[] = records.current.map(item => ({ kind: item.kind, id: item.id, delete: true }));
+    const hasContent = !!(entry.content.trim() || entry.tags.length);
+    if (hasContent) changes.push({ kind: defaultKind, content: entry.content, tags, date: day, client_id: crypto.randomUUID() });
     const results = changes.length ? await editDocument(changes) : [];
     const created = hasContent ? results.at(-1) : null;
     selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges();
@@ -849,32 +454,21 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     clipboard.setData('text/html', build(null, 0).outerHTML); clipboard.setData('text/plain', lines.join('\n'));
   };
 
-  const draftInside = (id: number) => {
-    let parent = current.current.active ? current.current.parentId : null;
-    while (parent !== null) {
-      if (parent === id) return true;
-      parent = records.current.find(row => row.id === parent)?.parent_id ?? null;
-    }
-    return false;
-  };
+  const draftInside = (id: number) => current.current.active && ancestorIds(records.current, current.current.parentId).includes(id);
   const clearPreview = (id: number | null) => {
     if (id === null) return;
     setPreviewed(previous => {
       if (!previous.size) return previous;
       const next = new Set(previous);
       for (const candidate of previous) {
-        let ancestor: number | null = candidate;
-        while (ancestor !== null) {
-          if (ancestor === id) { next.delete(candidate); break; }
-          ancestor = records.current.find(row => row.id === ancestor)?.parent_id ?? null;
-        }
+        if (ancestorIds(records.current, candidate).includes(id)) next.delete(candidate);
       }
       return next.size === previous.size ? previous : next;
     });
   };
   const isExpanded = (id: number) => {
     const row = items.find(item => item.id === id);
-    return (!!row && entryKind(row) === 'tasks' && !!row.completed_at && !collapsed.has(id)) || expanded.has(id) || previewed.has(id) || draftInside(id);
+    return (!!row && row.kind === 'tasks' && !!row.completed_at && !collapsed.has(id)) || expanded.has(id) || previewed.has(id) || draftInside(id);
   };
   const renderToggle = (id: number | null, content: string) => {
     const row = items.find(item => item.id === id);
@@ -884,7 +478,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     if (pendingCompletion.size) for (const child of items) {
       if (child.parent_id === id && pendingCompletion.has(child.id)) doneCount += Number(pendingCompletion.get(child.id)) - Number(!!child.completed_at);
     }
-    const rowKind = row ? entryKind(row) : draft.kind;
+    const rowKind = row ? row.kind : draft.kind;
     if (unsavedChild && row?.completed_at && draft.kind === 'tasks') doneCount++;
     if (id === null || !childCount) return null;
     const open = isExpanded(id);
@@ -892,7 +486,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const taskParent = rowKind === 'tasks';
     return <Disclosure type="button" data-focus-chrome $open={open} $task={taskParent} $done={!!row?.completed_at} $progress={childCount ? doneCount / childCount : 0} disabled={busy} aria-expanded={open}
       aria-description={taskParent ? `${doneCount} of ${childCount} children completed` : undefined}
-      aria-label={`${pinned ? 'Collapse' : 'Expand'} ${markdownText(content) || 'bullet'}`}
+      aria-label={`${pinned ? 'Collapse' : 'Expand'} ${markdownText(content) || 'entry'}`}
       onPointerEnter={event => {
         if (!pinned && event.pointerType !== 'touch') setPreviewed(previous => previous.has(id) ? previous : new Set([...previous, id]));
       }} onClick={() => {
@@ -917,11 +511,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     </Disclosure>;
   };
 
-  const inputLabel = draft.mode === 'edit' ? draft.kind === 'notes' ? 'Edit note' : 'Edit to-do' : draft.kind === 'notes' ? 'New journal bullet' : 'New to-do';
+  const inputLabel = draft.mode === 'edit' ? draft.kind === 'notes' ? 'Edit note' : 'Edit task' : draft.kind === 'notes' ? 'New note' : 'New task';
   const renderMarker = (id: number | null, content: string) => {
     const toggle = renderToggle(id, content);
     const row = items.find(item => item.id === id);
-    const rowKind = row ? entryKind(row) : draft.kind;
+    const rowKind = row ? row.kind : draft.kind;
     if (rowKind === 'tasks' && id !== null) {
       const done = pendingCompletion.get(id) ?? !!row?.completed_at;
       return toggle ?? <Checkbox type="button" data-focus-chrome data-preview-suppressed={suppressedPreviews.has(id) || undefined} $checked={done} $suppressPreview={suppressedPreviews.has(id)} aria-pressed={done} disabled={busy} aria-label={`${done ? 'Reopen' : 'Complete'} ${markdownText(content)}`}
@@ -947,104 +541,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       focus();
     } catch (error) { entryError(error); restoringFocus.current = false; }
   };
-  const clearEntryGestureTimer = (gesture: EntryGesture) => {
-    if (gesture.timer) clearTimeout(gesture.timer);
-    gesture.timer = null;
-  };
-  const startEntryGesture = (event: React.PointerEvent, key: string, element: HTMLElement) => {
-    if (event.pointerType !== 'touch' || !event.isPrimary) return;
-    const previous = entryGesture.current;
-    if (previous) clearEntryGestureTimer(previous);
-    const pager = element.closest<HTMLElement>('[data-mobile-pager]');
-    pager?.scrollTo({ left: pager.scrollLeft, behavior: 'instant' });
-    const gesture: EntryGesture = {
-      pointerId: event.pointerId, key, element, x: event.clientX, y: event.clientY, pager,
-      pagerLeft: pager?.scrollLeft ?? 0, armed: entrySelectionRef.current?.key === key,
-      paging: false, cancelled: false, timer: null,
-    };
-    entryGesture.current = gesture;
-    if (gesture.armed) return;
-    gesture.timer = setTimeout(() => {
-      if (entryGesture.current !== gesture || gesture.cancelled || gesture.paging) return;
-      gesture.armed = true;
-      suppressClick.current = true;
-      updateEntrySelection({ key, dragX: 0 });
-      window.getSelection()?.removeAllRanges();
-      try { element.setPointerCapture(gesture.pointerId); } catch { /* The pointer may already have ended. */ }
-      haptic('impact');
-    }, ENTRY_HOLD_MS);
-  };
-  const trackEntryGesture = (event: React.PointerEvent) => {
-    const gesture = entryGesture.current;
-    if (!gesture || gesture.pointerId !== event.pointerId || gesture.cancelled) return;
-    const x = event.clientX - gesture.x;
-    const y = event.clientY - gesture.y;
-    if (gesture.armed) {
-      if (Math.abs(x) < 4 || Math.abs(x) < Math.abs(y)) return;
-      event.preventDefault(); event.stopPropagation();
-      const dragX = Math.sign(x) * Math.min(28, Math.abs(x));
-      updateEntrySelection({ key: gesture.key, dragX });
-      return;
-    }
-    if (!gesture.paging && Math.abs(x) < 10 && Math.abs(y) < 10) return;
-    clearEntryGestureTimer(gesture);
-    if (!gesture.paging && Math.abs(y) >= Math.abs(x)) {
-      gesture.cancelled = true;
-      return;
-    }
-    if (!gesture.pager) { gesture.cancelled = true; return; }
-    gesture.paging = true;
-    gesture.pager.dataset.dragging = 'true';
-    try { (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId); } catch { /* Continue with the events the browser provides. */ }
-    event.preventDefault(); event.stopPropagation();
-    gesture.pager.scrollLeft = gesture.pagerLeft - x;
-  };
-  const finishEntryGesture = (event: React.PointerEvent) => {
-    const gesture = entryGesture.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    entryGesture.current = null;
-    clearEntryGestureTimer(gesture);
-    const x = event.clientX - gesture.x;
-    const y = event.clientY - gesture.y;
-    if (gesture.paging && gesture.pager) {
-      event.preventDefault(); event.stopPropagation();
-      delete gesture.pager.dataset.dragging;
-      const width = gesture.pager.clientWidth;
-      const initial = Math.round(gesture.pagerLeft / width);
-      const direction = Math.abs(x) >= ENTRY_MOVE_THRESHOLD && Math.abs(x) >= Math.abs(y) * 1.25 ? (x < 0 ? 1 : -1) : 0;
-      const last = Math.max(0, Math.round(gesture.pager.scrollWidth / width) - 1);
-      const target = Math.max(0, Math.min(last, initial + direction));
-      gesture.pager.scrollTo({ left: target * width, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-      suppressClick.current = true;
-      return;
-    }
-    if (!gesture.armed) return;
-    event.preventDefault(); event.stopPropagation();
-    suppressClick.current = true;
-    const direction = Math.abs(x) >= ENTRY_MOVE_THRESHOLD && Math.abs(x) >= Math.abs(y) * 1.25 ? (x > 0 ? 'in' : 'out') : null;
-    if (!direction) {
-      updateEntrySelection({ key: gesture.key, dragX: 0 });
-      return;
-    }
-    updateEntrySelection(null);
-    const outdent = direction === 'out';
-    if (gesture.key.startsWith('item:')) {
-      const id = Number(gesture.key.slice('item:'.length));
+  const { startEntryGesture, trackEntryGesture, finishEntryGesture, cancelEntryGesture, consumeClick } = useEntryGestures({
+    selectedKey: () => entrySelectionRef.current?.key,
+    select: updateEntrySelection,
+    move: (key, outdent) => {
+      if (!key.startsWith('item:')) { shiftDraft(outdent); return; }
+      const id = Number(key.slice('item:'.length));
       const item = records.current.find(row => row.id === id);
       if (item) moveSavedItem(item, outdent);
-    } else shiftDraft(outdent);
-  };
-  const cancelEntryGesture = (event: React.PointerEvent) => {
-    const gesture = entryGesture.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    entryGesture.current = null;
-    clearEntryGestureTimer(gesture);
-    if (gesture.pager) {
-      delete gesture.pager.dataset.dragging;
-      if (gesture.paging) gesture.pager.scrollTo({ left: gesture.pagerLeft, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-    }
-    if (gesture.armed) updateEntrySelection({ key: gesture.key, dragX: 0 });
-  };
+    },
+  });
   const advance = () => {
     if (lock.current) return;
     const snapshot = current.current;
@@ -1068,9 +574,9 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const id = stageDraft(editKey)!;
       const emptyId = documentStore.allocate();
       const parent = records.current.find(row => row.id === snapshot.parentId);
-      const emptyKind = parent ? entryKind(parent) : defaultKind;
+      const emptyKind = parent ? parent.kind : defaultKind;
       flushSync(() => {
-        documentStore.enqueue([{ id: emptyId, kind: emptyKind, create: true, content: '', tags: hiddenTag ? [hiddenTag] : [],
+        documentStore.enqueue([{ id: emptyId, kind: emptyKind, type: 'create', content: '', tags: hiddenTag ? [hiddenTag] : [],
           allow_empty: true, date: day, client_id: crypto.randomUUID(), parent_id: snapshot.parentId, before_id: id }], editKey);
         persist({ ...current.current, clientId: crypto.randomUUID(), mode: 'edit', afterId: emptyId, beforeId: null, placement: 'after' });
       });
@@ -1083,7 +589,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (split) persist({ ...snapshot, content: split.before.content, tags: keepHiddenTag(split.before.content, split.before.tags) });
       const id = stageDraft();
       const parent = records.current.find(item => item.id === snapshot.parentId);
-      const next = blank(records.current, true, snapshot.parentId, id ?? snapshot.afterId, parent ? entryKind(parent) : defaultKind);
+      const next = blank(records.current, true, snapshot.parentId, id ?? snapshot.afterId, parent ? parent.kind : defaultKind);
       persist({ ...next, beforeId: id === null ? snapshot.beforeId : null,
         content: split?.after.content ?? '', tags: split ? keepHiddenTag(split.after.content, split.after.tags) : [] });
     });
@@ -1102,7 +608,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     $emptyTask={draft.kind === 'tasks' && draft.id === null && !draft.content.trim() && !draft.tags.length}
     $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
     $leaving={draft.id !== null && completing.has(draft.id)}>
-    <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed subtask' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
+    <Row aria-busy={saving}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed child task' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} readOnly={false}
       onBoundary={boundary} onVerticalBoundary={navigateBoundary} onHorizontalBoundary={navigateBoundary} onSelectDocument={selectDocument}
       onEnter={advance} onSelectEntry={selected => updateEntrySelection(selected ? { key: gestureKey, dragX: 0 } : null)} onDeleteEntry={deleteCurrentEntry}
       onChange={(content, tags) => {
@@ -1125,14 +631,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         }).catch(() => {});
       }}
       onKeyDown={event => {
-        // `busy` is presentation state and can remain true in this callback for
-        // one render after an async structural edit has released its lock.
-        // `run()` owns the actual mutation lock, so letting the key reach the
-        // handlers prevents a restored editor from swallowing the first key.
+        // The screen can still look busy after a save has finished. Let run()
+        // check the lock so the editor does not lose the user's next key.
         if (event.isComposing) return;
-        // If the user reaches the remounted editor before the scheduled caret
-        // restoration, their key is the newer intent. Do not overwrite the
-        // resulting selection on the next animation frame.
+        // A key press wins over an older plan to move the cursor.
         if (restoringFocus.current && event.currentTarget === document.activeElement) {
           pendingSelection.current = undefined;
           pendingVertical.current = undefined;
@@ -1177,15 +679,15 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (item === null) return renderDraft(depth);
       const gestureKey = `item:${item.id}`;
       const gestureSelected = entrySelection?.key === gestureKey;
-      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={entryKind(item)} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)}
+      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={item.kind} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)}
       data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
       onPointerLeave={() => clearPreview(item.id)}
       onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
       $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
-      $arriving={entryKind(item) === 'tasks' && (completed.has(item.id) || reopened.has(item.id))}>
-      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && entryKind(item) === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, activeTag ? [activeTag] : []) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ') || (entryKind(item) === 'tasks' ? 'Empty to-do' : 'Empty note')}
+      $arriving={item.kind === 'tasks' && (completed.has(item.id) || reopened.has(item.id))}>
+      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && item.kind === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, activeTag ? [activeTag] : []) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ') || (item.kind === 'tasks' ? 'Empty task' : 'Empty note')}
         onClick={event => {
-          if (suppressClick.current) { suppressClick.current = false; return; }
+          if (consumeClick()) return;
           if (selectedEntryRanges().length > 1) return;
           if ((archived || !item.completed_at) && !(event.target as HTMLElement).closest('a')) void select(item, event.currentTarget);
         }}
@@ -1200,7 +702,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     </Item>;
     });
     const parent = parentId === null ? null : items.find(item => item.id === parentId);
-    return parentId === null ? <List>{content}</List> : <Children $task={parent ? entryKind(parent) === 'tasks' : draft.kind === 'tasks'}>{content}</Children>;
+    return parentId === null ? <List>{content}</List> : <Children $task={parent ? parent.kind === 'tasks' : draft.kind === 'tasks'}>{content}</Children>;
   };
   const clearDrop = () => {
     if (dropTarget.current) delete dropTarget.current.dataset.dropPosition;
@@ -1211,11 +713,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const target = records.current.find(row => row.id === Number(element?.dataset.itemId));
     const id = documentStore.resolve(draggedEntry.current);
     if (!element || !target || id === null || target.id === id) return null;
-    let parent: number | null = target.parent_id;
-    while (parent !== null) {
-      if (parent === id) return null;
-      parent = records.current.find(row => row.id === parent)?.parent_id ?? null;
-    }
+    if (ancestorIds(records.current, target.parent_id).includes(id)) return null;
     const rect = element.firstElementChild!.getBoundingClientRect();
     return { element, target, id, before: event.clientY < rect.top + rect.height / 2 };
   };
@@ -1243,9 +741,9 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     if (!row) return;
     try { checkDepth(row.id, drop.target.parent_id); }
     catch (error) { entryError(error); return; }
-    documentStore.enqueue([{ kind: entryKind(row), id: row.id, move: true, parent_id: drop.target.parent_id,
+    documentStore.enqueue([{ kind: row.kind, id: row.id, type: 'move', parent_id: drop.target.parent_id,
       after_id: drop.before ? null : drop.target.id, before_id: drop.before ? drop.target.id : null,
-      target_kind: drop.target.parent_id === null ? defaultKind : entryKind(drop.target) }]);
+      target_kind: drop.target.parent_id === null ? defaultKind : drop.target.kind }]);
     const moved = records.current.find(item => item.id === row.id)!;
     activate(moved);
     input.current?.selectEntry();
@@ -1269,10 +767,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const historyDirection = historyShortcutDirection(event.nativeEvent);
     if (mod && event.key.toLowerCase() === 'a') { event.preventDefault(); return; }
     if (historyDirection !== null) { event.preventDefault(); void documentUndo(historyDirection).catch(e => entryError(e)); return; }
-    const format = mod ? ({ b: 'bold', i: 'italic', u: 'underline', c: event.shiftKey ? 'code' : '' } as Record<string, string>)[event.key.toLowerCase()] : '';
+    const format = mod ? formattingShortcut(event.key, event.shiftKey) : null;
     if (format) { event.preventDefault(); void run(async () => {
       await save();
-      const changes = records.current.filter(item => archived || !item.completed_at).map(item => ({ kind: entryKind(item), id: item.id, content: formatMarkdown(item.content, format), tags: item.tags }));
+      const changes = records.current.filter(item => archived || !item.completed_at).map(item => ({ kind: item.kind, id: item.id, content: formatMarkdown(item.content, format), tags: item.tags }));
       if (changes.length) await editDocument(changes);
       persist(blank([], composer)); selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges(); await refresh();
     }); return; }
@@ -1280,9 +778,9 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     else if (!mod && event.key.length === 1) { event.preventDefault(); replaceDocument(event.key); }
     else if (event.key === 'Escape') { event.preventDefault(); selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges(); focus(); }
   }}>{renderChildren(null, 0)}{(!archived || defaultKind === 'notes') && (!draft.active || draft.mode === 'edit') && <ComposerTarget type="button" $floating={defaultKind === 'notes' && !composer}
-    data-task-creation-area={defaultKind === 'tasks' || undefined} aria-label={defaultKind === 'tasks' ? 'Add to-do' : 'Add journal bullet'}
-    onClick={beginBullet} />}
+    data-task-creation-area={defaultKind === 'tasks' || undefined} aria-label={defaultKind === 'tasks' ? 'Add task' : 'Add note'}
+    onClick={beginEntry} />}
     {defaultKind === 'tasks' && draft.active && draft.mode === 'new' && <ComposerTarget type="button" $floating={false} data-task-creation-area
-      aria-label="Continue new to-do" onClick={focus} />}
+      aria-label="Continue new task" onClick={focus} />}
     <VisuallyHidden>Tab indents. Shift Tab outdents. Enter adds a sibling. Shift Enter adds a line break. Select all twice selects this list.</VisuallyHidden></OutlineSurface>;
 }

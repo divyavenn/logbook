@@ -1,9 +1,9 @@
 """Task visibility and logbook placement are derived from the normalized task tree."""
-from .tags import bullet_dict
+from .tags import entry_dict
 
 
 def visible_tasks(db):
-    rows = [bullet_dict(r) for r in db.execute("SELECT * FROM entries WHERE kind = 'task' AND day_id IS NULL ORDER BY position, id")]
+    rows = [entry_dict(r) for r in db.execute("SELECT * FROM entries WHERE kind = 'task' AND day_id IS NULL ORDER BY position, id")]
     children = {}
     for row in rows:
         children.setdefault(row['parent_id'], []).append(row)
