@@ -277,9 +277,21 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   });
   await expect(ring.locator('svg')).toHaveCSS('width', `${bubble.width}px`);
   await expect(ring.locator('svg')).toHaveCSS('height', `${bubble.height}px`);
-  await expect(ring.locator('svg')).toHaveCSS('overflow', 'visible');
+  await expect(ring.locator('svg')).toHaveCSS('overflow', 'hidden');
   await expect(ring.locator('svg path')).toHaveCSS('stroke-width', bubble.stroke);
-  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M10.821 1.741A6.5 6.5 0 1 0 10.821 12.259C12.05 11.366 13.7 9.519 14.45 8.55Q15.65 7 14.45 5.45C13.7 4.481 12.05 2.634 10.821 1.741Z');
+  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M9.009 .818A6.5 6.5 0 1 0 9.009 13.182C10.435 12.718 12.549 9.049 13.299 7.75A1.5 1.5 0 0 0 13.299 6.25C12.549 4.951 10.435 1.282 9.009 .818Z');
+  const outline = await ring.locator('svg path').evaluate(element => {
+    const bounds = (element as SVGPathElement).getBBox();
+    const stroke = parseFloat(getComputedStyle(element).strokeWidth);
+    return {
+      width: bounds.width + stroke, height: bounds.height + stroke,
+      left: bounds.x - stroke / 2, right: bounds.x + bounds.width + stroke / 2,
+    };
+  });
+  expect(outline.width).toBeLessThanOrEqual(bubble.width + .001);
+  expect(outline.height).toBeLessThanOrEqual(bubble.height + .001);
+  expect(outline.left).toBeGreaterThanOrEqual(-.001);
+  expect(outline.right).toBeLessThanOrEqual(bubble.width + .001);
   expect(await ring.evaluate(element => {
     const style = getComputedStyle(element, '::before');
     return { radius: style.borderRadius, opacity: style.opacity, angle: style.getPropertyValue('--task-progress') };

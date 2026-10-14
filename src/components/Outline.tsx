@@ -147,7 +147,7 @@ const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolea
       transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   `}
   /* Match the task bubbles' 12px interior and rendered 1px borders. */
-  > svg { position: absolute; width: 14px; height: 14px; overflow: visible; pointer-events: none; translate: 0 var(--bullet-marker-offset);
+  > svg { position: absolute; width: 14px; height: 14px; overflow: hidden; pointer-events: none; translate: 0 var(--bullet-marker-offset);
     transform: rotate(${({ $open }) => $open ? 90 : 0}deg);
     opacity: ${({ $progress }) => $progress > 0 ? 0 : 1}; scale: ${({ $progress }) => $progress > 0 ? .25 : 1}; filter: blur(${({ $progress }) => $progress > 0 ? 4 : 0}px);
     transition: transform 140ms ease-out, opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
@@ -911,8 +911,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         }
       }} >
       {taskParent && <svg viewBox="0 0 14 14" aria-hidden="true" focusable="false">
-        {/* Preserve 70% (252 degrees) of the circle and taper the rest into a rounded point. */}
-        <path d="M10.821 1.741A6.5 6.5 0 1 0 10.821 12.259C12.05 11.366 13.7 9.519 14.45 8.55Q15.65 7 14.45 5.45C13.7 4.481 12.05 2.634 10.821 1.741Z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
+        {/* Preserve 60% (216 degrees) of the circle; the rounded tip and stroke fit its 14px diameter. */}
+        <path d="M9.009 .818A6.5 6.5 0 1 0 9.009 13.182C10.435 12.718 12.549 9.049 13.299 7.75A1.5 1.5 0 0 0 13.299 6.25C12.549 4.951 10.435 1.282 9.009 .818Z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
       </svg>}
     </Disclosure>;
   };
