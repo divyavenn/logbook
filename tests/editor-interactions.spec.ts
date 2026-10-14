@@ -260,7 +260,7 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
   });
 }
 
-test('parent rings show thin opaque child divisions and reverse their rendered pie transition', async ({ page, request }) => {
+test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and reverse smoothly', async ({ page, request }) => {
   const parent = await (await request.post('/api/tasks', { data: { content: 'Parent with three subtasks' } })).json();
   for (const content of ['First subtask', 'Second subtask', 'Third subtask']) {
     await request.post('/api/tasks', { data: { content, parent_id: parent.id } });
@@ -268,13 +268,18 @@ test('parent rings show thin opaque child divisions and reverse their rendered p
   await request.post('/api/tasks', { data: { content: 'Task without children' } });
   await page.goto('/');
   const ring = page.getByRole('button', { name: 'Expand Parent with three subtasks', exact: true });
-  await expect(ring.locator('svg path')).toHaveCSS('opacity', '1');
-  await expect(ring.locator('svg path')).toHaveCSS('stroke-width', '0.5px');
-  expect((await ring.locator('svg path').getAttribute('d'))!.match(/M/g)).toHaveLength(3);
+  await expect(ring.locator('svg')).toHaveCSS('opacity', '1');
+  await expect(ring.locator('svg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
+  await expect(ring.locator('svg path')).toHaveCSS('stroke-width', '1.25px');
+  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M6 .625A5.375 5.375 0 0 0 6 11.375L11.375 6Z');
   expect(await ring.evaluate(element => {
     const style = getComputedStyle(element, '::before');
-    return { radius: style.borderRadius, transform: style.transform, angle: style.getPropertyValue('--task-progress') };
-  })).toEqual({ radius: '50%', transform: 'none', angle: '0deg' });
+    return { radius: style.borderRadius, opacity: style.opacity, angle: style.getPropertyValue('--task-progress') };
+  })).toEqual({ radius: '50%', opacity: '0', angle: '0deg' });
+  await page.mouse.move(1000, 600);
+  await expect(page.getByTestId('auth-surface')).toHaveCSS('filter', 'blur(0px)');
+  await expect(page.getByTestId('tag-backdrop')).toHaveCSS('opacity', '0');
+  await page.locator('[data-outline-kind="tasks"]').screenshot({ path: 'test-results/parent-task-collapsed.png' });
   await ring.click();
   const progress = page.getByRole('button', { name: 'Collapse Parent with three subtasks', exact: true });
   const angle = () => progress.evaluate(element => parseFloat(getComputedStyle(element, '::before').getPropertyValue('--task-progress')));
@@ -291,14 +296,16 @@ test('parent rings show thin opaque child divisions and reverse their rendered p
   const reversing = await angle();
   expect(reversing).toBeLessThan(120);
   await expect.poll(angle).toBe(0);
-  await expect(progress.locator('svg path')).toHaveCSS('opacity', '1');
+  await expect(progress.locator('svg')).toHaveCSS('opacity', '1');
+  await expect(progress.locator('svg')).toHaveCSS('transform', 'matrix(0, 1, -1, 0, 0, 0)');
   await expect(page.getByRole('button', { name: 'Complete First subtask', exact: true })).toBeFocused();
   await page.screenshot({ path: 'test-results/parent-task-marker.png' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.keyboard.press('Space');
   await expect.poll(angle).toBe(120);
   await expect(progress).toHaveAttribute('aria-description', '1 of 3 children completed');
-  await expect(progress.locator('svg path')).toHaveCSS('opacity', '0.22');
+  await expect(progress.locator('svg')).toHaveCSS('opacity', '0');
+  expect(await progress.evaluate(element => getComputedStyle(element, '::before').opacity)).toBe('1');
   await page.screenshot({ path: 'test-results/parent-task-progress.png' });
 });
 

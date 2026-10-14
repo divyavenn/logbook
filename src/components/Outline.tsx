@@ -142,10 +142,14 @@ const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolea
     transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
   ${({ $task, $progress }) => $task && css`
     &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; transform: none;
-      background: conic-gradient(currentColor var(--task-progress), transparent 0); transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
+      background: conic-gradient(currentColor var(--task-progress), transparent 0);
+      opacity: ${$progress > 0 ? 1 : 0}; scale: ${$progress > 0 ? 1 : .25}; filter: blur(${$progress > 0 ? 0 : 4}px);
+      transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   `}
-  > svg { position: absolute; width: 12px; height: 12px; pointer-events: none; translate: 0 var(--bullet-marker-offset); }
-  > svg > path { transition: opacity ${TASK_PROGRESS_MS}ms ease-out, stroke-width ${TASK_PROGRESS_MS}ms ease-out; }
+  > svg { position: absolute; width: 12px; height: 12px; pointer-events: none; translate: 0 var(--bullet-marker-offset);
+    transform: rotate(${({ $open }) => $open ? 90 : 0}deg);
+    opacity: ${({ $progress }) => $progress > 0 ? 0 : 1}; scale: ${({ $progress }) => $progress > 0 ? .25 : 1}; filter: blur(${({ $progress }) => $progress > 0 ? 4 : 0}px);
+    transition: transform 140ms ease-out, opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   &:disabled { opacity: 1; }
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px;
   }
@@ -906,10 +910,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         }
       }} >
       {taskParent && <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-        <path d={Array.from({ length: Math.max(1, childCount) }, (_, index) => {
-          const angle = index * 2 * Math.PI / Math.max(1, childCount);
-          return `M6 6L${6 + Math.sin(angle) * 6} ${6 - Math.cos(angle) * 6}`;
-        }).join(' ')} fill="none" stroke="currentColor" strokeWidth={doneCount ? .75 : .5} opacity={doneCount ? .22 : 1} />
+        <path d="M6 .625A5.375 5.375 0 0 0 6 11.375L11.375 6Z" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
       </svg>}
     </Disclosure>;
   };
