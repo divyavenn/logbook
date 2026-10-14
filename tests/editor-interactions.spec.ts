@@ -278,7 +278,7 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   await expect(ring.locator('svg')).toHaveCSS('width', `${bubble.width}px`);
   await expect(ring.locator('svg')).toHaveCSS('height', `${bubble.height}px`);
   await expect(ring.locator('svg path')).toHaveCSS('stroke-width', bubble.stroke);
-  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M7 .5A6.5 6.5 0 0 0 7 13.5L13.1 7.4Q13.5 7 13.1 6.6Z');
+  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M7 .5A6.5 6.5 0 0 0 7 13.5C7.45 13.5 7.75 13.25 8.1 12.9L12.4 8.6Q14 7 12.4 5.4L8.1 1.1C7.75 .75 7.45 .5 7 .5Z');
   expect(await ring.evaluate(element => {
     const style = getComputedStyle(element, '::before');
     return { radius: style.borderRadius, opacity: style.opacity, angle: style.getPropertyValue('--task-progress') };
@@ -305,6 +305,8 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   await expect.poll(angle).toBe(0);
   await expect(progress.locator('svg')).toHaveCSS('opacity', '1');
   await expect(progress.locator('svg')).toHaveCSS('transform', 'matrix(0, 1, -1, 0, 0, 0)');
+  await expect(progress.locator('svg')).toHaveCSS('filter', 'blur(0px)');
+  await expect(progress.locator('svg')).toHaveCSS('scale', '1');
   await expect(page.getByRole('button', { name: 'Complete First subtask', exact: true })).toBeFocused();
   await page.screenshot({ path: 'test-results/parent-task-marker.png' });
   await page.emulateMedia({ reducedMotion: 'reduce' });

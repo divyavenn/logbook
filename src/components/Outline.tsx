@@ -911,7 +911,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         }
       }} >
       {taskParent && <svg viewBox="0 0 14 14" aria-hidden="true" focusable="false">
-        <path d="M7 .5A6.5 6.5 0 0 0 7 13.5L13.1 7.4Q13.5 7 13.1 6.6Z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
+        <path d="M7 .5A6.5 6.5 0 0 0 7 13.5C7.45 13.5 7.75 13.25 8.1 12.9L12.4 8.6Q14 7 12.4 5.4L8.1 1.1C7.75 .75 7.45 .5 7 .5Z" fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" />
       </svg>}
     </Disclosure>;
   };
