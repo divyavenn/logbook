@@ -10,7 +10,14 @@ export function useRangeEditing(key: string, wholeListSelected: () => boolean, r
     const ownedSelection = (event: Event) => {
       if (current.current.wholeListSelected() || event.defaultPrevented) return [];
       const ranges = selectedEntryRanges();
-      return ranges.length >= 2 && ranges[0].key === key ? ranges : [];
+      if (ranges.length < 2 || ranges[0].key !== key) return [];
+      // An open entry owns the browser selection and restores its own, so a
+      // selection anchored inside one cannot be held across entries. Those
+      // belong to the editor; a selection over the written page is ours.
+      const native = window.getSelection();
+      const anchored = native && [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')]
+        .some(editor => editor.contains(native.anchorNode) || editor.contains(native.focusNode));
+      return anchored ? [] : ranges;
     };
     const keydown = (event: KeyboardEvent) => {
       if (event.isComposing) return;

@@ -278,7 +278,10 @@ test('a selection delete in tag view leaves no blank tagged rows behind', async 
   const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
   await rail.hover();
   await rail.getByRole('button', { name: '#ranged', exact: true }).click();
-  await page.getByRole('group', { name: 'Range stays', exact: true }).waitFor();
+  const written = page.locator(`[data-item-id="${first.id}"] > div > [role="group"]`);
+  await expect(written).toBeVisible();
+  // The selection has to belong to the page, not to the open composer.
+  await written.focus();
   await page.evaluate(({ firstId, secondId }) => {
     const from = document.querySelector(`[data-item-id="${firstId}"] [role="group"]`)!;
     const to = document.querySelector(`[data-item-id="${secondId}"] [role="group"]`)!;

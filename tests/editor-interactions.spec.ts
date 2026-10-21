@@ -298,12 +298,14 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
     const first = await (await request.post('/api/notes', { data: { date: today, content: '**Keep** remove' } })).json();
     const last = await (await request.post('/api/notes', { data: { date: today, content: 'gone *tail*' } })).json();
     await page.goto('/');
-    await page.getByRole('group', { name: 'Keep remove', exact: true }).click();
     const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
-    await expect(editor).toBeFocused();
-    await editor.press('Meta+ArrowDown');
+    const written = page.locator(`[data-item-id="${first.id}"] > div > [role="group"]`);
+    await expect(written).toBeVisible();
+    // A selection over the written page, not one anchored in an open entry:
+    // an open entry owns the browser selection and keeps it to itself.
+    await written.focus();
     await page.evaluate(({ first, last }) => {
-      const start = document.querySelector(`[data-item-id="${first}"] [contenteditable] p`)!.lastChild!;
+      const start = document.querySelector(`[data-item-id="${first}"] > div > [role="group"] p`)!.lastChild!;
       const end = document.querySelector(`[data-item-id="${last}"] > div > [role="group"] p`)!.firstChild!;
       getSelection()!.setBaseAndExtent(start, 1, end, 5);
     }, { first: first.id, last: last.id });
@@ -313,7 +315,7 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
     })).toEqual([' remove', 1, 'gone ', 5]);
     if (action === 'typing') await page.keyboard.type('new ');
     else {
-      const copied = await editor.evaluate((element, action) => {
+      const copied = await written.evaluate((element, action) => {
         const clipboardData = new DataTransfer();
         if (action === 'paste') {
           clipboardData.setData('text/plain', 'new ');

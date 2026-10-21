@@ -226,7 +226,9 @@ const ConnectionState = styled.div`padding: 50px 0; display: grid; gap: 16px; ju
 export default function App({ locked = false, load = !locked, onReady, onLoadError }: {
   locked?: boolean; load?: boolean; onReady?: () => void; onLoadError?: () => void;
 }) {
-  const [data, setData] = useState<JournalData | null>(null);
+  // Paint the page we last saw on the first render, before anything is asked
+  // of the network. A refresh replaces it as soon as one answers.
+  const [data, setData] = useState<JournalData | null>(() => load ? cachedJournal(null) : null);
   const [night, setNight] = useState(() => storage.getItem('still-theme') === 'night');
   useEffect(() => {
     document.documentElement.dataset.theme = night ? 'night' : 'day';
