@@ -22,7 +22,7 @@ export const Children = styled(List)<{ $task: boolean }>`
   @media ${compactViewport} { padding-left: 9px; }
 `;
 export const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--entry-row-height);`;
-export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $rangeSelected?: boolean; $dragX?: number }>`
+export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
   opacity: ${({ $leaving }) => $leaving ? 0 : 1};
   transform: ${({ $leaving }) => $leaving ? 'translateY(-3px)' : 'none'};
@@ -34,11 +34,6 @@ export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestur
   > ${Row} { transition: background-color 120ms ease-out, box-shadow 140ms ease-out; }
   &[data-drop-position="before"] > ${Row} { box-shadow: 0 -1px 0 var(--link); }
   &[data-drop-position="after"] > ${Row} { box-shadow: 0 1px 0 var(--link); }
-  /* A selection covering whole entries marks the entries, not their text. */
-  ${({ $rangeSelected, $gestureSelected }) => $rangeSelected && !$gestureSelected && css`
-    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
-    > ${Row} ::selection { background: transparent; color: inherit; }
-  `}
   ${({ $gestureSelected }) => $gestureSelected && css`
     user-select: none; -webkit-user-select: none;
     > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; cursor: grab; }
@@ -161,20 +156,14 @@ export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done:
   }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
-export const Text = styled.div<{ $done?: boolean; $action?: boolean; $strikeable?: boolean }>`
+export const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
   ${richTextStyles}; cursor: text;
   flex: ${({ $action }) => $action ? '0 1 auto' : '1'}; min-width: 0; min-height: var(--entry-row-height); padding: var(--entry-padding); border: 0; background: transparent; color: var(--ink);
-  /* A row that can be checked off carries its rule all along, so completing
-     it draws the line on rather than striking it through at once. */
-  ${({ $strikeable, $done }) => ($strikeable ?? $done) && css`
-    text-decoration: line-through;
-    text-decoration-color: ${$done ? 'currentColor' : 'transparent'};
-    /* Selected text is repainted in the selection's own colours, which would
-       draw the rule that is waiting to be drawn. */
-    ${!$done && css`&::selection, & *::selection { text-decoration-line: none; }`}
-  `}
-  ${({ $done }) => $done && css`color: var(--muted); a { color: var(--muted); }`}
-  transition: color 200ms ease-out, text-decoration-color 200ms ease-out;
+  /* The rule is drawn only once the entry is done. Carrying a transparent one
+     in wait would show through: selected text is repainted in the selection's
+     colours, and a rule cannot be turned off from ::selection. */
+  ${({ $done }) => $done && css`color: var(--muted); text-decoration: line-through; a { color: var(--muted); }`}
+  transition: color 200ms ease-out;
   text-align: left; line-height: var(--entry-line-height); font-size: var(--entry-size); white-space: pre-wrap; overflow-wrap: anywhere;
   &:focus-visible { outline: none; }
 `;

@@ -1,10 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { replaceEntrySelection, selectedEntryRanges, type EntryRange, type SelectionEdit } from './entrySelection';
+import { replaceEntrySelection, selectedEntryRanges, type SelectionEdit } from './entrySelection';
 
-export function useRangeEditing(key: string, wholeListSelected: () => boolean, replace: (edit: SelectionEdit) => void,
-  copy?: (clipboard: DataTransfer, ranges: EntryRange[]) => boolean): void {
-  const current = useRef({ wholeListSelected, replace, copy });
-  current.current = { wholeListSelected, replace, copy };
+export function useRangeEditing(key: string, wholeListSelected: () => boolean, replace: (edit: SelectionEdit) => void): void {
+  const current = useRef({ wholeListSelected, replace });
+  current.current = { wholeListSelected, replace };
   useEffect(() => {
     const apply = (event: CustomEvent<SelectionEdit>) => current.current.replace(event.detail);
     const ownedSelection = (event: Event) => {
@@ -45,11 +44,8 @@ export function useRangeEditing(key: string, wholeListSelected: () => boolean, r
         replaceEntrySelection(ranges, event.clipboardData.getData('text/plain'), event.clipboardData.getData('text/html'));
         return;
       }
-      // Whole entries copy as themselves; a part of them copies as its text.
-      if (!current.current.copy?.(event.clipboardData, ranges)) {
-        event.clipboardData.setData('text/plain', ranges.map(range => range.text).join('\n'));
-        event.clipboardData.setData('text/html', ranges.map(range => range.html).join(''));
-      }
+      event.clipboardData.setData('text/plain', ranges.map(range => range.text).join('\n'));
+      event.clipboardData.setData('text/html', ranges.map(range => range.html).join(''));
       if (event.type === 'cut') replaceEntrySelection(ranges);
     };
     window.addEventListener('still-replace-entry-selection', apply);
