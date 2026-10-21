@@ -53,6 +53,31 @@ test('mobile text selection exposes a compact formatting toolbar', async ({ brow
   }
 });
 
+test('a whole-entry selection adds indent and outdent to the mobile toolbar', async ({ browser, baseURL, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Parent note' } });
+  const child = await (await request.post('/api/notes', { data: { date: today, content: 'Child note' } })).json();
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  const mobile = await context.newPage();
+  try {
+    await mobile.goto('/');
+    await mobile.getByRole('group', { name: 'Child note', exact: true }).click();
+    const editor = mobile.getByRole('textbox', { name: 'Edit note', exact: true });
+    const toolbar = mobile.getByRole('toolbar', { name: 'Formatting', exact: true });
+    await editor.press('Meta+a');
+    await expect(toolbar.getByRole('button')).toHaveCount(7);
+    const parentOf = async (id: number) => (await rows(mobile, 'notes')).find(row => row.id === id)?.parent_id;
+
+    await toolbar.getByRole('button', { name: 'Indent entry', exact: true }).click();
+    await expect.poll(() => parentOf(child.id)).not.toBe(null);
+    await editor.press('Meta+a');
+    await toolbar.getByRole('button', { name: 'Outdent entry', exact: true }).click();
+    await expect.poll(() => parentOf(child.id)).toBe(null);
+  } finally {
+    await context.close();
+  }
+});
+
 for (const kind of ['notes', 'tasks'] as const) {
   test(`link boundaries follow words while interior spaces stay linked in ${kind}`, async ({ page, request }) => {
     const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();

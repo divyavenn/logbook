@@ -50,6 +50,47 @@ export const GlobalStyle = createGlobalStyle`
   }
 `;
 
+// Filtering remounts the views, so a swap can settle in rather than snap.
+// Entry only: the outgoing view is gone before React inserts its replacement.
+// The first paint is not a switch, and animating it would move the page under
+// anything measuring it, so callers opt in once a view has actually changed.
+export const viewEnter = (enabled: boolean) => enabled && css`
+  opacity: 1; transform: none;
+  @starting-style { opacity: 0; transform: translateY(6px); }
+  transition-property: opacity, transform;
+  transition-duration: 320ms, 420ms;
+  transition-timing-function: ease-out, cubic-bezier(.2, 0, 0, 1);
+  @media (prefers-reduced-motion: reduce) { transition: none; }
+`;
+
+// The ink wash that fades scrolled content into the page at a viewport edge.
+export const edgeWash = (edge: 'top' | 'bottom') => css`
+  position: absolute; z-index: 7; ${edge === 'top' ? 'top: -2px;' : 'bottom: 0;'} height: 30px; pointer-events: none;
+  opacity: 1;
+  background: linear-gradient(to ${edge === 'top' ? 'bottom' : 'top'}, var(--edge-paper) 0%, color-mix(in srgb, var(--edge-paper) 72%, transparent) 34%, transparent 82%);
+  &::after {
+    content: ''; position: absolute; inset: 0;
+    background-image:
+      radial-gradient(ellipse 22% 105% at 7% -8%, var(--edge-paper) 0 48%, transparent 82%),
+      radial-gradient(ellipse 30% 92% at 31% -10%, var(--edge-paper) 0 44%, transparent 80%),
+      radial-gradient(ellipse 24% 112% at 56% -18%, var(--edge-paper) 0 50%, transparent 84%),
+      radial-gradient(ellipse 32% 96% at 82% -9%, var(--edge-paper) 0 42%, transparent 79%),
+      radial-gradient(ellipse 18% 108% at 101% -16%, var(--edge-paper) 0 49%, transparent 83%);
+    mask-image: linear-gradient(to bottom, #000 0%, #000d 40%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000d 40%, transparent 100%);
+    opacity: .88;
+    ${edge === 'bottom' && 'transform: rotate(180deg);'}
+  }
+`;
+
+// Anything that appears should arrive rather than pop into place.
+export const appear = (rise = '4px', ms = 180) => css`
+  opacity: 1; transform: none;
+  @starting-style { opacity: 0; transform: translateY(${rise}); }
+  transition: opacity ${ms}ms ease-out, transform ${ms}ms cubic-bezier(.2, 0, 0, 1);
+  @media (prefers-reduced-motion: reduce) { transition: none; }
+`;
+
 export const press = css`
   transition: background-color 120ms ease-out, color 120ms ease-out, scale 150ms ease-out;
   &:active:not(:disabled) { scale: .96; }

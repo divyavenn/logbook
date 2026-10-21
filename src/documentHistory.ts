@@ -34,7 +34,6 @@ const stored = readStored(HISTORY_KEY, value => {
 let undo: Entry[] = stored.undo, redo: Entry[] = stored.redo, busy = false;
 function changed() {
   storage.setItem(HISTORY_KEY, JSON.stringify({ undo: undo.slice(-200), redo: redo.slice(-200) }));
-  window.dispatchEvent(new CustomEvent('still-history-available', { detail: undo.length > 0 }));
 }
 export function historyShortcutDirection(event: HistoryShortcutEvent): boolean | null {
   if (event.repeat || event.altKey || !(event.metaKey || event.ctrlKey)) return null;

@@ -15,7 +15,7 @@ type DraftContext = {
 export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag }: DraftContext) {
   const mounted = useRef(true);
   const blank = (rows: OutlineItem[], active: boolean, parentId: number | null = null, afterId?: number | null, draftKind: EntryKind = defaultKind): Draft =>
-    ({ ...fresh(rows, active, draftKind, parentId, afterId), hiddenTag: activeTag });
+    ({ ...fresh(rows, active, draftKind, parentId, afterId), hiddenTags: activeTag ? [activeTag] : [] });
   const [draft, setDraft] = useState<Draft>(() => {
     try {
       const stored = readDraft(key, blank(items, composer), items);
@@ -59,7 +59,12 @@ export function useOutlineDraft({ key, documentStore, items, defaultKind, compos
     const value = current.current;
     if (!value.active || !hasDraftChanges(value)) return value.id;
     if (!value.content.trim() && !value.tags.length) {
-      if (value.id !== null) documentStore.enqueue([{ kind: value.kind, id: value.id, type: 'delete' }], historyKey ?? value.clientId);
+      // Emptying an entry while filtering drops the tag that listed it, and
+      // only removes the entry when no other tag keeps it.
+      const remaining = activeTag ? value.savedTags.filter(tag => tag !== activeTag) : [];
+      if (value.id !== null) documentStore.enqueue([remaining.length
+        ? { kind: value.kind, id: value.id, type: 'update', content: '', tags: remaining, allow_empty: true }
+        : { kind: value.kind, id: value.id, type: 'delete' }], historyKey ?? value.clientId);
       persist({ ...value, id: null, revision: null, saved: '', savedTags: [] });
       return null;
     }
@@ -71,7 +76,7 @@ export function useOutlineDraft({ key, documentStore, items, defaultKind, compos
     documentStore.enqueue([change], historyKey ?? value.clientId);
     persist({ ...value, id, saved: value.content, savedTags: value.tags });
     return id;
-  }, [day, documentStore, persist]);
+  }, [activeTag, day, documentStore, persist]);
   const save = useCallback(() => {
     const id = stageDraft();
     if (mounted.current) setSaving(true);

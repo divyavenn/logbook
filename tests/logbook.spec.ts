@@ -245,7 +245,7 @@ test('narrow screens use the same three-pane journal as short screens', async ({
   await expect(page.getByRole('group', { name: 'Older narrow note', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
   await page.getByRole('tab', { name: 'tasks', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'tasks', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'to do', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add task', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'log', exact: true }).click();
   await page.screenshot({ path: 'test-results/compact-notes.png' });
@@ -320,7 +320,7 @@ test('loads older days automatically and saves edits to historical notes', async
   await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
   await page.waitForTimeout(350);
   const timer = page.getByRole('button', { name: 'Start focus timer' });
-  const todo = page.getByRole('region', { name: 'tasks', exact: true });
+  const todo = page.getByRole('region', { name: 'to do', exact: true });
   const main = await page.getByRole('main').boundingBox();
   const timerBefore = await timer.boundingBox();
   const todoBefore = await todo.boundingBox();
