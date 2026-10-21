@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
-import { errorMessage, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
+import { cacheJournal, cachedJournal, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
 import { recoverEarlierDrafts } from './entryDrafts';
 import { storage } from './storage';
 import { FocusSound } from './audio';
 import type { JournalData, JournalDay } from './types';
-import { Button, Muted, TextButton, press } from './styles';
+import { Muted, TextButton, edgeWash, press } from './styles';
 import { Journal, Tasks } from './components/Journal';
 import { TagTabs } from './components/TagTabs';
 import { JournalContext, flushDrafts } from './JournalContext';
@@ -217,30 +217,9 @@ const LogViewport = styled.div`
   }
 `;
 const LogEdgeWash = styled.div<{ $edge?: 'top' | 'bottom' }>`
-  position: absolute; z-index: 7; ${({ $edge = 'top' }) => $edge === 'top' ? 'top: -2px;' : 'bottom: 0;'} left: -24px; right: -24px; height: 30px; pointer-events: none;
-  opacity: 1;
-  background: linear-gradient(to ${({ $edge = 'top' }) => $edge === 'top' ? 'bottom' : 'top'}, var(--edge-paper) 0%, color-mix(in srgb, var(--edge-paper) 72%, transparent) 34%, transparent 82%);
-  &::after {
-    content: ''; position: absolute; inset: 0;
-    background-image:
-      radial-gradient(ellipse 22% 105% at 7% -8%, var(--edge-paper) 0 48%, transparent 82%),
-      radial-gradient(ellipse 30% 92% at 31% -10%, var(--edge-paper) 0 44%, transparent 80%),
-      radial-gradient(ellipse 24% 112% at 56% -18%, var(--edge-paper) 0 50%, transparent 84%),
-      radial-gradient(ellipse 32% 96% at 82% -9%, var(--edge-paper) 0 42%, transparent 79%),
-      radial-gradient(ellipse 18% 108% at 101% -16%, var(--edge-paper) 0 49%, transparent 83%);
-    mask-image: linear-gradient(to bottom, #000 0%, #000d 40%, transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000d 40%, transparent 100%);
-    opacity: .88;
-    ${({ $edge = 'top' }) => $edge === 'bottom' && 'transform: rotate(180deg);'}
-  }
+  ${({ $edge = 'top' }) => edgeWash($edge)};
+  left: -24px; right: -24px;
   @media ${compactViewport} { height: 24px; }
-`;
-const Toast = styled.div`position: fixed; bottom: max(25px, calc(env(safe-area-inset-bottom) + 12px)); left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(540px, calc(100% - 32px)); display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 19px; background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px #00000007, 0 4px 24px #31392b19; font-size: 12px;`;
-const QuietStatus = styled.div`
-  position: fixed; right: 24px; bottom: 18px; z-index: 20; pointer-events: none;
-  color: var(--muted); font-size: 11px; opacity: 0; transform: translateY(2px);
-  transition: opacity 140ms ease-out, transform 140ms ease-out;
-  &[data-show='true'] { opacity: .82; transform: translateY(0); }
 `;
 const ConnectionState = styled.div`padding: 50px 0; display: grid; gap: 16px; justify-items: start; @media ${shortViewport} { display: none; }`;
 
@@ -254,17 +233,18 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     storage.setItem('still-theme', night ? 'night' : 'day');
   }, [night]);
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  // Only a real view change animates; the first paint is not a switch.
+  const [switchedView, setSwitchedView] = useState(false);
   const tagRef = useRef<string | null>(null);
   const [completed, setCompleted] = useState(new Set<number>());
   const [reopened, setReopened] = useState(new Set<number>());
-  const [undoTask, setUndoTask] = useState<{ id: number; completedAt: string } | null>(null);
   const [target, setTarget] = useState<{ kind: 'notes' | 'tasks'; id: number } | null>(null);
   const completionTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reopenTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onComplete = (ids: number[], taskId?: number, completedAt?: string) => {
     if (completionTimeout.current) clearTimeout(completionTimeout.current);
     setCompleted(new Set(ids));
-    if (taskId && completedAt) { recordCompletion(taskId, completedAt); setUndoTask({ id: taskId, completedAt }); }
+    if (taskId && completedAt) recordCompletion(taskId, completedAt);
     completionTimeout.current = setTimeout(() => setCompleted(new Set()), 1000);
   };
   const onReopen = (ids: number[]) => {
@@ -276,8 +256,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     if (completionTimeout.current) clearTimeout(completionTimeout.current);
     if (reopenTimeout.current) clearTimeout(reopenTimeout.current);
   }, []);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
   const [now, setNow] = useState(Date.now());
   const [statsOpen, setStatsOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -288,8 +266,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [hasHoverSidebar, setHasHoverSidebar] = useState(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
   const viewportWidth = useRef(window.innerWidth);
   const { pagerRef: mobilePager, selectView: selectMobileView, trackScroll: trackMobileScroll, view: mobileView } = usePager(MOBILE_VIEWS, 'log', paged);
-  const quietStatus = useRef<HTMLDivElement>(null);
-  const quietStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerIntent, setTimerIntent] = useState<'start' | 'stop' | null>(null);
@@ -308,7 +284,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const refreshResult = useRef<Promise<void> | null>(null);
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
-  const notify = useCallback((text: string) => setMessage(text), []);
   useEffect(() => {
     const media = window.matchMedia(compactViewport);
     const coarse = window.matchMedia('(pointer: coarse)');
@@ -347,22 +322,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
   }, [locked]);
-  useEffect(() => {
-    const saveState = (event: Event) => {
-      const value = (event as CustomEvent<string>).detail;
-      const status = quietStatus.current;
-      if (!status) return;
-      if (quietStatusTimer.current) clearTimeout(quietStatusTimer.current);
-      if (value === 'clear') { status.dataset.show = 'false'; return; }
-      status.textContent = value === 'saving' ? 'saving…' : 'saved'; status.dataset.show = 'true';
-      if (value === 'saved') quietStatusTimer.current = setTimeout(() => { status.dataset.show = 'false'; }, 900);
-    };
-    window.addEventListener('still-save-state', saveState);
-    return () => {
-      window.removeEventListener('still-save-state', saveState);
-      if (quietStatusTimer.current) clearTimeout(quietStatusTimer.current);
-    };
-  }, []);
   const loadJournal = useCallback(async (includeHistory: boolean) => {
     const sequence = ++generation.current;
     refreshRequest.current?.abort();
@@ -377,6 +336,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       const recovered = await recoverEarlierDrafts(response.today);
       if (!current()) return;
       if (recovered) response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag }, request.signal);
+      // Keep the first page only: it is what the view opens with next time.
+      cacheJournal(tag, { ...response, days: [...response.days] });
       while (current() && includeHistory && loadedThrough.current && response.next_cursor && response.next_cursor > loadedThrough.current) {
         const cursor = response.next_cursor;
         const more = await getJournal({ before: cursor, limit: JOURNAL_PAGE_SIZE, tag }, request.signal);
@@ -400,7 +361,6 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       const cachedDays = previous.days.filter(day => day.date < oldest);
       return { ...response, days: [...response.days, ...cachedDays], next_cursor: cachedDays.length ? previous.next_cursor : response.next_cursor };
     });
-    setError('');
   }, []);
   const refresh = useCallback(async (includeHistory = true) => {
     let pending = loadJournal(includeHistory);
@@ -418,21 +378,22 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   useEffect(() => {
     const applied = () => { void refresh().catch(e => entryError(e)); };
     const failed = (event: Event) => entryError((event as CustomEvent<string>).detail);
-    const edited = () => setUndoTask(null);
     window.addEventListener('still-history-applied', applied);
     window.addEventListener('still-history-error', failed);
-    window.addEventListener('still-history-available', edited);
-    return () => { window.removeEventListener('still-history-applied', applied); window.removeEventListener('still-history-error', failed); window.removeEventListener('still-history-available', edited); };
-  }, [refresh, notify]);
+    return () => { window.removeEventListener('still-history-applied', applied); window.removeEventListener('still-history-error', failed); };
+  }, [refresh]);
 
   useEffect(() => {
     if (!load) { setData(null); return; }
-    void refresh(false).catch(e => { setError(errorMessage(e)); onLoadError?.(); });
+    // Open on the last page seen for this view, so a reload with no network
+    // still shows the logbook. A successful refresh replaces it.
+    setData(current => current && current.tag === tagRef.current ? current : cachedJournal(tagRef.current) ?? current);
+    void refresh(false).catch(e => { entryError(e); onLoadError?.(); });
   }, [refresh, activeTag, load, onLoadError]);
   useEffect(() => {
     if (locked || !load) return;
-    const interval = setInterval(() => { void refresh(false).catch(e => setError(errorMessage(e))); }, 15000);
-    const focus = () => { void refresh(false).catch(e => setError(errorMessage(e))); };
+    const interval = setInterval(() => { void refresh(false).catch(e => entryError(e)); }, 15000);
+    const focus = () => { void refresh(false).catch(e => entryError(e)); };
     window.addEventListener('focus', focus);
     return () => { clearInterval(interval); window.removeEventListener('focus', focus); };
   }, [refresh, locked, load]);
@@ -448,11 +409,10 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     let day = localDate();
     const interval = setInterval(() => {
       const next = localDate();
-      if (next !== day) { day = next; setNow(Date.now()); void refresh(false).catch(e => setError(errorMessage(e))); }
+      if (next !== day) { day = next; setNow(Date.now()); void refresh(false).catch(e => entryError(e)); }
     }, 1000);
     return () => clearInterval(interval);
   }, [refresh, locked]);
-  useEffect(() => { if (!message) return; const id = setTimeout(() => setMessage(''), 6500); return () => clearTimeout(id); }, [message]);
   useEffect(() => {
     if (!data?.active_session) { sound.current.stop(); setAudible(false); }
   }, [data?.active_session?.id]);
@@ -481,17 +441,17 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         sound.current.stop(); setAudible(false);
         setData(current => current ? { ...current, active_session: null } : current);
       } else {
-        if (storage.getItem('still-muted') !== 'true') void sound.current.start(volume).then(() => setAudible(true)).catch(() => notify('Audio paused. Open the timer’s sound menu to resume.'));
+        if (storage.getItem('still-muted') !== 'true') void sound.current.start(volume).then(() => setAudible(true)).catch(() => setAudible(false));
         const started = await startTimer();
         setData(current => current ? { ...current, active_session: started } : current);
       }
       await refresh();
-    } catch (e) { if (!active) { sound.current.stop(); setAudible(false); } notify(errorMessage(e)); }
+    } catch (e) { if (!active) { sound.current.stop(); setAudible(false); } entryError(e); }
     finally { timerLock.current = false; setTimerIntent(null); setTimerBusy(false); }
   };
   const toggleSound = async () => {
     if (audible) { sound.current.stop(); setAudible(false); storage.setItem('still-muted', 'true'); }
-    else { try { await sound.current.start(volume); setAudible(true); storage.setItem('still-muted', 'false'); } catch { notify('Your browser couldn’t start audio. The timer is still tracking your focus.'); } }
+    else { try { await sound.current.start(volume); setAudible(true); storage.setItem('still-muted', 'false'); } catch { setAudible(false); } }
   };
   const secondsForDay = (day: JournalDay) => {
     if (!active || !data || day.date !== data.today) return day.focused_seconds;
@@ -502,9 +462,9 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     try {
       await flushDrafts();
       tagRef.current = tag; loadedThrough.current = null; generation.current++;
-      setActiveTag(tag);
+      setSwitchedView(true); setActiveTag(tag);
       if (logViewport.current) logViewport.current.scrollTop = 0;
-    } catch (error) { notify(errorMessage(error)); }
+    } catch (error) { entryError(error); }
   };
 
   const loadMore = useCallback(async () => {
@@ -517,6 +477,21 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     setData(current => current ? { ...current, days: [...current.days, ...more.days.filter(day => !current.days.some(existing => existing.date === day.date))], next_cursor: more.next_cursor } : current);
   }, [data?.next_cursor]);
 
+  // Leaving the filter is what makes a day editable again, tags included.
+  const jumpToDate = async (date: string) => {
+    try {
+      const first = data?.days.find(day => day.date === date)?.entries[0] ?? null;
+      await flushDrafts();
+      tagRef.current = null; loadedThrough.current = null; setActiveTag(null); setTarget(null);
+      setSwitchedView(true);
+      await refresh();
+      const result = await getJournal({ on: date });
+      setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
+      if (first) setTarget({ kind: first.kind, id: first.id });
+      else requestAnimationFrame(() => document.querySelector(`[data-day="${date}"]`)?.scrollIntoView({ block: 'start' }));
+    } catch (e) { entryError(e); }
+  };
+
   const jumpTo = async (hit: SearchHit) => {
     try {
       await flushDrafts();
@@ -528,7 +503,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       }
       setSearchOpen(false);
       setTarget({ kind: hit.kind, id: hit.id });
-    } catch (e) { notify(errorMessage(e)); }
+    } catch (e) { entryError(e); }
   };
 
   const sidebarControls = <SidebarControls role="group" aria-label="Page controls" data-focus-chrome>
@@ -564,9 +539,9 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
           </MobileTabs>
         </ShortHeader>
         <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}>
-          <MobilePane id="mobile-panel-tasks" role="tabpanel" aria-labelledby="mobile-tab-tasks" aria-hidden={mobileView !== 'tasks'} inert={mobileView !== 'tasks'}>{data ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} /> : null}</MobilePane>
+          <MobilePane id="mobile-panel-tasks" role="tabpanel" aria-labelledby="mobile-tab-tasks" aria-hidden={mobileView !== 'tasks'} inert={mobileView !== 'tasks'}>{data ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} refresh={refresh} /> : null}</MobilePane>
           <MobilePane id="mobile-panel-log" role="tabpanel" aria-labelledby="mobile-tab-log" aria-hidden={mobileView !== 'log'} inert={mobileView !== 'log'}>{data && <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
-            <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate}
+            <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView} refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)}
               sessionsEnabled={false} showHistory secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
           </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame>}</MobilePane>
           <MobilePane id="mobile-panel-tags" role="tabpanel" aria-labelledby="mobile-tab-tags" aria-hidden={mobileView !== 'tags'} inert={mobileView !== 'tags'}>
@@ -581,12 +556,11 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
           </MobilePane>
         </MobilePager>
       </> : <>
-        {!data ? <ConnectionState><Muted>{error || 'Loading…'}</Muted>{error && <Button onClick={() => { setError(''); void refresh().catch(e => setError(errorMessage(e))); }}>Retry</Button>}</ConnectionState> :
-          <Tasks key={data.tag ?? 'all'} tasks={data.tasks} refresh={refresh} notify={notify} />}
+        {!data ? <ConnectionState><Muted>Loading…</Muted></ConnectionState> :
+          <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} refresh={refresh} />}
       {data &&
         <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
-        <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} refresh={refresh} notify={notify} openSessions={setSessionsDate} secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
-        {error && <TextButton onClick={() => void refresh().catch(e => notify(errorMessage(e)))}>Connection lost · retry</TextButton>}
+        <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView} refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)} secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
         </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame>
       }
       </>}
@@ -618,11 +592,5 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         <ShortcutRow><Demo>redo</Demo><Keys>⌘ + shift + z</Keys></ShortcutRow>
       </ShortcutRows>
     </ShortcutPanel></Modal>
-    {undoTask && !message && <Toast><TextButton aria-label="Undo task completion" onClick={async () => {
-      try { await documentUndo(); setUndoTask(null); }
-      catch (e) { notify(errorMessage(e)); }
-    }}>Undo</TextButton><TextButton aria-label="Dismiss undo" onClick={() => setUndoTask(null)}>×</TextButton></Toast>}
-    {message && <Toast role="status">{message}<TextButton aria-label="Dismiss notification" onClick={() => setMessage('')}>Dismiss</TextButton></Toast>}
-    <QuietStatus ref={quietStatus} role="status" aria-live="polite" data-show="false" />
   </Page></JournalContext.Provider>;
 }

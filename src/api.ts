@@ -1,6 +1,7 @@
 import * as decode from './apiDecoders';
 import { array, boolean, object, type Decoder } from './validation';
 import type { DocumentChange } from './entryChanges';
+import { readStored, storage } from './storage';
 import type { CalendarSubscription, CompletionResult, DocumentResult, JournalData, ReopenResult, SearchResults, Session, SessionInput, Stats } from './types';
 
 export { normalizeJournal } from './apiDecoders';
@@ -48,6 +49,16 @@ async function decoded<T>(path: string, decoder: Decoder<T>, method: HttpMethod 
 export function isAbortError(error: unknown): boolean { return error instanceof DOMException && error.name === 'AbortError'; }
 
 export type JournalQuery = { limit?: number; before?: string; on?: string; tag?: string | null };
+// The newest page seen for a view, so the logbook opens, and can be edited,
+// with no network. Queued edits are kept separately and replay on their own.
+const journalCacheKey = (tag: string | null) => `still-journal:${tag ?? ''}`;
+export function cacheJournal(tag: string | null, data: JournalData): void {
+  storage.setItem(journalCacheKey(tag), JSON.stringify(data));
+}
+export function cachedJournal(tag: string | null): JournalData | null {
+  return readStored<JournalData | null>(journalCacheKey(tag), value => decode.normalizeJournal(value), null);
+}
+
 export async function getJournal(query: JournalQuery = {}, signal?: AbortSignal): Promise<JournalData> {
   const parameters = new URLSearchParams();
   if (query.limit !== undefined) parameters.set('limit', String(query.limit));

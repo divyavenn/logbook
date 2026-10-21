@@ -135,6 +135,35 @@ function hideTags(node: JSONContent, hidden: Set<string>): JSONContent | null {
   return node;
 }
 
+// Where each hidden tag sat, as an offset into the text left behind. The
+// editor tracks these positions so editing around a hidden tag cannot move it.
+export function hiddenTagPositions(source: string, hiddenTags: string[] = []): { name: string; offset: number }[] {
+  const hidden = new Set(hiddenTags.map(normalizeTag));
+  if (!hidden.size) return [];
+  const doc = schema.nodeFromJSON(parseMarkdown(source));
+  const found: { name: string; offset: number }[] = [];
+  let length = 0, removed = 0, first = true;
+  doc.descendants(block => {
+    if (!block.isTextblock) return true;
+    if (!first) length += 1;
+    first = false;
+    const literal = block.type.name === 'codeBlock';
+    block.forEach(node => {
+      const quoted = node.marks.some(mark => mark.type.name === 'code' || mark.type.name === 'link');
+      if (node.isText && !literal && !quoted) {
+        for (const match of tagMatches(node.text ?? '')) {
+          if (!hidden.has(match.name)) continue;
+          found.push({ name: match.name, offset: length + match.from - removed });
+          removed += match.to - match.from;
+        }
+      }
+      length += node.isText ? node.nodeSize : node.type.name === 'journalTag' ? String(node.attrs.name).length + 1 : 1;
+    });
+    return false;
+  });
+  return found;
+}
+
 export function markdownText(source: string, hiddenTags: string[] = []): string {
   const hidden = new Set(hiddenTags.map(normalizeTag));
   const parsed = parseMarkdown(source);
@@ -220,11 +249,12 @@ export function serializeEntry(document: JSONContent): { content: string; tags: 
 }
 
 const inlineTagStyles = css`
-  display: inline-block; position: relative; isolation: isolate; max-width: 100%; vertical-align: baseline; translate: 0 1px;
+  display: inline-block; position: relative; isolation: isolate; max-width: 100%; vertical-align: baseline; translate: 0 0;
   padding: 0 8px 0 7px; margin: 0; color: var(--tag-ink);
   font: inherit; font-size: calc(1em - .5px); white-space: normal; overflow-wrap: anywhere;
+  /* The pill keeps its place on the line while its text rides 1px higher. */
   &::before {
-    content: ''; position: absolute; z-index: -1; inset: -1px 0;
+    content: ''; position: absolute; z-index: -1; inset: 0 0 -2px;
     border-radius: 999px; background: var(--tag-bg);
   }
 `;

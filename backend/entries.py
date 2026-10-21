@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import HTTPException
 from .db import ensure_day
 from .entry_kinds import EntryKind, api_kind, stored_kind
-from .hierarchy import descendants, place, validate_parent
+from .hierarchy import descendants, place, siblings, validate_parent
 from .models import EntryText
 from .tags import entry_dict
 
@@ -57,19 +57,26 @@ def check_revision(row, expected):
         raise HTTPException(409, 'This entry changed elsewhere. Your local draft was preserved.')
 
 
-def move_entry(db, table, item_id, parent_id, after_id, now, before_id=None):
-    """Move an entry and let its new parent determine note/task identity."""
+def move_entry(db, table, item_id, parent_id, after_id, now, before_id=None, day=None):
+    """Move an entry and let its new parent or date determine note/task identity."""
     row = required(db, table, item_id)
     parent = db.execute('SELECT * FROM entries WHERE id = ?', (parent_id,)).fetchone() if parent_id is not None else None
     if parent_id is not None and parent is None:
         raise HTTPException(404, 'The parent entry no longer exists.')
-    target_kind = parent['kind'] if parent else ('task' if row['day_id'] is None else 'note')
+    day_id = ensure_day(db, day, now) if day is not None else row['day_id']
+    target_kind = parent['kind'] if parent else ('task' if day_id is None else 'note')
     target_table = api_kind(target_kind)
-    if parent and parent['day_id'] != row['day_id']:
+    if parent and parent['day_id'] != day_id:
         raise HTTPException(409, 'Nested entries must belong to the same list or date.')
     tree = descendants(db, table, item_id)
     if parent_id in {entry['id'] for entry, _ in tree}:
         raise HTTPException(409, 'An entry cannot be nested inside itself or its descendants.')
+    previous_day_id, previous_parent_id = row['day_id'], row['parent_id']
+    if day_id != previous_day_id:
+        # A dated entry takes its whole branch to the new day.
+        for entry, _ in tree:
+            db.execute('UPDATE entries SET day_id = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
+                       (day_id, now, entry['id']))
     if target_table != table:
         old_parent = row['parent_id']
         db.execute('UPDATE entries SET parent_id = NULL, revision = revision + 1 WHERE id = ?', (item_id,))
@@ -91,4 +98,9 @@ def move_entry(db, table, item_id, parent_id, after_id, now, before_id=None):
                        (now, now, entry['id']))
     place(db, target_table, item_id, parent_id, after_id,
           allow_completed_parent=bool(parent and parent['completed_at']), before_id=before_id)
+    if day_id != previous_day_id and previous_parent_id is None:
+        # place() repacks the old list only when the parent changed.
+        for position, sibling in enumerate(siblings(db, target_table, None, previous_day_id)):
+            db.execute('UPDATE entries SET position = ?, revision = revision + 1 WHERE id = ? AND position != ?',
+                       (position, sibling['id'], position))
     return target_table

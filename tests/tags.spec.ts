@@ -20,6 +20,9 @@ for (const kind of ['notes', 'tasks'] as const) {
     const preview = page.getByRole('group', { name: new RegExp(`^A tagged ${kind}`) });
     const tag = preview.locator(`[data-tag="unique-${kind}"]`);
     await expect(tag).toHaveText(`#unique-${kind}`);
+    // Saving re-keys the row from its local ID to the stored one, remounting
+    // it. Measure only once that has happened, or the node is detached.
+    await expect.poll(async () => Number(await preview.locator('xpath=ancestor::li[1]').getAttribute('data-item-id'))).toBeGreaterThan(0);
     const tagTypography = await tag.evaluate(element => {
       const style = getComputedStyle(element), parent = getComputedStyle(element.parentElement!);
       const background = getComputedStyle(element, '::before');
@@ -162,7 +165,7 @@ test('swipe tags page highlights the selected tag and filters tasks and log entr
   await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toBeVisible();
 });
 
-test('hover tabs filter nested notes and tasks, hide the active tag, and preserve it during edits', async ({ page, request }) => {
+test('hover tabs filter nested notes and tasks, hide only the active tag, and keep it through edits', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   const createNote = async (content: string, tags: string[] = [], parent_id: number | null = null) =>
     (await request.post('/api/notes', { data: { date: today, content, tags, parent_id } })).json();
@@ -188,6 +191,7 @@ test('hover tabs filter nested notes and tasks, hide the active tag, and preserv
   await expect(page.getByRole('group', { name: 'Included grandchild', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Included subtask', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Matched nested root', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
+  // Only the tag being filtered by is hidden; the others stay as they were.
   await expect(page.locator('[data-tag="focused"]')).toHaveCount(0);
   await expect(page.locator('[data-tag="secondary"]')).toHaveCount(1);
   await page.getByRole('group', { name: 'Focus parent', exact: true }).click();
@@ -195,16 +199,21 @@ test('hover tabs filter nested notes and tasks, hide the active tag, and preserv
   await expect(editor.locator('[data-tag]')).toHaveCount(0);
   await expect.poll(() => page.evaluate((date) => {
     const draft = JSON.parse(localStorage.getItem(`still-draft-${date}`) ?? 'null');
-    return draft && { hiddenTag: draft.hiddenTag, savedTags: draft.savedTags };
-  }, today)).toEqual({ hiddenTag: 'focused', savedTags: ['focused'] });
+    return draft && { hiddenTags: draft.hiddenTags, savedTags: draft.savedTags };
+  }, today)).toEqual({ hiddenTags: ['focused'], savedTags: ['focused'] });
   await editor.fill('Focus parent edited');
   await expect.poll(() => page.evaluate((date) => JSON.parse(localStorage.getItem(`still-draft-${date}`) ?? 'null')?.tags, today)).toEqual(['focused']);
+  // Another tag can be added while filtering, and shows as a normal bubble.
+  await editor.pressSequentially(' #extra ');
+  await expect(editor.locator('[data-tag="extra"]')).toHaveCount(1);
+  await expect(editor.locator('[data-tag="focused"]')).toHaveCount(0);
+  await expect.poll(() => page.evaluate((date) => JSON.parse(localStorage.getItem(`still-draft-${date}`) ?? 'null')?.tags, today)).toEqual(['extra', 'focused']);
   await editor.press('Enter');
-  await expect(page.getByRole('group', { name: 'Focus parent edited', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: /^Focus parent edited/ })).toBeVisible();
   await expect.poll(async () => {
     const data = await (await request.get('/api/export')).json();
     return data.notes.find((item: { id: number }) => item.id === parent.id)?.tags;
-  }).toEqual(['focused']);
+  }).toEqual(['extra', 'focused']);
   const composer = page.getByRole('textbox', { name: 'New note', exact: true });
   await composer.fill('New filtered note'); await composer.press('Enter');
   await expect(page.getByRole('group', { name: 'New filtered note', exact: true })).toBeVisible();
@@ -215,6 +224,122 @@ test('hover tabs filter nested notes and tasks, hide the active tag, and preserv
   await rail.hover(); await rail.getByRole('button', { name: 'logbook', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Unmatched ancestor', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'New filtered note', exact: true }).locator('[data-tag="focused"]')).toBeVisible();
+  const exported = await (await request.get('/api/export')).json();
+  expect(exported.notes.find((item: { content: string }) => item.content === 'Included grandchild').tags).toEqual(['secondary']);
+});
+
+test('deleting an entry in tag view only removes that tag', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Keeps its text', tags: ['pruned', 'kept'] } });
+  await request.post('/api/notes', { data: { date: today, content: 'Only this tag', tags: ['pruned'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#pruned', exact: true }).click();
+  const tagsOf = async (content: string) =>
+    ((await (await request.get('/api/export')).json()).notes as Array<{ content: string; tags: string[] }>)
+      .find(row => row.content === content)?.tags;
+  const deleteEntry = async (content: string) => {
+    // Deleting an entry hands editing to its neighbour, which is already open.
+    const group = page.getByRole('group', { name: content, exact: true });
+    if (await group.count()) await group.click();
+    const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+    await expect(editor).toContainText(content);
+    const box = (await editor.boundingBox())!;
+    await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
+    await editor.press('Backspace');
+  };
+
+  await deleteEntry('Keeps its text');
+  // The entry leaves the filtered list but keeps its text and its other tags.
+  await expect.poll(() => tagsOf('Keeps its text')).toEqual(['kept']);
+  await expect(page.getByRole('group', { name: 'Keeps its text', exact: true })).toHaveCount(0);
+  await deleteEntry('Only this tag');
+  await expect.poll(() => tagsOf('Only this tag')).toEqual([]);
+
+  // Nothing carries the tag now, so the filter drops itself.
+  const kept = page.getByRole('group', { name: 'Keeps its text', exact: true });
+  await expect(kept).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Only this tag', exact: true })).toBeVisible();
+  await expect(kept.locator('[data-tag="kept"]')).toBeVisible();
+  await expect(kept.locator('[data-tag="pruned"]')).toHaveCount(0);
+  await rail.hover();
+  await expect(rail.getByRole('button', { name: '#pruned', exact: true })).toHaveCount(0);
+});
+
+test('a selection delete in tag view leaves no blank tagged rows behind', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const post = async (content: string, tags: string[]) =>
+    (await request.post('/api/notes', { data: { date: today, content, tags } })).json();
+  const first = await post('Range first', ['ranged']);
+  const second = await post('Range second', ['ranged', 'other']);
+  await post('Range stays', ['ranged']);
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#ranged', exact: true }).click();
+  await page.getByRole('group', { name: 'Range stays', exact: true }).waitFor();
+  await page.evaluate(({ firstId, secondId }) => {
+    const from = document.querySelector(`[data-item-id="${firstId}"] [role="group"]`)!;
+    const to = document.querySelector(`[data-item-id="${secondId}"] [role="group"]`)!;
+    const range = document.createRange(); range.setStartBefore(from); range.setEndAfter(to);
+    const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+  }, { firstId: first.id, secondId: second.id });
+  await page.keyboard.press('Backspace');
+
+  await expect(page.getByRole('group', { name: 'Range first', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Range second', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('group', { name: 'Range stays', exact: true })).toBeVisible();
+  // The emptied entries are gone outright, not left as rows with no text.
+  await expect.poll(async () => {
+    const notes = (await (await request.get('/api/export')).json()).notes as Array<{ id: number }>;
+    return notes.map(note => note.id);
+  }).not.toContain(first.id);
+  const notes = (await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string }>;
+  expect(notes.some(note => note.id === second.id)).toBe(false);
+  expect(notes.map(note => note.content)).toEqual(['Range stays']);
+});
+
+test('editing in tag view leaves the hidden tag exactly where it sat', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const note = await (await request.post('/api/notes', { data: { date: today, content: 'before #anchored after', tags: ['anchored'] } })).json();
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#anchored', exact: true }).click();
+  const row = page.getByRole('group', { name: /^before/ });
+  await expect(row.locator('[data-tag]')).toHaveCount(0);
+  await row.click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await expect(editor).toHaveText('before after');
+  await editor.press('Meta+ArrowDown');
+  await editor.pressSequentially(' more');
+  await editor.press('Enter');
+  const stored = async () => ((await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string; tags: string[] }>)
+    .find(item => item.id === note.id);
+  // The tag keeps its place in the text instead of moving to the end.
+  await expect.poll(async () => (await stored())?.content).toBe('before #anchored after more');
+  expect((await stored())?.tags).toEqual(['anchored']);
+
+  await rail.hover(); await rail.getByRole('button', { name: 'logbook', exact: true }).click();
+  const full = page.getByRole('group', { name: /^before/ });
+  await expect(full.locator('[data-tag="anchored"]')).toBeVisible();
+  await expect(full).toHaveText('before #anchored after more');
+});
+
+test('a date in tag view opens that day in the full logbook', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Tagged note', tags: ['dated'] } });
+  await request.post('/api/notes', { data: { date: today, content: 'Untagged note' } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#dated', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Untagged note', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: `Open ${today} in the full logbook`, exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Untagged note', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Tagged note', exact: true }).locator('[data-tag="dated"]')).toBeVisible();
+  await expect(page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true })).toBeVisible();
 });
 
 test('completion animates out and in while preserving tag metadata', async ({ page, request }) => {
@@ -238,7 +363,7 @@ test('completion animates out and in while preserving tag metadata', async ({ pa
 test('task region expands for all rows and leaves a usable journal below', async ({ page, request }) => {
   for (let i = 0; i < 28; i++) await request.post('/api/tasks', { data: { content: `Expanding task ${i}` } });
   await page.goto('/');
-  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  const tasks = page.getByRole('region', { name: 'to do', exact: true });
   await expect(tasks).toHaveCSS('overflow-y', 'visible');
   const dimensions = await tasks.evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight }));
   expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client + 1);

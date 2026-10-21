@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures';
+import { expect, test, type Locator } from './fixtures';
 
 test('continuous typing keeps the new row and caret in the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 540 });
@@ -178,6 +178,42 @@ test('a completion can reverse while its first request and pie animation are in 
   } finally { release(); }
 });
 
+test('a selected entry drags from anywhere on its row and shows a grab cursor', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'First sibling' } });
+  await request.post('/api/notes', { data: { date: today, content: 'Second sibling' } });
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Second sibling', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  const box = (await editor.boundingBox())!;
+  await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
+  const selected = editor.locator('xpath=ancestor::li[1]');
+  await expect(selected).toHaveAttribute('draggable', 'true');
+  await expect(selected.locator('> div').first()).toHaveCSS('cursor', 'grab');
+  await expect(editor).toHaveCSS('pointer-events', 'none');
+  // Dragging from the middle of the text moves the entry, not the text.
+  await selected.dragTo(page.getByRole('group', { name: 'First sibling', exact: true }),
+    { sourcePosition: { x: Math.round(box.width / 2), y: 12 }, targetPosition: { x: 8, y: 2 } });
+  await expect.poll(async () => {
+    const rows = (await (await request.get('/api/export')).json()).notes as Array<{ content: string; position: number }>;
+    return rows.sort((a, b) => a.position - b.position).map(row => row.content);
+  }).toEqual(['Second sibling', 'First sibling']);
+});
+
+test('a selected entry lets go when something outside it is pressed', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Held entry' } });
+  await page.goto('/');
+  await page.getByRole('group', { name: 'Held entry', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  const box = (await editor.boundingBox())!;
+  await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
+  const selected = editor.locator('xpath=ancestor::li[1]');
+  await expect(selected).toHaveAttribute('data-gesture-selected', 'true');
+  await page.getByRole('button', { name: 'to do', exact: true }).click();
+  await expect(selected).not.toHaveAttribute('data-gesture-selected', 'true');
+});
+
 test('a selected entry can be dragged before a sibling without losing focus or text', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'First sibling' } });
@@ -197,6 +233,45 @@ test('a selected entry can be dragged before a sibling without losing focus or t
     const rows = (await (await request.get('/api/export')).json()).notes as Array<{ content: string; position: number }>;
     return rows.sort((a, b) => a.position - b.position).map(row => row.content);
   }).toEqual(['Second sibling', 'First sibling']);
+});
+
+test('a selected entry can be dragged between entries of another day and back', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const yesterday = new Date(new Date(`${today}T00:00:00Z`).getTime() - 86400000).toISOString().slice(0, 10);
+  await request.post('/api/notes', { data: { date: today, content: 'Travelling note' } });
+  await request.post('/api/notes', { data: { date: today, content: 'Today anchor' } });
+  await request.post('/api/notes', { data: { date: yesterday, content: 'First anchor' } });
+  await request.post('/api/notes', { data: { date: yesterday, content: 'Second anchor' } });
+  await page.goto('/');
+  const orderOf = async (date: string) => {
+    const { days } = await (await request.get('/api/journal?limit=10')).json();
+    const entries = (days.find((day: { date: string }) => day.date === date)?.entries ?? []) as Array<{ content: string; position: number }>;
+    return entries.sort((a, b) => a.position - b.position).map(entry => entry.content);
+  };
+  const select = async () => {
+    const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+    const box = (await editor.boundingBox())!;
+    await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
+    const row = editor.locator('xpath=ancestor::li[1]');
+    await expect(row).toHaveAttribute('draggable', 'true');
+    return row;
+  };
+  const dropOn = async (content: string, edge: 'before' | 'after') => {
+    const group = page.getByRole('group', { name: content, exact: true });
+    const box = (await group.boundingBox())!;
+    await (await select()).dragTo(group,
+      { sourcePosition: { x: 8, y: 12 }, targetPosition: { x: 8, y: edge === 'before' ? 2 : box.height - 2 } });
+  };
+
+  // The lower half of a target lands after it, exactly as within one day.
+  await page.getByRole('group', { name: 'Travelling note', exact: true }).click();
+  await dropOn('First anchor', 'after');
+  await expect.poll(() => orderOf(yesterday)).toEqual(['First anchor', 'Travelling note', 'Second anchor']);
+  expect(await orderOf(today)).toEqual(['Today anchor']);
+
+  await dropOn('Today anchor', 'before');
+  await expect.poll(() => orderOf(today)).toEqual(['Travelling note', 'Today anchor']);
+  expect(await orderOf(yesterday)).toEqual(['First anchor', 'Second anchor']);
 });
 
 test('a failed save shakes its entry, logs the error, and recovers the queued text after reload', async ({ page, request }) => {
@@ -260,7 +335,7 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
   });
 }
 
-test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and reverse smoothly', async ({ page, request }) => {
+test('parent tasks hold three dots in a task bubble until the pie fills it, and reverse smoothly', async ({ page, request }) => {
   const parent = await (await request.post('/api/tasks', { data: { content: 'Parent with three subtasks' } })).json();
   for (const content of ['First subtask', 'Second subtask', 'Third subtask']) {
     await request.post('/api/tasks', { data: { content, parent_id: parent.id } });
@@ -269,7 +344,8 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   await page.goto('/');
   const ring = page.getByRole('button', { name: 'Expand Parent with three subtasks', exact: true });
   await expect(ring.locator('svg')).toHaveCSS('opacity', '1');
-  await expect(ring.locator('svg')).toHaveCSS('transform', 'matrix(1, 0, 0, 1, 0, 0)');
+  // The dots have no direction to point, so expanding no longer rotates them.
+  await expect(ring.locator('svg')).toHaveCSS('transform', 'none');
   const bubble = await page.getByRole('button', { name: 'Complete Task without children', exact: true }).evaluate(element => {
     const style = getComputedStyle(element, '::before');
     const border = parseFloat(style.borderTopWidth);
@@ -278,24 +354,25 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   await expect(ring.locator('svg')).toHaveCSS('width', `${bubble.width}px`);
   await expect(ring.locator('svg')).toHaveCSS('height', `${bubble.height}px`);
   await expect(ring.locator('svg')).toHaveCSS('overflow', 'hidden');
-  await expect(ring.locator('svg path')).toHaveCSS('stroke-width', bubble.stroke);
-  await expect(ring.locator('svg path')).toHaveAttribute('d', 'M9.009 .818A6.5 6.5 0 1 0 9.009 13.182C10.435 12.718 12.549 9.049 13.299 7.75A1.5 1.5 0 0 0 13.299 6.25C12.549 4.951 10.435 1.282 9.009 .818Z');
-  const outline = await ring.locator('svg path').evaluate(element => {
-    const bounds = (element as SVGPathElement).getBBox();
-    const stroke = parseFloat(getComputedStyle(element).strokeWidth);
-    return {
-      width: bounds.width + stroke, height: bounds.height + stroke,
-      left: bounds.x - stroke / 2, right: bounds.x + bounds.width + stroke / 2,
-    };
-  });
-  expect(outline.width).toBeLessThanOrEqual(bubble.width + .001);
-  expect(outline.height).toBeLessThanOrEqual(bubble.height + .001);
-  expect(outline.left).toBeGreaterThanOrEqual(-.001);
-  expect(outline.right).toBeLessThanOrEqual(bubble.width + .001);
-  expect(await ring.evaluate(element => {
+  // The parent's ring is the leaf task bubble itself, down to its border.
+  const geometry = (name: string) => page.getByRole('button', { name, exact: true }).evaluate(element => {
     const style = getComputedStyle(element, '::before');
-    return { radius: style.borderRadius, opacity: style.opacity, angle: style.getPropertyValue('--task-progress') };
-  })).toEqual({ radius: '50%', opacity: '0', angle: '0deg' });
+    return { width: style.width, height: style.height, border: style.borderTopWidth, radius: style.borderRadius, opacity: style.opacity };
+  });
+  expect(await geometry('Expand Parent with three subtasks')).toEqual(await geometry('Complete Task without children'));
+  expect(await ring.evaluate(element => getComputedStyle(element, '::before').getPropertyValue('--task-progress'))).toBe('0deg');
+  // Three dots, centred inside that bubble.
+  await expect(ring.locator('svg circle')).toHaveCount(3);
+  const dots = await ring.locator('svg').evaluate(element => {
+    const bounds = (element as SVGSVGElement).getBBox();
+    return { left: bounds.x, right: bounds.x + bounds.width, top: bounds.y, bottom: bounds.y + bounds.height };
+  });
+  const stroke = parseFloat(bubble.stroke);
+  expect(dots.left + dots.right).toBeCloseTo(bubble.width, 1);
+  expect(dots.top + dots.bottom).toBeCloseTo(bubble.height, 1);
+  expect(dots.right - dots.left).toBeLessThan(bubble.width - stroke * 2);
+  // Spread horizontally: wider than it is tall.
+  expect(dots.bottom - dots.top).toBeLessThan(dots.right - dots.left);
   await page.mouse.move(1000, 600);
   await expect(page.getByTestId('auth-surface')).toHaveCSS('filter', 'blur(0px)');
   await expect(page.getByTestId('tag-backdrop')).toHaveCSS('opacity', '0');
@@ -317,7 +394,6 @@ test('parent tasks switch from a circle-caret SVG to an uninterrupted pie and re
   expect(reversing).toBeLessThan(120);
   await expect.poll(angle).toBe(0);
   await expect(progress.locator('svg')).toHaveCSS('opacity', '1');
-  await expect(progress.locator('svg')).toHaveCSS('transform', 'matrix(0, 1, -1, 0, 0, 0)');
   await expect(progress.locator('svg')).toHaveCSS('filter', 'blur(0px)');
   await expect(progress.locator('svg')).toHaveCSS('scale', '1');
   await expect(page.getByRole('button', { name: 'Complete First subtask', exact: true })).toBeFocused();
@@ -359,7 +435,8 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(row).toHaveAttribute('data-gesture-selected', 'true');
     expect((await editor.locator('em').allTextContents()).join('')).toBe('First lineSecond line');
     const copied = await copyOrCut('copy');
-    expect(copied.text).toBe('First line\nSecond line');
+    // A selected entry copies as a markdown list item, formatting included.
+    expect(copied.text).toBe('- ***First line\\\n  Second line***');
     expect(copied.html).toContain('<strong>');
     expect(copied.html).toContain('<em>');
     await page.screenshot({ path: `test-results/selected-${kind}-entry.png` });
@@ -383,15 +460,23 @@ for (const kind of ['notes', 'tasks'] as const) {
   });
 }
 
-test('inline tag pills sit slightly lower in both saved text and the editor', async ({ page, request }) => {
+test('inline tag text rides higher than the pill around it, saved and in the editor', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Text with #focus tag', tags: ['focus'] } });
   await page.goto('/');
   const saved = page.getByRole('group', { name: 'Text with #focus tag', exact: true });
-  await expect(saved.locator('[data-tag="focus"]')).toHaveCSS('translate', '0px 1px');
+  // The text sits 1px above the centre of its own pill background.
+  const offsets = (tag: Locator) => tag.evaluate(element => {
+    const pill = getComputedStyle(element, '::before');
+    const top = parseFloat(pill.top), bottom = parseFloat(pill.bottom);
+    return { top, bottom, raised: (top + bottom) / -2 };
+  });
+  const savedTag = await offsets(saved.locator('[data-tag="focus"]'));
+  expect(savedTag.raised).toBeCloseTo(1, 1);
   await saved.click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
-  await expect(editor.locator('[data-tag="focus"]')).toHaveCSS('translate', '0px 1px');
+  const editorTag = await offsets(editor.locator('[data-tag="focus"]'));
+  expect(editorTag).toEqual(savedTag);
   await expect(page.getByTestId('tag-backdrop')).toHaveCSS('opacity', '0');
   await editor.screenshot({ path: 'test-results/inline-tag-alignment.png' });
 });

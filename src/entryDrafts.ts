@@ -11,10 +11,10 @@ export type Draft = {
   active: boolean; mode: 'new' | 'edit'; id: number | null; content: string; saved: string;
   kind: EntryKind; clientId: string; requestId: string; revision: number | null;
   parentId: number | null; afterId: number | null; beforeId?: number | null;
-  placement: 'tail' | 'after'; hiddenTag: string | null; tags: string[]; savedTags: string[];
+  placement: 'tail' | 'after'; hiddenTags: string[]; tags: string[]; savedTags: string[];
 };
 export function freshDraft(rows: OutlineItem[], active: boolean, kind: EntryKind, parentId: number | null = null, afterId?: number | null): Draft {
-  return { tags: [], savedTags: [], hiddenTag: null, active, mode: 'new', id: null, content: '', saved: '',
+  return { tags: [], savedTags: [], hiddenTags: [], active, mode: 'new', id: null, content: '', saved: '',
     clientId: crypto.randomUUID(), requestId: crypto.randomUUID(), revision: null, parentId,
     placement: afterId === undefined ? 'tail' : 'after', kind,
     afterId: afterId === undefined ? siblingEntries(rows, parentId).at(-1)?.id ?? null : afterId };
@@ -58,7 +58,7 @@ export function readDraft(key: string, fallback: Draft, entries: OutlineItem[] =
       afterId: field('afterId', value => nullable(value, localId), fallback.afterId),
       beforeId: field('beforeId', value => nullable(value, localId), fallback.beforeId ?? null),
       placement: field('placement', value => { if (value === 'tail' || value === 'after') return value; throw new Error('Invalid draft position.'); }, fallback.placement),
-      hiddenTag: field('hiddenTag', value => nullable(value, text), fallback.hiddenTag),
+      hiddenTags: field('hiddenTags', strings, fallback.hiddenTags),
       tags: field('tags', strings, fallback.tags), savedTags: field('savedTags', strings, fallback.savedTags),
     };
   }, fallback);

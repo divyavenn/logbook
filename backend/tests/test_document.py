@@ -368,3 +368,42 @@ def test_search_includes_checked_descendants_inside_active_tree(client):
     client.post(f"/api/tasks/{leaf['id']}/complete")
     result = client.get('/api/search?q=searchable').json()['results']
     assert [row['id'] for row in result] == [leaf['id']]
+
+
+def test_move_to_another_date_carries_the_branch_and_repacks_both_days(client):
+    first = create(client, 'notes', 'Stays', day='2026-09-16')
+    moving = create(client, 'notes', 'Moves', day='2026-09-16')
+    child = create(client, 'notes', 'Child', moving['id'], day='2026-09-16')
+    trailing = create(client, 'notes', 'Trailing', day='2026-09-16')
+    target = create(client, 'notes', 'Other day', day='2026-09-17')
+
+    def listing():
+        days = {day['date']: {entry['content'] for entry in day['entries']}
+                for day in client.get('/api/journal?limit=10').json()['days']}
+        return days, {row['content']: row for row in client.get('/api/export').json()['notes']}
+
+    moved = batch(client, [{'kind': 'notes', 'id': moving['id'], 'move': True,
+                            'date': '2026-09-17', 'before_id': target['id']}])
+    days, rows = listing()
+    # The branch follows its root, and the day it left closes the gap.
+    assert days['2026-09-17'] == {'Moves', 'Child', 'Other day'}
+    assert days['2026-09-16'] == {'Stays', 'Trailing'}
+    assert rows['Child']['parent_id'] == moving['id']
+    assert [rows['Stays']['position'], rows['Trailing']['position']] == [0, 1]
+    assert [rows['Moves']['position'], rows['Other day']['position']] == [0, 1]
+
+    history(client, moved['operation_id'])
+    days, rows = listing()
+    assert days['2026-09-16'] == {'Stays', 'Moves', 'Child', 'Trailing'}
+    assert days['2026-09-17'] == {'Other day'}
+    assert rows['Child']['parent_id'] == moving['id']
+    assert [rows['Stays']['position'], rows['Moves']['position'], rows['Trailing']['position']] == [0, 1, 2]
+
+
+def test_move_to_a_date_rejects_a_parent_from_another_day(client):
+    note = create(client, 'notes', 'Moves', day='2026-09-16')
+    other = create(client, 'notes', 'Elsewhere', day='2026-09-17')
+    response = client.post('/api/document/edit', json={'changes': [
+        {'kind': 'notes', 'id': note['id'], 'move': True, 'date': '2026-09-18', 'parent_id': other['id']},
+    ]})
+    assert response.status_code == 409

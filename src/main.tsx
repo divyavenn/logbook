@@ -17,20 +17,29 @@ const AppSurface = styled.div<{ $blurred: boolean; $blocked: boolean }>`
   transition-property: filter, opacity; transition-duration: 260ms; transition-timing-function: cubic-bezier(.2, 0, 0, 1);
 `;
 
+// Whether the last answer from the server let us in. With no network there is
+// nobody to ask, and every request still has to prove itself once there is.
+const UNLOCKED_KEY = 'still-unlocked';
+
 function Root() {
   const [state, setState] = useState<'checking' | 'locked' | 'unlocking' | 'revealing' | 'ready'>('checking');
   useEffect(() => installTouchHaptics(), []);
   useEffect(() => {
     let cancelled = false;
     getAuthStatus().then(status => {
-      if (!cancelled) setState(status.enabled && !status.authenticated ? 'locked' : 'ready');
-    }).catch(() => { if (!cancelled) setState('locked'); });
-    const lock = () => setState('locked');
+      const locked = status.enabled && !status.authenticated;
+      storage.setItem(UNLOCKED_KEY, locked ? 'false' : 'true');
+      if (!cancelled) setState(locked ? 'locked' : 'ready');
+    }).catch(() => {
+      if (!cancelled) setState(storage.getItem(UNLOCKED_KEY) === 'true' ? 'ready' : 'locked');
+    });
+    const lock = () => { storage.setItem(UNLOCKED_KEY, 'false'); setState('locked'); };
     window.addEventListener('still-auth-required', lock);
     return () => { cancelled = true; window.removeEventListener('still-auth-required', lock); };
   }, []);
   const authenticate = useCallback(async (password: string) => {
     if (!await login(password)) return false;
+    storage.setItem(UNLOCKED_KEY, 'true');
     setState('unlocking'); return true;
   }, []);
   useEffect(() => {

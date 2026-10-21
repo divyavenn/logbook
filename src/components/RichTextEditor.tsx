@@ -4,16 +4,16 @@ import { Markdown } from '@tiptap/markdown';
 import type { Mark, Node as DocumentNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import styled from 'styled-components';
-import { formattingExtensions, documentWithTags, serializeEntry, richTextStyles, safeHref } from '../markdown';
-import { Field } from '../styles';
+import { formattingExtensions, documentWithTags, hiddenTagPositions, serializeEntry, richTextStyles, safeHref } from '../markdown';
+import { Field, appear } from '../styles';
 import { Modal } from './Modal';
 import { useJournalContext } from '../JournalContext';
 import { normalizeTag } from '../tagSyntax';
-import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
+import { HiddenTagPositions, TagDecorations, commitTypedTags, resetHiddenTags, restoreHiddenTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
 import { domText, textPositions, type TextOffsets } from '../textSelection';
-import { Code2, Link2 } from 'lucide-react';
+import { Code2, IndentDecrease, IndentIncrease, Link2 } from 'lucide-react';
 import type { EntryFormat } from '../entryFormatting';
 
 const Surface = styled.div`
@@ -24,6 +24,7 @@ const Surface = styled.div`
 const LinkForm = styled.form`display: grid; gap: 8px; margin: 0;`;
 const LinkField = styled(Field)<{ $url?: boolean }>`
   color: ${({ $url }) => $url ? "var(--url)" : "var(--link)"};
+  transition: color 140ms ease-out;
   border: 0; outline: none; box-shadow: none; background: transparent;
   &:focus-visible { outline: none; background: var(--field); }
 `;
@@ -31,6 +32,10 @@ const LinkField = styled(Field)<{ $url?: boolean }>`
 const TagCompletion = styled.div<{ $left: number; $top: number }>`
   position: fixed; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px; z-index: 20;
   width: min(230px, calc(100vw - 24px)); pointer-events: none;
+  ${appear('3px', 140)};
+  /* Once shown it slides to follow the caret instead of hopping after it. */
+  transition: opacity 140ms ease-out, transform 140ms cubic-bezier(.2, 0, 0, 1), left 140ms ease-out, top 140ms ease-out;
+  @media (prefers-reduced-motion: reduce) { transition: none; }
 `;
 const TagAlternatives = styled.div`
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding-top: 31px;
@@ -39,6 +44,7 @@ const TagAlternatives = styled.div`
 const TagOption = styled.button<{ $selected: boolean }>`
   max-width: 100%; min-height: 28px; border: 0; border-radius: 999px; padding: 4px 9px;
   background: var(--tag-bg); color: ${({ $selected }) => $selected ? 'var(--link)' : 'var(--tag-ink)'}; font-size: 13px; line-height: 20px;
+  transition: color 120ms ease-out;
   text-align: left; overflow-wrap: anywhere;
   &:hover { color: var(--ink); }
 `;
@@ -46,16 +52,21 @@ const HiddenTagOption = styled.span`
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
 `;
 type TagSuggestion = { from: number; to: number; query: string; names: string[]; index: number; left: number; top: number };
-type MobileFormatState = { left: number; top: number; width: number; bold: boolean; italic: boolean; underline: boolean; code: boolean; link: boolean };
+type MobileFormatState = { left: number; top: number; width: number; entry: boolean; bold: boolean; italic: boolean; underline: boolean; code: boolean; link: boolean };
 const MobileFormatBar = styled.div<{ $left: number; $top: number; $width: number }>`
   position: fixed; z-index: 39; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px; width: ${({ $width }) => $width}px;
   display: none; align-items: center; padding: 2px; border-radius: 10px;
   color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px #0000000b, 0 5px 18px #20262024;
+  ${appear('4px', 160)};
+  transition: opacity 160ms ease-out, transform 160ms cubic-bezier(.2, 0, 0, 1),
+    left 160ms ease-out, top 160ms ease-out, width 160ms ease-out;
+  @media (prefers-reduced-motion: reduce) { transition: none; }
   @media(pointer: coarse) { display: flex; }
 `;
 const MobileFormatButton = styled.button<{ $active: boolean }>`
   flex: 1 1 40px; min-width: 0; height: 40px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center;
   background: ${({ $active }) => $active ? 'var(--soft)' : 'transparent'}; color: ${({ $active }) => $active ? 'var(--link)' : 'var(--ink)'};
+  transition: background-color 140ms ease-out, color 140ms ease-out;
   font-size: 14px; line-height: 1;
 `;
 
@@ -96,7 +107,14 @@ export type { TextOffsets } from '../textSelection';
 const entryEdge = (doc: DocumentNode, start: boolean) => start ? TextSelection.atStart(doc).from : TextSelection.atEnd(doc).to;
 const entireEntrySelected = (editor: Editor) => {
   const { doc, selection } = editor.state;
-  return !selection.empty && selection.from <= entryEdge(doc, true) && selection.to >= entryEdge(doc, false);
+  if (selection.empty || selection.from > entryEdge(doc, true) || selection.to < entryEdge(doc, false)) return false;
+  // A selection reaching past this editor belongs to the document, and must
+  // not be treated as this one entry: selecting an entry stops its text from
+  // being selectable, which would collapse the selection being made.
+  const native = window.getSelection();
+  if (!native || native.isCollapsed || !native.rangeCount) return true;
+  const dom = editor.view.dom;
+  return dom.contains(native.anchorNode) && dom.contains(native.focusNode);
 };
 export type RichTextHandle = {
   focus: (options?: FocusOptions, selection?: TextOffsets) => void;
@@ -108,6 +126,8 @@ export type RichTextHandle = {
 };
 type Props = {
   ref?: Ref<RichTextHandle>; value: string; tags: string[]; label: string; readOnly: boolean;
+  // Hidden tags are stripped from the text and never rendered as bubbles.
+  hiddenTags?: string[];
   onChange: (markdown: string, tags: string[]) => void; onBlur: (event?: FocusEvent) => void; onKeyDown: (event: KeyboardEvent) => void;
   onEnter: () => void;
   onBoundary?: (direction: 'backspace' | 'delete') => void;
@@ -116,18 +136,40 @@ type Props = {
   onSelectDocument?: () => void;
   onSelectEntry?: (selected: boolean) => void;
   onDeleteEntry?: () => void;
+  onShift?: (outdent: boolean) => void;
 };
 
-export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry }: Props) {
+export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, hiddenTags = [], onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift }: Props) {
   const { tags } = useJournalContext();
+  const hidden = useRef(hiddenTags); hidden.current = hiddenTags;
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
-  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry });
-  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry };
+  const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift });
+  callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift };
+  // Selecting an entry's whole text selects the entry, however that was done.
+  // The explicit gesture additionally makes Backspace remove the entry itself.
   const entrySelected = useRef(false);
+  const entryReported = useRef(false);
+  const reportEntrySelection = (selected: boolean) => {
+    if (entryReported.current === selected) return;
+    entryReported.current = selected;
+    callbacks.current.onSelectEntry?.(selected);
+  };
   const lastSnapshot = useRef(JSON.stringify([value, entryTags]));
+  // Hidden tags are absent from the document but present in what it stores,
+  // so they are reported as neither added nor removed by this editor.
+  const visible = (names: string[]) => hidden.current.length ? names.filter(name => !hidden.current.includes(name)) : names;
+  const storedEntry = (currentEditor: Editor) => {
+    const doc = currentEditor.state.doc;
+    let tagged = false;
+    doc.descendants(node => { if (node.type.name === 'journalTag') tagged = true; });
+    // Nothing visible is left to anchor a hidden tag to, so none comes back.
+    if (!doc.textContent.trim() && !tagged) return { content: '', tags: [] as string[] };
+    const entry = serializeEntry(restoreHiddenTags(currentEditor).doc.toJSON());
+    return { content: entry.content, tags: visible(entry.tags) };
+  };
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
   const restoreLinkSelection = useRef<{ from: number; to: number } | null>(null);
@@ -144,12 +186,13 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
   const publishEditorValue = (currentEditor: Editor) => {
     commitTypedTags(currentEditor, true);
     const visiblyEmpty = !currentEditor.view.dom.textContent?.trim() && !currentEditor.view.dom.querySelector('[data-tag]');
-    const entry = visiblyEmpty ? { content: '', tags: [] as string[] } : serializeEntry(currentEditor.getJSON());
+    const entry = visiblyEmpty ? { content: '', tags: [] as string[] } : storedEntry(currentEditor);
     callbacks.current.onChange(entry.content, entry.tags);
   };
   const editor: Editor | null = useEditor({
-    extensions: [...formattingExtensions(), Markdown, TagDecorations],
-    content: documentWithTags(value, entryTags), injectCSS: false, immediatelyRender: true,
+    extensions: [...formattingExtensions(), Markdown, TagDecorations,
+      HiddenTagPositions.configure({ offsets: hiddenTagPositions(value, hiddenTags) })],
+    content: documentWithTags(value, entryTags, hiddenTags), injectCSS: false, immediatelyRender: true,
     // Literal punctuation stays literal; formatting comes from shortcuts or rich paste.
     enableInputRules: false, enablePasteRules: false,
     editable: !readOnly,
@@ -189,10 +232,11 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
             event.preventDefault();
             editor?.commands.selectAll();
             entrySelected.current = true;
-            callbacks.current.onSelectEntry?.(true);
+            reportEntrySelection(true);
             return true;
           }
-          if (entrySelected.current) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
+          entrySelected.current = false;
+          reportEntrySelection(false);
           const anchor = event.target.closest<HTMLAnchorElement>('a');
           const href = anchor && safeHref(anchor.getAttribute('href') ?? '');
           if (!href) return false;
@@ -408,17 +452,17 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
     onUpdate({ editor }) {
       // Formatting changes the document while leaving its full selection in
       // place. Keep the row highlight until typing or navigation collapses it.
-      if (entrySelected.current && !entireEntrySelected(editor)) { entrySelected.current = false; callbacks.current.onSelectEntry?.(false); }
-      const entry = serializeEntry(editor.getJSON());
+      if (!entireEntrySelected(editor)) entrySelected.current = false;
+      reportEntrySelection(entireEntrySelected(editor));
+      const entry = storedEntry(editor);
       lastSnapshot.current = JSON.stringify([entry.content, entry.tags]);
       callbacks.current.onChange(entry.content, entry.tags);
       updateSuggestion(editor);
       commitTypedTags(editor);
     },
     onSelectionUpdate({ editor }) {
-      if (entrySelected.current && !entireEntrySelected(editor)) {
-        entrySelected.current = false; callbacks.current.onSelectEntry?.(false);
-      }
+      if (!entireEntrySelected(editor)) entrySelected.current = false;
+      reportEntrySelection(entireEntrySelected(editor));
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;
       if (!editor.state.selection.empty || editor.state.selection.from !== linkReplacement.current?.to) linkReplacement.current = null;
       updateSuggestion(editor);
@@ -436,13 +480,15 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
     const viewportWidth = viewport?.width ?? window.innerWidth;
     const viewportTop = viewport?.offsetTop ?? 0;
     const viewportBottom = viewportTop + (viewport?.height ?? window.innerHeight);
-    const width = Math.max(0, Math.min(204, viewportWidth - 16));
+    // A whole-entry selection adds indent and outdent, which need more room.
+    const entry = entireEntrySelected(current);
+    const width = Math.max(0, Math.min(entry ? 288 : 204, viewportWidth - 16));
     const minLeft = viewportLeft + 8;
     const maxLeft = viewportLeft + viewportWidth - width - 8;
     const left = Math.max(minLeft, Math.min((from.left + to.right - width) / 2, maxLeft));
     const above = Math.min(from.top, to.top) - 48;
     const top = above >= viewportTop + 8 ? above : Math.min(Math.max(from.bottom, to.bottom) + 8, viewportBottom - 52);
-    setMobileFormat({ left, top, width, bold: current.isActive('bold'), italic: current.isActive('italic'), underline: current.isActive('underline'), code: current.isActive('code'), link: current.isActive('link') });
+    setMobileFormat({ left, top, width, entry, bold: current.isActive('bold'), italic: current.isActive('italic'), underline: current.isActive('underline'), code: current.isActive('code'), link: current.isActive('link') });
   };
 
   const updateSuggestion = (current: Editor) => {
@@ -600,12 +646,12 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
       if (!editor || editor.isDestroyed) return;
       editor.commands.selectAll();
       entrySelected.current = true;
-      callbacks.current.onSelectEntry?.(true);
+      reportEntrySelection(true);
     },
     splitAtSelection() {
       if (!editor || editor.isDestroyed) return null;
       commitTypedTags(editor, true);
-      const { doc, selection } = editor.state;
+      const { selection } = editor.state;
       const dom = window.getSelection();
       let from = selection.from, to = selection.to;
       if (dom?.anchorNode && dom.focusNode && editor.view.dom.contains(dom.anchorNode) && editor.view.dom.contains(dom.focusNode)) {
@@ -615,6 +661,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
         const head = editor.view.posAtDOM(dom.focusNode, dom.focusOffset);
         from = Math.min(anchor, head); to = Math.max(anchor, head);
       }
+      // Split what gets stored, so a hidden tag stays in the half it sat in.
+      const restored = restoreHiddenTags(editor);
+      const doc = restored.doc;
+      from = restored.mapPosition(from); to = restored.mapPosition(to);
       const text = (start: number, end: number) => doc.textBetween(start, end, '\n', node =>
         node.type.name === 'journalTag' ? '#' + node.attrs.name : node.type.name === 'hardBreak' ? '\n' : '');
       // At the end of a heading, quote, or code block, its empty closing
@@ -631,7 +681,8 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
   useEffect(() => {
     const snapshot = JSON.stringify([value, entryTags]);
     if (editor && snapshot !== lastSnapshot.current) {
-      editor.commands.setContent(documentWithTags(value, entryTags), { emitUpdate: false });
+      editor.commands.setContent(documentWithTags(value, entryTags, hidden.current), { emitUpdate: false });
+      resetHiddenTags(editor, hiddenTagPositions(value, hidden.current));
       lastSnapshot.current = snapshot;
     }
   }, [editor, value, entryTags]);
@@ -661,6 +712,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, o
       <MobileFormatButton type="button" $active={mobileFormat.underline} aria-label="Underline" aria-pressed={mobileFormat.underline} onClick={() => formatSelection('underline')}><u>U</u></MobileFormatButton>
       <MobileFormatButton type="button" $active={mobileFormat.code} aria-label="Code" aria-pressed={mobileFormat.code} onClick={() => formatSelection('code')}><Code2 size={16} aria-hidden="true" /></MobileFormatButton>
       <MobileFormatButton type="button" $active={mobileFormat.link} aria-label="Add or edit link" aria-pressed={mobileFormat.link} onClick={() => openLink('shortcut')}><Link2 size={16} aria-hidden="true" /></MobileFormatButton>
+      {mobileFormat.entry && <>
+        <MobileFormatButton type="button" $active={false} aria-label="Outdent entry" onClick={() => callbacks.current.onShift?.(true)}><IndentDecrease size={16} aria-hidden="true" /></MobileFormatButton>
+        <MobileFormatButton type="button" $active={false} aria-label="Indent entry" onClick={() => callbacks.current.onShift?.(false)}><IndentIncrease size={16} aria-hidden="true" /></MobileFormatButton>
+      </>}
     </MobileFormatBar>}
     {suggestion && <TagCompletion id="tag-suggestions" role="listbox" aria-label="Tags" $left={suggestion.left} $top={suggestion.top}>
       <HiddenTagOption id="tag-option-0" role="option" aria-selected={suggestion.index === 0} aria-label={`#${suggestion.names[0]}`}>#{suggestion.names[0]}</HiddenTagOption>

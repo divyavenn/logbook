@@ -13,6 +13,34 @@ test.beforeEach(async ({ page }) => {
   } }));
 });
 
+test('a long task list keeps to the top third and scrolls behind its ink wash', async ({ page }) => {
+  await page.route('**/api/journal?*', route => route.fulfill({ json: {
+    today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null,
+    tasks: Array.from({ length: 40 }, (_, i) => ({ id: 9300 + i, content: `Stacked task ${i}`, tags: [], parent_id: null, position: i })),
+    days: [{ date: today, focused_seconds: 0, notes: [{ id: 9400, content: 'A note below', tags: [], parent_id: null, position: 0 }] }],
+  } }));
+  await page.goto('/');
+  const section = page.getByRole('region', { name: 'to do', exact: true });
+  await expect(section).toBeVisible();
+  const viewport = page.getByTestId('task-scroll');
+  const height = (await section.boundingBox())!.height;
+  expect(height).toBeLessThanOrEqual(Math.round(page.viewportSize()!.height * 0.3) + 1);
+  // The list scrolls inside that band rather than pushing the log down.
+  expect(await viewport.evaluate(element => element.scrollHeight > element.clientHeight + 8)).toBe(true);
+  const wash = page.getByTestId('task-top-ink-wash');
+  await expect(wash).toBeAttached();
+  await expect(page.getByTestId('task-bottom-ink-wash')).toBeAttached();
+  // The first task starts below the wash rather than under it.
+  const washBounds = (await wash.boundingBox())!;
+  const firstTask = (await page.getByRole('group', { name: 'Stacked task 0', exact: true }).boundingBox())!;
+  expect(firstTask.y).toBeGreaterThanOrEqual(washBounds.y + washBounds.height);
+  // The scrollbar starts below the wash and is never painted over by it.
+  const paneBounds = (await viewport.boundingBox())!;
+  expect(paneBounds.y).toBeGreaterThan(washBounds.y);
+  expect(washBounds.x + washBounds.width).toBeLessThan(paneBounds.x + paneBounds.width);
+  await expect(page.getByRole('group', { name: 'A note below', exact: true })).toBeVisible();
+});
+
 test('global timer stays fixed at the top right while tasks stack above the log', async ({ page }) => {
   await page.goto('/');
   const timer = page.getByRole('button', { name: 'Start focus timer', exact: true });
@@ -39,6 +67,54 @@ test('global timer stays fixed at the top right while tasks stack above the log'
     await page.getByTestId('log-scroll').evaluate(el => { el.scrollTop = 0; });
   }
   await page.screenshot({ path: '/tmp/still-layout-desktop.png' });
+});
+
+test('expanding a parent at the foot of the task pane lifts it to show its children', async ({ page }) => {
+  await page.unroute('**/api/journal?*');
+  const parent = { id: 9500, content: 'Parent at the foot', tags: [], parent_id: null, position: 6, child_count: 3, completed_child_count: 0 };
+  await page.route('**/api/journal?*', route => route.fulfill({ json: {
+    today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null,
+    tasks: [
+      ...Array.from({ length: 6 }, (_, i) => ({ id: 9510 + i, content: `Filler task ${i}`, tags: [], parent_id: null, position: i })),
+      parent,
+      ...Array.from({ length: 3 }, (_, i) => ({ id: 9520 + i, content: `Hidden child ${i}`, tags: [], parent_id: parent.id, position: i })),
+    ],
+    days: [{ date: today, focused_seconds: 0, notes: [{ id: 9530, content: 'A note below', tags: [], parent_id: null, position: 0 }] }],
+  } }));
+  await page.goto('/');
+  const viewport = page.getByTestId('task-scroll');
+  const row = page.getByRole('group', { name: 'Parent at the foot', exact: true });
+  await row.scrollIntoViewIfNeeded();
+  const before = (await row.boundingBox())!;
+  await page.evaluate(() => {
+    const pane = document.querySelector('[data-testid="task-scroll"]')!;
+    const samples: number[] = [];
+    (window as unknown as { samples: number[] }).samples = samples;
+    pane.addEventListener('scroll', () => samples.push(pane.scrollTop));
+  });
+  await page.getByRole('button', { name: 'Expand Parent at the foot', exact: true }).hover();
+  // The pane scrolls so the parent rises and its children come into view.
+  await expect.poll(async () => (await row.boundingBox())!.y, { timeout: 4000 }).toBeLessThan(before.y - 8);
+  // It travels with the branch rather than jumping once the branch has grown.
+  const samples = await page.evaluate(() => (window as unknown as { samples: number[] }).samples);
+  expect(samples.length).toBeGreaterThan(3);
+  expect(samples).toEqual([...samples].sort((a, b) => a - b));
+  const steps = samples.map((value, index) => value - (index ? samples[index - 1] : 0));
+  expect(Math.max(...steps)).toBeLessThan(samples[samples.length - 1] / 2);
+  const pane = (await viewport.boundingBox())!;
+  const child = (await page.getByRole('group', { name: 'Hidden child 0', exact: true }).boundingBox())!;
+  expect(child.y).toBeGreaterThanOrEqual(pane.y);
+  expect(child.y + child.height).toBeLessThanOrEqual(pane.y + pane.height + 1);
+  // It never rises above the pane itself.
+  expect((await row.boundingBox())!.y).toBeGreaterThanOrEqual(pane.y - 1);
+});
+
+test('a short task list sits close to the log below it', async ({ page }) => {
+  await page.goto('/');
+  const task = (await page.getByRole('group', { name: 'First task', exact: true }).boundingBox())!;
+  const section = (await page.getByRole('region', { name: 'to do', exact: true }).boundingBox())!;
+  // Only the composer row and a thin creation strip follow the last task.
+  expect(section.y + section.height - (task.y + task.height)).toBeLessThanOrEqual(56);
 });
 
 test('stacked tasks keep a generous creation area and wrap within the document', async ({ page }) => {

@@ -695,6 +695,18 @@ if dist.is_dir():
             return AgentJSONResponse(agent_snapshot(query).model_dump(mode='json'), headers=headers)
         return FileResponse(dist / "index.html", headers=headers)
 
+    @app.get("/index.html", include_in_schema=False)
+    def index_html():
+        # The precached shell is fetched by this name, not by "/".
+        return FileResponse(dist / "index.html", headers=READ_HEADERS)
+
     @app.get("/favicon.svg")
     def favicon():
         return FileResponse(dist / "favicon.svg")
+
+    @app.get("/sw.js")
+    def service_worker():
+        # Served from the root so its scope covers the whole app, and never
+        # cached itself, so a new build replaces the old shell.
+        return FileResponse(dist / "sw.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})

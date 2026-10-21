@@ -8,11 +8,11 @@ export const OutlineSurface = styled.div`
   --entry-size: 15px;
   --entry-row-height: 28px;
   --entry-padding: 4px 0;
-  --entry-line-height: 1.2;
+  --entry-line-height: 1.25;
   --entry-paragraph-gap: .2em;
   --entry-marker-offset: .5px;
-  @media(pointer: coarse) { --entry-size: 16px; --entry-row-height: 44px; --entry-padding: 10px 0; --entry-line-height: 1.35; }
-  @media ${compactViewport} { --entry-row-height: 36px; --entry-padding: 6px 0; --entry-line-height: 1.3; --entry-paragraph-gap: .1em; }
+  @media(pointer: coarse) { --entry-size: 16px; --entry-row-height: 44px; --entry-padding: 10px 0; --entry-line-height: 1.4; }
+  @media ${compactViewport} { --entry-row-height: 36px; --entry-padding: 6px 0; --entry-line-height: 1.35; --entry-paragraph-gap: .1em; }
 `;
 export const List = styled.ul`list-style: none; padding: 0; margin: 0;`;
 export const Children = styled(List)<{ $task: boolean }>`
@@ -22,24 +22,37 @@ export const Children = styled(List)<{ $task: boolean }>`
   @media ${compactViewport} { padding-left: 9px; }
 `;
 export const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--entry-row-height);`;
-export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
+export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $rangeSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
   opacity: ${({ $leaving }) => $leaving ? 0 : 1};
   transform: ${({ $leaving }) => $leaving ? 'translateY(-3px)' : 'none'};
-  transition-property: opacity, transform;
-  transition-duration: ${({ $leaving }) => $leaving ? '180ms' : '280ms'};
+  transition-property: opacity, transform, translate;
+  /* A swipe follows the finger, so only its return trip is animated. */
+  transition-duration: ${({ $leaving }) => $leaving ? '180ms, 180ms' : '280ms, 280ms'}, ${({ $dragX = 0 }) => $dragX ? '0s' : '220ms'};
   transition-timing-function: cubic-bezier(.2, 0, 0, 1);
   ${({ $arriving }) => $arriving && css`@starting-style { opacity: 0; transform: translateY(-7px); }`}
-  > ${Row} { transition: background-color 120ms ease-out; }
-  &[data-drop-position="before"] > ${Row} { box-shadow: 0 -2px 0 var(--link); }
-  &[data-drop-position="after"] > ${Row} { box-shadow: 0 2px 0 var(--link); }
+  > ${Row} { transition: background-color 120ms ease-out, box-shadow 140ms ease-out; }
+  &[data-drop-position="before"] > ${Row} { box-shadow: 0 -1px 0 var(--link); }
+  &[data-drop-position="after"] > ${Row} { box-shadow: 0 1px 0 var(--link); }
+  /* A selection covering whole entries marks the entries, not their text. */
+  ${({ $rangeSelected, $gestureSelected }) => $rangeSelected && !$gestureSelected && css`
+    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
+    > ${Row} ::selection { background: transparent; color: inherit; }
+  `}
   ${({ $gestureSelected }) => $gestureSelected && css`
     user-select: none; -webkit-user-select: none;
-    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
+    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; cursor: grab; }
+    > ${Row}:active { cursor: grabbing; }
+    /* The whole row is the drag handle: a press on the text must not start a
+       text drag, nor collapse the selection before the entry can move. */
+    > ${Row} .tiptap { pointer-events: none; }
     > ${Row} .tiptap::selection, > ${Row} .tiptap *::selection { background: transparent; color: inherit; }
   `}
   @media(pointer: coarse) { touch-action: pan-y; }
 `;
+// How long a branch takes to grow. Anything following that growth, such as
+// scrolling a parent up to reveal its children, shares the same window.
+export const BRANCH_OPEN_MS = 320;
 export const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
   display: grid; min-height: 0;
   grid-template-rows: ${({ $open }) => $open ? '1fr' : '0fr'};
@@ -48,9 +61,9 @@ export const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
   visibility: ${({ $open }) => $open ? 'visible' : 'hidden'};
   pointer-events: ${({ $open }) => $open ? 'auto' : 'none'};
   transition-property: grid-template-rows, opacity, transform, visibility;
-  transition-duration: 320ms, 240ms, 320ms, 0s;
+  transition-duration: ${BRANCH_OPEN_MS}ms, 240ms, ${BRANCH_OPEN_MS}ms, 0s;
   transition-timing-function: cubic-bezier(.2, 0, 0, 1);
-  transition-delay: ${({ $open }) => $open ? '0s' : '0s, 60ms, 0s, 320ms'};
+  transition-delay: ${({ $open }) => $open ? '0s' : `0s, 60ms, 0s, ${BRANCH_OPEN_MS}ms`};
 
   > ${Children} { min-height: 0; overflow: hidden; }
   > ${Children} > ${Item} > ${Row} {
@@ -123,26 +136,45 @@ export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done:
   transition: color 140ms ease-out;
   &::before { content: ''; width: 5px; height: 5px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; translate: 0 var(--entry-marker-offset);
     transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
-  ${({ $task, $progress }) => $task && css`
+  /* A parent task wears the same bubble as any task, and the pie fills it in
+     only while it is partly done. Finished, it is a parent again. */
+  ${({ $task, $done, $progress }) => $task && css`
     &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; transform: none;
-      background: conic-gradient(currentColor var(--task-progress), transparent 0);
-      opacity: ${$progress > 0 ? 1 : 0}; scale: ${$progress > 0 ? 1 : .25}; filter: blur(${$progress > 0 ? 0 : 4}px);
-      transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
+      /* Filling the border box leaves no hairline inside the ring, which a
+         fractional zoom would otherwise expose. */
+      background: ${$done ? 'transparent' : 'conic-gradient(currentColor var(--task-progress), transparent 0)'};
+      background-origin: border-box; background-clip: border-box;
+      transition: --task-progress ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
   `}
-  /* Match the task bubbles' 12px interior and rendered 1px borders. */
-  > svg { position: absolute; width: 14px; height: 14px; overflow: hidden; pointer-events: none; translate: 0 var(--entry-marker-offset);
-    transform: rotate(${({ $open }) => $open ? 90 : 0}deg);
-    opacity: ${({ $progress }) => $progress > 0 ? 0 : 1}; scale: ${({ $progress }) => $progress > 0 ? .25 : 1}; filter: blur(${({ $progress }) => $progress > 0 ? 4 : 0}px);
-    transition: transform 140ms ease-out, opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
+  /* Three dots mark it as a parent whenever the pie is not showing. The 14px
+     box matches the bubble's 12px interior and rendered borders. */
+  ${({ $done, $progress }) => {
+    const bare = $done || $progress === 0;
+    return css`
+      > svg { position: absolute; width: 14px; height: 14px; overflow: hidden; pointer-events: none; translate: 0 var(--entry-marker-offset);
+        opacity: ${bare ? 1 : 0}; scale: ${bare ? 1 : .25}; filter: blur(${bare ? 0 : 4}px);
+        transition: opacity ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), scale ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1), filter ${TASK_PROGRESS_MS}ms cubic-bezier(.2, 0, 0, 1); }
+    `;
+  }}
   &:disabled { opacity: 1; }
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px;
   }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
-export const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
+export const Text = styled.div<{ $done?: boolean; $action?: boolean; $strikeable?: boolean }>`
   ${richTextStyles}; cursor: text;
   flex: ${({ $action }) => $action ? '0 1 auto' : '1'}; min-width: 0; min-height: var(--entry-row-height); padding: var(--entry-padding); border: 0; background: transparent; color: var(--ink);
-  ${({ $done }) => $done && css`color: var(--muted); text-decoration: line-through; a { color: var(--muted); }`}
+  /* A row that can be checked off carries its rule all along, so completing
+     it draws the line on rather than striking it through at once. */
+  ${({ $strikeable, $done }) => ($strikeable ?? $done) && css`
+    text-decoration: line-through;
+    text-decoration-color: ${$done ? 'currentColor' : 'transparent'};
+    /* Selected text is repainted in the selection's own colours, which would
+       draw the rule that is waiting to be drawn. */
+    ${!$done && css`&::selection, & *::selection { text-decoration-line: none; }`}
+  `}
+  ${({ $done }) => $done && css`color: var(--muted); a { color: var(--muted); }`}
+  transition: color 200ms ease-out, text-decoration-color 200ms ease-out;
   text-align: left; line-height: var(--entry-line-height); font-size: var(--entry-size); white-space: pre-wrap; overflow-wrap: anywhere;
   &:focus-visible { outline: none; }
 `;

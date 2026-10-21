@@ -19,11 +19,18 @@ test('parent progress retains completed children, finishes automatically, and ca
   await page.getByRole('button', { name: 'Complete Progress last', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Progress project', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reopen Progress project', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Expand Progress project', exact: true })).toBeVisible();
+  const finished = page.getByRole('button', { name: 'Expand Progress project', exact: true });
+  await expect(finished).toBeVisible();
+  // A finished parent is a parent again: the dotted bubble, not a filled pie.
+  await expect(finished.locator('svg circle')).toHaveCount(3);
+  await expect(finished.locator('svg')).toHaveCSS('opacity', '1');
+  expect(await finished.evaluate(element => getComputedStyle(element, '::before').backgroundImage)).toBe('none');
   await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toBeHidden();
   await page.getByRole('button', { name: 'Expand Progress project', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Undo task completion', exact: true }).click();
+  // Completion is undone from the keyboard; there is no notification to click.
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('Meta+z');
   await expect(page.getByRole('group', { name: 'Progress project', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reopen Progress first', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Complete Progress last', exact: true })).toBeVisible();
@@ -41,7 +48,7 @@ test('reopening a completed nested task returns its whole tree to tasks', async 
   await expect(page.getByRole('button', { name: 'Expand Return project', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Expand Return project', exact: true }).click();
   await page.getByRole('button', { name: 'Reopen Return first', exact: true }).click();
-  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  const tasks = page.getByRole('region', { name: 'to do', exact: true });
   await expect(tasks.getByRole('group', { name: 'Return project', exact: true })).toBeVisible();
   await tasks.getByRole('button', { name: 'Expand Return project', exact: true }).click();
   await expect(tasks.getByRole('button', { name: 'Complete Return first', exact: true })).toBeVisible();
@@ -55,12 +62,12 @@ test('a reopened root task animates into its saved position ahead of the compose
   await page.goto('/');
   await page.getByRole('button', { name: 'Reopen Reopen arrival', exact: true }).click();
 
-  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  const tasks = page.getByRole('region', { name: 'to do', exact: true });
   const row = tasks.locator(`[data-item-id="${task.id}"]`);
   const composer = tasks.locator('[data-item-id="draft"]');
   await expect(row).toBeVisible();
   await expect(row).toHaveCSS('animation-name', 'none');
-  await expect(row).toHaveCSS('transition-property', 'opacity, transform');
+  await expect(row).toHaveCSS('transition-property', 'opacity, transform, translate');
   expect(await row.evaluate((element, draft) =>
     !!(element.compareDocumentPosition(draft as Node) & Node.DOCUMENT_POSITION_FOLLOWING), await composer.elementHandle())).toBe(true);
   await row.evaluate(element => Promise.allSettled(element.getAnimations().map(animation => animation.finished)));
@@ -86,7 +93,7 @@ test('a new subtask added in the logbook starts checked and can reopen its tree'
   await subtask.press('Enter');
   await expect(page.getByRole('button', { name: 'Reopen Finished follow-up', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: 'Reopen Finished follow-up', exact: true }).click();
-  const tasks = page.getByRole('region', { name: 'tasks', exact: true });
+  const tasks = page.getByRole('region', { name: 'to do', exact: true });
   await expect(tasks.getByRole('group', { name: 'Extended project', exact: true })).toBeVisible();
 });
 

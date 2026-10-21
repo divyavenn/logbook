@@ -40,7 +40,7 @@ def _apply_change(db: sqlite3.Connection, change: DocumentChange, now: str, revi
         check_revision(row, change.expected_revision)
 
     if change.move:
-        kind = move_entry(db, kind, item_id, change.parent_id, change.after_id, now, change.before_id)
+        kind = move_entry(db, kind, item_id, change.parent_id, change.after_id, now, change.before_id, day=change.date)
         if kind == 'tasks':
             promoted.append(item_id)
         return required(db, kind, item_id)
