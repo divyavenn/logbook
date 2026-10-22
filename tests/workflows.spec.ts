@@ -272,7 +272,8 @@ test('search opens an unloaded historical match and its collapsed ancestors', as
 test('medium layouts stay readable and selected tags stay in the hover sidebar', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Visible filter context', tags: ['visible-filter'] } });
-  await page.setViewportSize({ width: 641, height: 900 }); await page.goto('/');
+  // Wide enough for the rail to have a side of its own.
+  await page.setViewportSize({ width: 900, height: 900 }); await page.goto('/');
   expect((await page.getByRole('main').boundingBox())!.width).toBeGreaterThan(550);
   await page.getByRole('navigation', { name: 'Tags' }).hover();
   const tag = page.getByRole('button', { name: '#visible-filter', exact: true });

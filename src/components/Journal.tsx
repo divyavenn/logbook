@@ -9,13 +9,16 @@ import { useJournalContext } from '../JournalContext';
 import { compactViewport, fullViewport } from '../layout';
 
 const SectionTitle = styled.button`font-size: 20px; line-height: 1.4; margin-bottom: 4px; font-weight: 500; border: 0; padding: 0; height: calc(var(--task-heading-height) - 4px); background: transparent; text-align: left;`;
-const TaskSection = styled.section<{ $entering: boolean; $empty: boolean }>`
+const TaskSection = styled.section<{ $entering: boolean; $empty: boolean; $fills: boolean }>`
   ${({ $entering }) => viewEnter($entering)};
   align-self: stretch; display: flex; flex-direction: column; flex-shrink: 0; min-width: 180px; width: 100%; padding: 0 12px 4px 8px; margin-bottom: 8px;
-  /* Tasks take only the room they need, up to the top third of the page, and
-     scroll within it. An empty list still reserves a generous creation area. */
-  max-height: 30dvh;
+  /* Tasks take the room they need. A list long enough to crowd the log out of
+     the page is given a pane of its own instead of being clipped into a band.
+     An empty list still reserves a generous creation area. */
   min-height: ${({ $empty }) => $empty ? 'min(calc(var(--task-heading-height) + 124px), 30dvh)' : '0'};
+  /* In a pane of its own it takes the whole pane, and the list scrolls inside
+     it, behind its washes, rather than the pane scrolling under them. */
+  ${({ $fills }) => $fills && css`flex: 1; min-height: 0; max-height: 100%;`}
   /* With tasks listed, the composer row is the place to type, so the strip
      under it stays a thin click target instead of padding out the band. */
   ${({ $empty }) => !$empty && css`
@@ -159,7 +162,7 @@ function linkLabel(value: string) {
   catch { return value; }
 }
 
-export function Tasks({ tasks, entering = false, refresh }: { tasks: Task[]; entering?: boolean } & Actions) {
+export function Tasks({ tasks, entering = false, fills = false, refresh }: { tasks: Task[]; entering?: boolean; fills?: boolean } & Actions) {
   const [folded, setFolded] = useState(false);
   const [unfolding, setUnfolding] = useState(false);
   const { target, activeTag } = useJournalContext();
@@ -167,7 +170,7 @@ export function Tasks({ tasks, entering = false, refresh }: { tasks: Task[]; ent
   useEffect(() => { if (target?.kind === 'tasks') setFolded(false); }, [target]);
   // A filtered view has nothing to add to, so an empty list is just noise.
   if (activeTag && !tasks.length) return null;
-  return <TaskSection ref={section} $entering={entering} $empty={!tasks.length} aria-labelledby="task-title"><SectionTitle id="task-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand to do' : 'Fold to do'} onClick={() => { setUnfolding(true); setFolded(value => !value); }}>to do</SectionTitle>
+  return <TaskSection ref={section} $entering={entering} $empty={!tasks.length} $fills={fills} aria-labelledby="task-title"><SectionTitle id="task-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand to do' : 'Fold to do'} onClick={() => { setUnfolding(true); setFolded(value => !value); }}>to do</SectionTitle>
     {!folded && <TaskFrame $appearing={unfolding}>
       <TaskViewport data-testid="task-scroll"><Body data-task-body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
       <TaskEdgeWash data-testid="task-top-ink-wash" aria-hidden="true" />

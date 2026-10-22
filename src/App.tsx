@@ -155,14 +155,14 @@ const MobileTabs = styled.div`
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
-  position: relative; width: 44px; height: 44px; padding: 0; border: 0; background: transparent;
+  /* The hit area stays a comfortable square; the overlap sets the gap between
+     the dots, so two of them sit as far apart as three do. */
+  position: relative; width: 44px; height: 44px; margin: 0 -8px; padding: 0; border: 0; background: transparent;
   color: ${({ $active }) => $active ? 'var(--link)' : 'var(--muted)'};
   font-size: 0;
   &::before { content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
     border-radius: 50%; background: currentColor; opacity: ${({ $active }) => $active ? 1 : .48}; translate: -50% -50%;
     transition: color 120ms ease-out, opacity 120ms ease-out; }
-  &:first-child::before { translate: calc(-50% + 16px) -50%; }
-  &:last-child::before { translate: calc(-50% - 16px) -50%; }
 `;
 const MobilePager = styled.div`
   display: flex; flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden;
@@ -599,7 +599,10 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     </ThemeToggle>
   </SidebarControls>;
 
-  const taskBand = data ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} refresh={refresh} /> : null;
+  // Stacked above the log it takes the room it needs; in a pane of its own it
+  // takes the pane.
+  const taskBand = (fills: boolean) => data
+    ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} fills={fills} refresh={refresh} /> : null;
   const logBand = data ? <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
     <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView}
       refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)}
@@ -608,7 +611,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame> : null;
   // The log keeps the task list above it whenever there is room for both.
   const pane = (view: View) => {
-    if (view === 'tasks') return taskBand;
+    if (view === 'tasks') return taskBand(true);
     if (view === 'tags') return <MobileTags>
       <MobileTagCollection aria-label="Filter by tag">
         <MobileTagPill type="button" $selected={activeTag === null} aria-pressed={activeTag === null} onClick={() => void selectTag(null)}><MobileTagPillLabel>all</MobileTagPillLabel></MobileTagPill>
@@ -618,7 +621,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       <MobileTagControls>{sidebarControls}</MobileTagControls>
     </MobileTags>;
     if (short) return logBand;
-    return <>{data ? taskBand : <ConnectionState><Muted>Loading…</Muted></ConnectionState>}{logBand}</>;
+    return <>{data ? taskBand(false) : <ConnectionState><Muted>Loading…</Muted></ConnectionState>}{logBand}</>;
   };
 
   return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}>
@@ -631,7 +634,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); setSoundOpen(true); } }}
         onClick={() => void toggleTimer()}><TimerIcon size={16} aria-hidden="true" /></TimerButton>
     </TimerChrome>
-    {(!cramped.across || hasHoverSidebar) && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
+    {!cramped.across && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
     <Main data-focus-surface>
       {paged ? <>
         <ShortHeader>
