@@ -155,9 +155,9 @@ const MobileTabs = styled.div`
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
-  /* The hit area stays a comfortable square; the overlap sets the gap between
-     the dots, so two of them sit as far apart as three do. */
-  position: relative; width: 44px; height: 44px; margin: 0 -8px; padding: 0; border: 0; background: transparent;
+  /* The dots sit 12px apart whatever their number, so the width is the gap
+     itself; the full height keeps each one easy enough to hit. */
+  position: relative; width: 12px; height: 44px; padding: 0; border: 0; background: transparent;
   color: ${({ $active }) => $active ? 'var(--link)' : 'var(--muted)'};
   font-size: 0;
   &::before { content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;

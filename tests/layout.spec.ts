@@ -192,6 +192,11 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
     expect(dots.x + dots.width).toBeLessThan(timerBox!.x);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveCSS('font-size', '0px');
     expect(await tabs.getByRole('tab').evaluateAll(elements => elements.map(element => getComputedStyle(element, '::before').width))).toEqual(size.panes.map(() => '6px'));
+    // One spacing whatever the number of panes: 12px between dot centres.
+    const centres = (await tabs.getByRole('tab').evaluateAll(elements =>
+      elements.map(element => element.getBoundingClientRect().x + element.getBoundingClientRect().width / 2)));
+    expect(centres.slice(1).map((centre, index) => Math.round(centre - centres[index])))
+      .toEqual(size.panes.slice(1).map(() => 12));
     // The rail and the tags tab are the same thing; never both at once.
     await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(size.panes.includes('tags') ? 0 : 1);
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
