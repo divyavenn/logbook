@@ -2,19 +2,19 @@
 // as with the editor's own schema. Reads nothing but content and tags, and
 // writes nothing else: the text stays exactly as it was written.
 import { DatabaseSync } from 'node:sqlite';
+import { existsSync } from 'node:fs';
 import { documentWithTags, serializeEntry } from '../src/markdown';
 import { normalizeTag } from '../src/tagSyntax';
 
 type Row = { id: number; content: string; tags: string; document: string | null };
 
-const [path, ...flags] = process.argv.slice(2);
-if (!path) {
-  console.error('Usage: backfill-documents <database|url> [--write]');
-  console.error('  A url goes through the API and needs STILL_PASSWORD; a running');
-  console.error('  logbook can be migrated that way without being taken down.');
-  process.exit(2);
-}
+const flags = process.argv.slice(2);
+// Boots run this unattended, so the database is found the way the server finds
+// it and anything already in order is simply left alone.
+const path = flags.find(flag => !flag.startsWith('--')) ?? process.env.STILL_DB_PATH ?? 'data/still.sqlite3';
 const write = flags.includes('--write');
+const quiet = flags.includes('--quiet');
+const say = (line: string) => { if (!quiet) console.log(line); };
 
 // A tag held only in the list, with no "#name" in the text, is dropped: the
 // text is what the entry says.
@@ -67,15 +67,20 @@ if (/^https?:\/\//.test(path)) {
   console.log(`documents written  ${done}${write ? '' : ' (dry run)'}`);
   console.log(`already had one    ${had}`);
   if (failed) console.log(`refused            ${failed}`);
-  if (!write) console.log('\nNothing was changed. Pass --write to apply.');
+  if (!write) say('\nNothing was changed. Pass --write to apply.');
   process.exit(failed ? 1 : 0);
 }
 
+if (!existsSync(path)) {
+  say(`No logbook at ${path} yet; nothing to migrate.`);
+  process.exit(0);
+}
 const db = new DatabaseSync(path, { readOnly: !write });
 const columns = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
-if (!columns.some(column => column.name === 'document')) {
-  console.error('This database has no document column yet. Start the server once to migrate it.');
-  process.exit(1);
+if (!columns.length || !columns.some(column => column.name === 'document')) {
+  // The server writes the schema. Until it has, there is nothing to fill in.
+  say('This logbook has no document column yet; leaving it to the server.');
+  process.exit(0);
 }
 
 const rows = db.prepare('SELECT id, content, tags, document FROM entries').all() as unknown as Row[];
@@ -99,9 +104,9 @@ for (const row of rows) {
   written++;
 }
 
-console.log(`entries            ${rows.length}`);
-console.log(`documents written  ${written}${write ? '' : ' (dry run)'}`);
-console.log(`already had one    ${already}`);
-console.log(`tag lists corrected ${retagged}`);
-for (const row of dropped) console.log(`  dropped from ${row.id}: ${row.names.map(name => '#' + name).join(' ')}`);
-if (!write) console.log('\nNothing was changed. Pass --write to apply.');
+say(`entries            ${rows.length}`);
+say(`documents written  ${written}${write ? '' : ' (dry run)'}`);
+say(`already had one    ${already}`);
+say(`tag lists corrected ${retagged}`);
+for (const row of dropped) say(`  dropped from ${row.id}: ${row.names.map(name => '#' + name).join(' ')}`);
+if (!write) say('\nNothing was changed. Pass --write to apply.');
