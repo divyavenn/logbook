@@ -221,8 +221,11 @@ const LogViewport = styled.div`
 `;
 const LogEdgeWash = styled.div<{ $edge?: 'top' | 'bottom' }>`
   ${({ $edge = 'top' }) => edgeWash($edge)};
-  left: -24px; right: -24px;
-  @media ${compactViewport} { height: 24px; }
+  /* Bleeding past the left keeps the fade clear of the frame's edge; on the
+     right it stops short of the scrollbar column so the bar's ends are never
+     washed over. Compact hides the bar, so there it bleeds both ways. */
+  left: -24px; right: 12px;
+  @media ${compactViewport} { right: -24px; height: 24px; }
 `;
 const ConnectionState = styled.div`padding: 50px 0; display: grid; gap: 16px; justify-items: start; @media ${shortViewport} { display: none; }`;
 

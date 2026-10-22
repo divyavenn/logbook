@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from .db import connection
 from .entries import check_revision, create_entry, move_entry, required, update_entry
 from .entry_kinds import api_kind, stored_kind
-from .hierarchy import remove_preserving_children
+from .hierarchy import remove_with_children
 from .history import record, snapshot
 from .models import Content, DocumentBatch, DocumentChange, EntryText
 from .stats import stamp
@@ -31,7 +31,7 @@ def _apply_change(db: sqlite3.Connection, change: DocumentChange, now: str, revi
         if row:
             if not revision_checked:
                 check_revision(row, change.expected_revision)
-            promoted.extend(remove_preserving_children(db, kind, item_id))
+            remove_with_children(db, kind, item_id)
         return None
 
     if item_id and row is None:

@@ -17,6 +17,18 @@ for (const kind of ['notes', 'tasks'] as const) {
     await composer.pressSequentially(`A tagged ${kind} #unique-${kind}`);
     await composer.press('Enter');
     await expect(composer).toHaveText('');
+    if (kind === 'tasks') {
+      // A tagged task is filed under its tag, and listed in that view alone.
+      await expect(page.getByRole('group', { name: new RegExp(`^A tagged ${kind}`) })).toHaveCount(0);
+      const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+      await rail.hover();
+      await rail.getByRole('button', { name: `#unique-${kind}`, exact: true }).click();
+      await expect(page.getByRole('group', { name: new RegExp(`^A tagged ${kind}`) })).toBeVisible();
+      const stored = (await (await request.get('/api/export')).json())[kind]
+        .find((item: { content: string }) => item.content === `A tagged ${kind} #unique-${kind}`);
+      expect(stored.tags).toEqual([`unique-${kind}`]);
+      return;
+    }
     const preview = page.getByRole('group', { name: new RegExp(`^A tagged ${kind}`) });
     const tag = preview.locator(`[data-tag="unique-${kind}"]`);
     await expect(tag).toHaveText(`#unique-${kind}`);
@@ -334,15 +346,16 @@ test('editing in tag view leaves the hidden tag exactly where it sat', async ({ 
 test('tag view lists matching entries only, with no events or focus time', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Matching note', tags: ['listed'] } });
-  await request.post('/api/sessions', { data: { started_at: new Date(`${today}T10:15:00`).toISOString(), duration_seconds: 1500 } });
+  await request.post('/api/notes', { data: { date: today, content: 'Unmatched note' } });
   await page.goto('/');
-  const focus = page.getByText('25m 00s', { exact: true });
+  const focus = page.locator('[data-focus-total]');
   await expect(focus).toBeVisible();
 
   const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
   await rail.hover();
   await rail.getByRole('button', { name: '#listed', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Matching note', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Unmatched note', exact: true })).toHaveCount(0);
   await expect(focus).toHaveCount(0);
   await expect(page.getByLabel(`Calendar events for ${today}`)).toHaveCount(0);
 
@@ -350,6 +363,66 @@ test('tag view lists matching entries only, with no events or focus time', async
   await page.mouse.move(700, 400);
   await rail.hover(); await rail.getByRole('button', { name: 'logbook', exact: true }).click();
   await expect(focus).toBeVisible();
+});
+
+test("a filtered view leaves out the day's events and its focus time", async ({ page }) => {
+  const day = '2026-09-24';
+  await page.route('**/api/journal?*', route => {
+    const tag = new URL(route.request().url()).searchParams.get('tag');
+    route.fulfill({ json: {
+      today: day, server_time: new Date().toISOString(), active_session: null, next_cursor: null,
+      tags: [{ name: 'listed', note_count: 1, task_count: 0 }], tag, tasks: [],
+      days: [{ date: day, focused_seconds: 1500, notes: [
+        { id: 1, content: 'Matching note', tags: ['listed'], parent_id: null, position: 0 },
+        ...(tag ? [] : [{ id: 2, content: 'Unmatched note', tags: [], parent_id: null, position: 1 }]),
+      ], events: [
+        { id: 'standup', title: 'Standup', start: `${day}T09:00:00-07:00`, end: `${day}T09:30:00-07:00`, all_day: false, cancelled: false, links: [] },
+      ] }],
+    } });
+  });
+  await page.goto('/');
+  const event = page.getByText('Standup (9 AM – 9:30 AM)', { exact: true });
+  await expect(event).toBeVisible();
+  await expect(page.locator('[data-focus-total]')).toHaveText('25m 00s');
+
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#listed', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Unmatched note', exact: true })).toHaveCount(0);
+  // The events and the focus time belong to the day, not to the tag.
+  await expect(event).toHaveCount(0);
+  await expect(page.locator('[data-focus-total]')).toHaveCount(0);
+});
+
+test('a tag added in one view is a tag in its own view too', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const note = await (await request.post('/api/notes', { data: { date: today, content: 'hello #beta', tags: ['beta'] } })).json();
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#beta', exact: true }).click();
+
+  // Add one tag from another tag's view, where the first is hidden.
+  const row = page.getByRole('group', { name: /^hello/ });
+  await row.click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await editor.press('Meta+ArrowDown');
+  await editor.pressSequentially('#alpha ');
+  await editor.press('Enter');
+  const stored = async () => ((await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string; tags: string[] }>)
+    .find(item => item.id === note.id);
+  // The hidden tag comes back beside the new one, not run together with it.
+  await expect.poll(async () => (await stored())?.content).toBe('hello #beta #alpha');
+  expect((await stored())?.tags.sort()).toEqual(['alpha', 'beta']);
+
+  await page.mouse.move(700, 400);
+  await rail.hover(); await rail.getByRole('button', { name: '#alpha', exact: true }).click();
+  const filed = page.getByRole('group', { name: /^hello/ });
+  await expect(filed).toBeVisible();
+  // In its own view the new tag is hidden, and the other reads as a tag.
+  await expect(filed).toHaveText('hello #beta');
+  await expect(filed.locator('[data-tag="beta"]')).toBeVisible();
+  await expect(filed.locator('[data-tag="alpha"]')).toHaveCount(0);
 });
 
 test('a date in tag view opens that day in the full logbook', async ({ page, request }) => {
@@ -368,8 +441,13 @@ test('a date in tag view opens that day in the full logbook', async ({ page, req
 });
 
 test('completion animates out and in while preserving tag metadata', async ({ page, request }) => {
-  const task = await (await request.post('/api/tasks', { data: { content: 'Animated task', tags: ['animation'] } })).json();
+  const task = await (await request.post('/api/tasks', { data: { content: 'Animated task', tags: ['animation', 'filed'] } })).json();
   await page.goto('/');
+  // Tagging files it away, so the run happens in one of its tags' views, where
+  // the other tag still shows.
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#filed', exact: true }).click();
   await page.evaluate(() => {
     (window as unknown as { bulletTransitions: string[] }).bulletTransitions = [];
     document.addEventListener('transitionstart', event => {
@@ -382,7 +460,7 @@ test('completion animates out and in while preserving tag metadata', async ({ pa
   await expect(completed.locator('[data-tag="animation"]')).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as unknown as { bulletTransitions: string[] }).bulletTransitions)).toEqual(expect.arrayContaining(['opacity', 'transform']));
   const data = await (await request.get('/api/export')).json();
-  expect(data.tasks.find((item: { id: number }) => item.id === task.id).tags).toEqual(['animation']);
+  expect(data.tasks.find((item: { id: number }) => item.id === task.id).tags).toEqual(['animation', 'filed']);
 });
 
 test('task region expands for all rows and leaves a usable journal below', async ({ page, request }) => {

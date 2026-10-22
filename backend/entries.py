@@ -64,7 +64,10 @@ def move_entry(db, table, item_id, parent_id, after_id, now, before_id=None, day
     if parent_id is not None and parent is None:
         raise HTTPException(404, 'The parent entry no longer exists.')
     day_id = ensure_day(db, day, now) if day is not None else row['day_id']
-    target_kind = parent['kind'] if parent else ('task' if day_id is None else 'note')
+    # Carrying a dated entry to another date leaves it as it is. Outdenting one
+    # to a day's root is what makes a checked task a note there.
+    carried = day is not None and row['day_id'] is not None
+    target_kind = parent['kind'] if parent else ('task' if day_id is None else (row['kind'] if carried else 'note'))
     target_table = api_kind(target_kind)
     if parent and parent['day_id'] != day_id:
         raise HTTPException(409, 'Nested entries must belong to the same list or date.')

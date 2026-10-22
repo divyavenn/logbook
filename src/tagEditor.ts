@@ -50,10 +50,13 @@ export function restoreHiddenTags(editor: Editor): { doc: ProseMirrorNode; mapPo
   const transform = new Transform(editor.state.doc);
   for (const tag of [...tags].sort((a, b) => b.pos - a.pos)) {
     const pos = Math.min(Math.max(tag.pos, 0), transform.doc.content.size);
-    const before = pos > 0 ? transform.doc.textBetween(pos - 1, pos) : '';
-    const after = pos < transform.doc.content.size ? transform.doc.textBetween(pos, pos + 1) : '';
-    const lead = before && !/\s/.test(before) ? ' ' : '';
-    const trail = after && !/\s/.test(after) ? ' ' : '';
+    // Whatever it comes to rest against decides the spacing. A neighbouring
+    // tag of its own counts: run two together and neither reads as a tag.
+    const at = transform.doc.resolve(pos);
+    const parted = (node: ProseMirrorNode | null | undefined, edge: RegExp) =>
+      !node || (node.isText && edge.test(node.text ?? ''));
+    const lead = parted(at.nodeBefore, /\s$/) ? '' : ' ';
+    const trail = parted(at.nodeAfter, /^\s/) ? '' : ' ';
     try { transform.insert(pos, editor.schema.text(`${lead}#${tag.name}${trail}`)); }
     catch { /* The text the tag sat in is gone; it stays metadata only. */ }
   }

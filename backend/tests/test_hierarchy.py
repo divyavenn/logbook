@@ -48,7 +48,7 @@ def test_move_subtree_outdent_order_and_cycles(client, kind):
 
 
 @pytest.mark.parametrize("kind", ["notes", "tasks"])
-def test_deletion_promotes_children_in_place(client, kind):
+def test_deletion_takes_the_whole_branch_and_closes_the_gap(client, kind):
     before = create(client, kind, "Before")
     parent = create(client, kind, "Parent")
     after = create(client, kind, "After")
@@ -57,9 +57,10 @@ def test_deletion_promotes_children_in_place(client, kind):
     grandchild = create(client, kind, "Grandchild", child1["id"])
     assert client.delete(f"/api/{kind}/{parent['id']}").status_code == 204
     rows = client.get("/api/export").json()[kind]
+    assert [row["id"] for row in rows] == [before["id"], after["id"]]
+    assert not {child1["id"], child2["id"], grandchild["id"]} & {row["id"] for row in rows}
     roots = sorted((row for row in rows if row["parent_id"] is None), key=lambda row: row["position"])
-    assert [row["id"] for row in roots] == [before["id"], child1["id"], child2["id"], after["id"]]
-    assert next(row for row in rows if row["id"] == grandchild["id"])["parent_id"] == child1["id"]
+    assert [row["position"] for row in roots] == [0, 1]
 
 
 def test_completing_leaf_finishes_ready_ancestors_once(client):

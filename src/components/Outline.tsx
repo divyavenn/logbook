@@ -394,11 +394,25 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const adjacent = elements[index + (backwards ? -1 : 1)];
     return records.current.find(row => row.id === Number(adjacent?.dataset.itemId));
   };
+  // A join reaches the row that truly adjoins this one, which a folded branch
+  // keeps off the screen: backwards that is the end of the branch above rather
+  // than the parent heading it, and forwards it is this entry's own first
+  // child rather than the next sibling. Completed rows stay skipped, as they
+  // are in the rendered order these fall back to.
+  const openChildren = (id: number) => siblings(records.current, id).filter(row => !row.completed_at);
+  const lastInBranch = (row: OutlineItem): OutlineItem => {
+    const children = openChildren(row.id);
+    return children.length ? lastInBranch(children[children.length - 1]) : row;
+  };
   const boundary = (direction: 'backspace' | 'delete') => {
     if (lock.current) return;
     const backwards = direction === 'backspace';
     if (backwards && current.current.parentId !== null) { shiftDraft(true); return; }
-    const other = adjacentEntry(backwards);
+    const adjacent = adjacentEntry(backwards);
+    const own = current.current.id;
+    const other = backwards
+      ? (adjacent && lastInBranch(adjacent))
+      : ((own === null ? undefined : openChildren(own)[0]) ?? adjacent);
     const snapshot = current.current;
     if (!other) {
       if (backwards && !snapshot.content.trim() && !snapshot.tags.length) {
@@ -424,6 +438,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         : markdownText(first.content, hiddenTagsFor(first.tags)).length;
       documentStore.enqueue([
         { kind: first.kind, id: first.id, type: 'update', content, tags },
+        ...keepChildren([second]),
         { kind: second.kind, id: second.id, type: 'delete' },
       ]);
       activate(records.current.find(row => row.id === first.id)!, { anchor: offset, head: offset });
@@ -437,6 +452,21 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     return activeTag && (entry.content.trim() || remaining.length)
       ? { kind: entry.kind, id: entry.id, type: 'update', content: entry.content, tags: remaining, allow_empty: true }
       : { kind: entry.kind, id: entry.id, type: 'delete' };
+  };
+  // Deleting an entry takes its branch with it, so an edit that merely consumes
+  // entries as text lifts out the children it never covered first: joining two
+  // lines, or typing over a selection, is not a request to discard what hung
+  // below them. These moves must be enqueued ahead of the deletes.
+  const keepChildren = (doomed: readonly { id: number; kind: EntryKind }[]): OutlineChange[] => {
+    const gone = new Set(doomed.map(row => row.id));
+    return doomed.flatMap(row => {
+      const parentId = records.current.find(item => item.id === row.id)?.parent_id ?? null;
+      const parent = parentId === null ? null : records.current.find(item => item.id === parentId);
+      return siblings(records.current, row.id).filter(child => !gone.has(child.id)).map(child => ({
+        id: child.id, kind: child.kind, type: 'move' as const,
+        parent_id: parentId, after_id: row.id, target_kind: parent ? parent.kind : defaultKind,
+      }));
+    });
   };
   const deleteCurrentEntry = () => {
     const previous = adjacentEntry(true), next = adjacentEntry(false);
@@ -507,9 +537,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
           ? { ...content, type: 'create', date: day, client_id: value.clientId, parent_id: first.parentId, after_id: value.afterId, before_id: value.beforeId }
           : { ...content, type: 'update' });
       }
-      for (const row of selected.slice(removeAll ? 0 : 1)) {
-        if (row.id !== null) changes.push({ id: row.id, kind: row.kind, type: 'delete' });
-      }
+      const doomed = selected.slice(removeAll ? 0 : 1)
+        .filter((row): row is typeof row & { id: number } => row.id !== null);
+      changes.push(...keepChildren(doomed));
+      for (const row of doomed) changes.push({ id: row.id, kind: row.kind, type: 'delete' });
       documentStore.enqueue(changes, edit.historyKey);
       if (includesDraft) persist(blank(records.current, false));
       if (primary) edit.focus = () => {

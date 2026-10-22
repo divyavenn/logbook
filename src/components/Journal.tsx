@@ -224,7 +224,7 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
           title={activeTag ? 'Open this date in the full logbook' : sessionsEnabled ? 'View and edit focus sessions' : undefined}>
           <DateLabel dateTime={day.date}>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</DateLabel>
           {/* A filtered day is a list of matching entries, not the day itself. */}
-          {!activeTag && <FocusTotal>{duration(seconds, true)}</FocusTotal>}
+          {!activeTag && <FocusTotal data-focus-total>{duration(seconds, true)}</FocusTotal>}
         </DateHead>
         {!activeTag && !!day.events?.length && <EventList aria-label={`Calendar events for ${day.date}`}>
           {day.events.map(event => {

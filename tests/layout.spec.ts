@@ -314,7 +314,11 @@ test('journal opacity wash remains above the first date at the top of the viewpo
   expect((await wash.evaluate(element => getComputedStyle(element, '::after').backgroundImage)).match(/radial-gradient/g)?.length).toBe(5);
   const [journalBox, washBox] = await Promise.all([journal.boundingBox(), wash.boundingBox()]);
   expect(washBox!.x).toBeLessThan(journalBox!.x);
-  expect(washBox!.x + washBox!.width).toBeGreaterThan(journalBox!.x + journalBox!.width);
+  // It stops short of the scrollbar column, so the bar's ends stay crisp.
+  const right = journalBox!.x + journalBox!.width;
+  expect(washBox!.x + washBox!.width).toBeLessThanOrEqual(right - 8);
+  // The gap is only the bar's own column: content still fades under the wash.
+  expect(washBox!.x + washBox!.width).toBeGreaterThanOrEqual(right - 16);
   await page.screenshot({ path: '/tmp/still-log-top-ink-wash.png' });
 });
 

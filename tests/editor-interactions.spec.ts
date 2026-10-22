@@ -81,11 +81,11 @@ for (const kind of ['notes', 'tasks'] as const) {
   });
 }
 
-test('selecting all of an entry and deleting removes it, preserving its children', async ({ page, request }) => {
+test('selecting all of an entry and deleting removes it and its children', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Previous' } });
   const parent = await (await request.post('/api/notes', { data: { date: today, content: 'Select this whole entry' } })).json();
-  await request.post('/api/notes', { data: { date: today, content: 'Keep this child', parent_id: parent.id } });
+  const child = await (await request.post('/api/notes', { data: { date: today, content: 'Nested child', parent_id: parent.id } })).json();
   await page.goto('/');
   await page.getByRole('group', { name: 'Select this whole entry', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
@@ -93,12 +93,14 @@ test('selecting all of an entry and deleting removes it, preserving its children
   const box = (await editor.boundingBox())!;
   await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
   await expect.poll(() => page.evaluate(() => getSelection()?.toString())).toBe('Select this whole entry');
-  // Nothing of the entry is left to keep, so the entry goes and its child rises.
+  // The entry is selected, so this is a delete: the branch goes with it.
   await page.keyboard.press('Backspace');
   await expect(editor).toHaveText('Previous');
   await page.keyboard.type('!');
   await expect(editor).toHaveText('Previous!');
-  await expect(page.getByRole('group', { name: 'Keep this child', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
+  await expect(page.getByRole('group', { name: 'Nested child', exact: true })).toHaveCount(0);
+  await expect.poll(async () => (await (await request.get('/api/export')).json()).notes
+    .map((row: { id: number }) => row.id)).not.toContain(child.id);
   await expect.poll(async () => (await (await request.get('/api/export')).json()).notes.some((row: { id: number }) => row.id === parent.id)).toBe(false);
 });
 

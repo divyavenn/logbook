@@ -159,10 +159,10 @@ export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done:
 export const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
   ${richTextStyles}; cursor: text;
   flex: ${({ $action }) => $action ? '0 1 auto' : '1'}; min-width: 0; min-height: var(--entry-row-height); padding: var(--entry-padding); border: 0; background: transparent; color: var(--ink);
-  /* The rule is drawn only once the entry is done. Carrying a transparent one
-     in wait would show through: selected text is repainted in the selection's
-     colours, and a rule cannot be turned off from ::selection. */
-  ${({ $done }) => $done && css`color: var(--muted); text-decoration: line-through; a { color: var(--muted); }`}
+  /* Done reads as the checkmark and the muted ink. No rule is drawn over the
+     text: selected text is repainted in the selection's colours, decorations
+     included, so one would show through a highlight. */
+  ${({ $done }) => $done && css`color: var(--muted); a { color: var(--muted); }`}
   transition: color 200ms ease-out;
   text-align: left; line-height: var(--entry-line-height); font-size: var(--entry-size); white-space: pre-wrap; overflow-wrap: anywhere;
   &:focus-visible { outline: none; }

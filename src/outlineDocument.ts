@@ -2,7 +2,7 @@ import { ApiError } from './api';
 import { editDocument } from './documentHistory';
 import type { OutlineItem } from './types';
 import type { DocumentChange, OutlineChange } from './entryChanges';
-import { orderedEntries as ordered } from './entryTree';
+import { branchIds, orderedEntries as ordered } from './entryTree';
 import { readOutlineRecovery, type PendingEdit } from './outlineRecovery';
 import { storage } from './storage';
 export type { OutlineChange } from './entryChanges';
@@ -72,10 +72,10 @@ export class OutlineDocument {
       let row = rows.find(item => item.id === id);
       if (change.type === 'delete') {
         if (!row) continue;
-        const children = group(id);
-        const siblings = group(row.parent_id).flatMap(item => item.id === id ? children : [item]);
-        siblings.forEach((item, position) => { item.parent_id = row!.parent_id; item.position = position; });
-        rows = rows.filter(item => item.id !== id);
+        // The branch goes with it, finished children included.
+        const branch = branchIds(rows, id);
+        rows = rows.filter(item => !branch.has(item.id));
+        group(row.parent_id).forEach((item, position) => { item.position = position; });
         continue;
       }
       if (!row && change.type === 'create') {
@@ -92,11 +92,7 @@ export class OutlineDocument {
         place(row, this.resolve(change.parent_id ?? null), this.resolve(change.after_id ?? null), this.resolve(change.before_id ?? null));
         if (change.type === 'move') {
           const parent = rows.find(item => item.id === row!.parent_id);
-          const tree = new Set([row.id]);
-          for (let added = true; added;) {
-            added = false;
-            for (const child of rows) if (child.parent_id !== null && tree.has(child.parent_id) && !tree.has(child.id)) { tree.add(child.id); added = true; }
-          }
+          const tree = branchIds(rows, row.id);
           for (const child of rows) if (tree.has(child.id)) {
             child.kind = change.target_kind;
             if (change.target_kind === 'notes') child.completed_at = null;

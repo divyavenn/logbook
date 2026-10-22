@@ -66,3 +66,36 @@ test('a selected entry copies with its children as a markdown list', async ({ pa
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
     .toBe('- Copy parent\n  - Copy child');
 });
+
+test('deleting a selected entry takes its children, while joining lines keeps them', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const make = async (content: string, parent_id?: number) =>
+    (await request.post('/api/notes', { data: { date: today, content, parent_id } })).json();
+  const parent = await make('Doomed parent');
+  const child = await make('Doomed child', parent.id);
+  await make('Doomed grandchild', child.id);
+  await make('Above the join');
+  const join = await make('Joined parent');
+  await make('Surviving child', join.id);
+  await page.goto('/');
+  await expect(page.getByRole('group', { name: 'Joined parent', exact: true })).toBeVisible();
+
+  // Selecting the entry and deleting takes the whole branch with it.
+  await page.getByRole('group', { name: 'Doomed parent', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  const box = (await editor.boundingBox())!;
+  await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
+  await expect(editor.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-gesture-selected', 'true');
+  await page.keyboard.press('Backspace');
+  await expect.poll(async () => (await notes(page)).map(row => row.content))
+    .toEqual(['Above the join', 'Joined parent', 'Surviving child']);
+
+  // Joining two lines is not a delete: the absorbed entry's child stays, and
+  // rises to the slot the entry it hung from occupied.
+  const joining = page.locator(`[data-item-id="${join.id}"] [role="group"]`).first();
+  await joining.focus(); await joining.press('Enter');
+  const reopened = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await reopened.press('Meta+ArrowUp'); await reopened.press('Backspace');
+  await expect.poll(async () => (await notes(page)).map(row => [row.content, row.parent_id]))
+    .toEqual([['Above the joinJoined parent', null], ['Surviving child', null]]);
+});

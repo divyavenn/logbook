@@ -5,6 +5,18 @@ export const MAX_ENTRY_DEPTH = entryPolicy.max_depth;
 export const orderedEntries = (rows: readonly OutlineItem[]): OutlineItem[] => [...rows].sort((a, b) => a.position - b.position || a.id - b.id);
 export const siblingEntries = (rows: readonly OutlineItem[], parentId: number | null): OutlineItem[] => orderedEntries(rows.filter(row => row.parent_id === parentId));
 
+// An entry and everything beneath it: what a move carries and a delete takes.
+export function branchIds(rows: readonly OutlineItem[], id: number): Set<number> {
+  const branch = new Set([id]);
+  for (let added = true; added;) {
+    added = false;
+    for (const row of rows) {
+      if (row.parent_id !== null && branch.has(row.parent_id) && !branch.has(row.id)) { branch.add(row.id); added = true; }
+    }
+  }
+  return branch;
+}
+
 export function ancestorIds(rows: readonly OutlineItem[], parentId: number | null): number[] {
   const byId = new Map(rows.map(row => [row.id, row]));
   const seen = new Set<number>();
