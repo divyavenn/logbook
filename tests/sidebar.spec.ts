@@ -59,17 +59,26 @@ test('tag collection opens only in the outer half-margin, dims the page, and ret
   await expect(backdrop).toHaveCSS('opacity', '0');
 });
 
-test('zoom-equivalent compact desktop widths preserve the left gutter and hover sidebar', async ({ page }) => {
+test('a narrow desktop width gives the tags a tab, and a wide one the sidebar', async ({ page }) => {
   await page.setViewportSize({ width: 520, height: 800 });
   await page.goto('/');
-  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  // No room beside the page: the tags take a tab, and the rail is not there
+  // as well. The gutter the rail would have used is still kept.
+  await expect(page.getByRole('tab', { name: 'tags', exact: true })).toBeVisible();
+  await expect(rail).toHaveCount(0);
   const main = (await page.getByRole('main').boundingBox())!;
   expect(main.x).toBe(48);
   expect(520 - main.x - main.width).toBe(16);
 
-  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  // Room enough, and the rail has it instead.
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await expect(page.getByRole('tab', { name: 'tags', exact: true })).toHaveCount(0);
   const home = rail.getByRole('button', { name: 'logbook', exact: true });
-  expect((await rail.boundingBox())!.width).toBe(40);
+  // It rests in its own gutter, clear of the page, and answers a hover.
+  const bounds = (await rail.boundingBox())!;
+  expect(bounds.x).toBe(0);
+  expect(bounds.width).toBeLessThan((await page.getByRole('main').boundingBox())!.x + 48);
   await page.mouse.move(12, 240);
   await expect(home).toBeVisible();
 });

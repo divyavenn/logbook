@@ -56,14 +56,17 @@ test('global timer stays fixed at the top right while tasks stack above the log'
   for (const width of [1440, 1280, 1024, 900, 760, 641]) {
     await page.setViewportSize({ width, height: 900 });
     await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = 0; });
-    await expect(page.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(0);
+    // Below the width the sidebar needs, the tags take a tab; the tasks still
+    // stack above the log, since the height is not what is short.
+    await expect(page.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(width <= 800 ? 1 : 0);
+    await expect(page.getByRole('tab', { name: 'tasks', exact: true })).toHaveCount(0);
     const [button, time, first, text] = await Promise.all([
       timer.boundingBox(), readout.boundingBox(), task.boundingBox(), note.boundingBox(),
     ]);
     expect(button!.width).toBe(44);
     expect(button!.height).toBe(44);
-    expect(button!.x + button!.width).toBe(width - 24);
-    expect(button!.y).toBe(20);
+    expect(button!.x + button!.width).toBe(width - (width <= 800 ? 12 : 24));
+    expect(button!.y).toBe(width <= 800 ? 12 : 20);
     expect(time!.x + time!.width).toBeLessThan(button!.x);
     expect(first!.y + first!.height).toBeLessThan(text!.y);
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
@@ -77,12 +80,12 @@ test('global timer stays fixed at the top right while tasks stack above the log'
 
 test('expanding a parent at the foot of the task pane lifts it to show its children', async ({ page }) => {
   await page.unroute('**/api/journal?*');
-  const parent = { id: 9500, content: 'Parent at the foot', tags: [], parent_id: null, position: 20, child_count: 3, completed_child_count: 0 };
+  const parent = { id: 9500, content: 'Parent at the foot', tags: [], parent_id: null, position: 40, child_count: 3, completed_child_count: 0 };
   await page.route('**/api/journal?*', route => route.fulfill({ json: {
     today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null,
     tasks: [
       // Enough to overflow a pane of its own, which is what a list this long gets.
-      ...Array.from({ length: 20 }, (_, i) => ({ id: 9510 + i, content: `Filler task ${i}`, tags: [], parent_id: null, position: i })),
+      ...Array.from({ length: 40 }, (_, i) => ({ id: 9510 + i, content: `Filler task ${i}`, tags: [], parent_id: null, position: i })),
       parent,
       ...Array.from({ length: 3 }, (_, i) => ({ id: 9520 + i, content: `Hidden child ${i}`, tags: [], parent_id: parent.id, position: i })),
     ],
@@ -181,12 +184,21 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
     // The dots sit across the middle of the top, not over the sidebar rail.
     const dots = (await tabs.boundingBox())!;
     expect(dots.x + dots.width / 2).toBeCloseTo(size.width / 2, 0);
-    const rail = await page.getByRole('navigation', { name: 'Tags' }).boundingBox();
-    if (rail) expect(dots.x).toBeGreaterThan(rail.x + rail.width);
+    const rails = page.getByRole('navigation', { name: 'Tags' });
+    if (await rails.count()) {
+      const rail = (await rails.boundingBox())!;
+      expect(dots.x).toBeGreaterThan(rail.x + rail.width);
+    }
     expect(dots.x + dots.width).toBeLessThan(timerBox!.x);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveCSS('font-size', '0px');
     expect(await tabs.getByRole('tab').evaluateAll(elements => elements.map(element => getComputedStyle(element, '::before').width))).toEqual(size.panes.map(() => '6px'));
-    await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(1);
+    // One spacing whatever the number of panes: 12px between dot centres.
+    const centres = (await tabs.getByRole('tab').evaluateAll(elements =>
+      elements.map(element => element.getBoundingClientRect().x + element.getBoundingClientRect().width / 2)));
+    expect(centres.slice(1).map((centre, index) => Math.round(centre - centres[index])))
+      .toEqual(size.panes.slice(1).map(() => 12));
+    // The rail and the tags tab are the same thing; never both at once.
+    await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(size.panes.includes('tags') ? 0 : 1);
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
     const pager = page.getByTestId('mobile-pager');
     await expect(pager).toHaveCSS('scrollbar-width', 'none');
