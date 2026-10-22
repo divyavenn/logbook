@@ -169,7 +169,7 @@ export function Tasks({ tasks, entering = false, refresh }: { tasks: Task[]; ent
   if (activeTag && !tasks.length) return null;
   return <TaskSection ref={section} $entering={entering} $empty={!tasks.length} aria-labelledby="task-title"><SectionTitle id="task-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand to do' : 'Fold to do'} onClick={() => { setUnfolding(true); setFolded(value => !value); }}>to do</SectionTitle>
     {!folded && <TaskFrame $appearing={unfolding}>
-      <TaskViewport data-testid="task-scroll"><Body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
+      <TaskViewport data-testid="task-scroll"><Body data-task-body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
       <TaskEdgeWash data-testid="task-top-ink-wash" aria-hidden="true" />
       <TaskEdgeWash $edge="bottom" data-testid="task-bottom-ink-wash" aria-hidden="true" />
     </TaskFrame>}

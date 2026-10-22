@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures';
+import { expect, openTasks, test } from './fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 test('task text stays vertically aligned when editing', async ({ page, request }) => {
@@ -244,8 +244,7 @@ test('narrow screens use the same three-pane journal as short screens', async ({
   await expect(page.getByRole('region', { name: /^Today,/ })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Older narrow note', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
-  await page.getByRole('tab', { name: 'tasks', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'to do', exact: true })).toBeVisible();
+  await openTasks(page);
   await expect(page.getByRole('button', { name: 'Add task', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'log', exact: true }).click();
   await page.screenshot({ path: 'test-results/compact-notes.png' });

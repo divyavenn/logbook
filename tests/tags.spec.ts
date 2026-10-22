@@ -1,4 +1,4 @@
-import { expect, test, type Page } from './fixtures';
+import { expect, openTasks, test, type Page } from './fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 const errors = new WeakMap<Page, string[]>();
@@ -471,19 +471,25 @@ test('completion animates out and in while preserving tag metadata', async ({ pa
   expect(data.tasks.find((item: { id: number }) => item.id === task.id).tags).toEqual(['animation', 'filed']);
 });
 
-test('task region expands for all rows and leaves a usable journal below', async ({ page, request }) => {
+test('task region expands for all rows and leaves the journal whole', async ({ page, request }) => {
   for (let i = 0; i < 28; i++) await request.post('/api/tasks', { data: { content: `Expanding task ${i}` } });
   await page.goto('/');
+  await openTasks(page);
   const tasks = page.getByRole('region', { name: 'to do', exact: true });
   await expect(tasks).toHaveCSS('overflow-y', 'visible');
   const dimensions = await tasks.evaluate(el => ({ client: el.clientHeight, scroll: el.scrollHeight }));
   expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client + 1);
   await page.getByRole('group', { name: 'Expanding task 27', exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByRole('group', { name: 'Expanding task 27', exact: true })).toBeVisible();
+  // A list this long has a pane of its own, so the journal is a tab away.
+  const logTab = page.getByRole('tab', { name: 'log', exact: true });
+  if (await logTab.count()) await logTab.click();
   const journal = page.getByTestId('log-scroll');
   expect((await journal.boundingBox())!.height).toBeGreaterThanOrEqual(240);
   await journal.scrollIntoViewIfNeeded();
-  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeVisible();
+  // Switching panes lets go of the empty composer, so the day itself is the
+  // thing to find whole.
+  await expect(page.getByRole('region', { name: /^Today,/ })).toBeVisible();
 });
 
 test('a tag-only entry stores its inline atom, and deleting it removes the final tab', async ({ page, request }) => {

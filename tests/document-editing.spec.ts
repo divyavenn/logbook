@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures';
+import { expect, openTasks, test } from './fixtures';
 
 test('new entries appear without entrance motion or blinking', async ({ page }) => {
   await page.goto('/');
@@ -252,7 +252,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
-    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await openTasks(mobile);
     const rootIds = () => mobile.locator('[data-outline-kind="tasks"] > ul > li[data-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-item-id')));
     const preview = mobile.getByRole('group', { name: 'First mobile task', exact: true });
     await expect(preview).toBeInViewport();
@@ -287,11 +287,12 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
 test('a touch swipe over an entry changes panes, holding it or not', async ({ browser, baseURL, request }) => {
   const first = await (await request.post('/api/tasks', { data: { content: 'Swipe parent' } })).json();
   const second = await (await request.post('/api/tasks', { data: { content: 'Swipe child', after_id: first.id } })).json();
-  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  // Room neither way, so the tasks have a pane of their own to swipe from.
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 400 }, hasTouch: true });
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
-    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await openTasks(mobile);
     const row = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
     await expect(row).toBeInViewport();
     await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);

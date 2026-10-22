@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from './fixtures';
+import { expect, openTasks, test, type Locator, type Page } from './fixtures';
 import AxeBuilder from '@axe-core/playwright';
 
 const errors = new WeakMap<Page, string[]>();
@@ -93,6 +93,8 @@ for (const kind of ['notes', 'tasks'] as const) {
     for (const scenario of cases) {
       const item = await (await request.post(`/api/${kind}`, { data: { date: today, content: `[${scenario.label}](${url})` } })).json();
       await page.goto('/');
+      // These pile up, and a long task list earns a pane of its own.
+      if (kind === 'tasks') await openTasks(page);
       const preview = page.locator(`[data-kind="${kind}"][data-item-id="${item.id}"] [role="group"]`).first();
       await preview.focus(); await preview.press('Enter');
       const editor = page.getByRole('textbox', { name: kind === 'notes' ? 'Edit note' : 'Edit task', exact: true });
