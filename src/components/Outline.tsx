@@ -11,14 +11,15 @@ import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
 import { endEntryDrag, entryDragLeft, incomingEntryDrag, moveEntryToDay, startEntryDrag, takeEntryDrag, type DragPlacement, type EntryDrag } from '../entryDrag';
 import { domTextOffset } from '../textSelection';
-import { selectedEntryRanges } from '../entrySelection';
+import { selectedEntryRanges, spannedEntries } from '../entrySelection';
+import { copySpannedDays } from '../journalClipboard';
 import { useRangeEditing } from '../useRangeEditing';
 import { useTaskCompletion } from '../useTaskCompletion';
 import { useOutlineDraft } from '../useOutlineDraft';
 import type { Draft } from '../entryDrafts';
 import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
-import { formattingShortcut } from '../entryFormatting';
+import { formattingShortcut, type EntryFormat } from '../entryFormatting';
 import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS } from './OutlineStyles';
 
 type VerticalTarget = { x: number; direction: VerticalDirection };
@@ -105,6 +106,45 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     document.addEventListener('pointerdown', dismiss, true);
     return () => document.removeEventListener('pointerdown', dismiss, true);
   }, [entrySelection?.key]);
+  // A shortcut over a selection that spans entries applies to all of them. The
+  // rows are read when the key is pressed, so ordinary typing costs nothing.
+  const spannedRows = () => {
+    const ids = new Set(spannedEntries(key).map(range => Number(range.id)).filter(id => !Number.isNaN(id)));
+    return ids.size ? records.current.filter(row => ids.has(row.id)) : [];
+  };
+  // A child travels with its parent, and mixed levels have no shared move.
+  const movableGroup = (rows: OutlineItem[]) => {
+    const ids = new Set(rows.map(row => row.id));
+    const roots = sorted(rows.filter(row => !ancestorIds(records.current, row.parent_id).some(id => ids.has(id))));
+    return roots.length && roots.every(row => row.parent_id === roots[0].parent_id) ? roots : [];
+  };
+  const shiftGroup = (rows: OutlineItem[], outdent: boolean) => {
+    const group = movableGroup(rows);
+    if (!group.length) return;
+    try {
+      stageDraft();
+      const siblingRows = siblings(records.current, group[0].parent_id);
+      const index = siblingRows.findIndex(row => row.id === group[0].id);
+      const destination = moveDestination({ id: group[0].id, parentId: group[0].parent_id, afterId: siblingRows[index - 1]?.id ?? null }, outdent);
+      if (!destination) return;
+      for (const row of group) checkDepth(row.id, destination.parentId);
+      let afterId = destination.afterId;
+      const changes: OutlineChange[] = group.map(row => {
+        const change: OutlineChange = { kind: row.kind, id: row.id, type: 'move',
+          parent_id: destination.parentId, after_id: afterId, target_kind: destination.targetKind };
+        afterId = row.id;
+        return change;
+      });
+      if (destination.parentId !== null) setExpanded(previous => new Set([...previous, destination.parentId!]));
+      documentStore.enqueue(changes);
+      void documentStore.flush().catch(() => {});
+    } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${group[0].id}"]`)); }
+  };
+  const formatGroup = (rows: OutlineItem[], format: EntryFormat) => void run(async () => {
+    await save();
+    await editDocument(rows.map(row => ({ kind: row.kind, id: row.id, content: formatMarkdown(row.content, format), tags: row.tags })));
+    await refresh();
+  }, false);
   const draggedEntry = useRef<number | null>(null);
   const dropTarget = useRef<HTMLElement | null>(null);
   const [, setSelectedAll] = useState(false);
@@ -194,11 +234,23 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   }, [composer, persist]);
   useEffect(() => {
     mounted.current = true;
+    // The composer takes the caret when nothing else holds it. Claiming it
+    // while the reader has something selected over the page would take that
+    // selection away; a selection inside an editor is only its own caret.
+    const written = (node: Node | null) => {
+      const element = node instanceof Element ? node : node?.parentElement;
+      return !element?.closest('[contenteditable="true"]');
+    };
+    const unselected = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return true;
+      return !(written(selection.anchorNode) && written(selection.focusNode));
+    };
     const onFocus = () => {
-      if (defaultKind === 'notes' && composer && !document.querySelector('dialog[open]') && document.activeElement === document.body) input.current?.focus({ preventScroll: true });
+      if (defaultKind === 'notes' && composer && !document.querySelector('dialog[open]') && document.activeElement === document.body && unselected()) input.current?.focus({ preventScroll: true });
     };
     const frame = requestAnimationFrame(() => {
-      if (defaultKind === 'notes' && composer) input.current?.focus({ preventScroll: true });
+      if (defaultKind === 'notes' && composer && unselected()) input.current?.focus({ preventScroll: true });
     });
     window.addEventListener('focus', onFocus);
     return () => {
@@ -282,20 +334,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       persist({ ...current.current, kind: targetKind, parentId, afterId, beforeId: null, placement: 'after' });
     });
     void documentStore.flush().catch(() => {});
-  };
-  const moveSavedItem = (item: OutlineItem, outdent: boolean) => {
-    try {
-      stageDraft();
-      const latest = records.current.find(row => row.id === item.id);
-      if (!latest) return;
-      const group = siblings(records.current, latest.parent_id);
-      const index = group.findIndex(row => row.id === latest.id);
-      const destination = moveDestination({ id: latest.id, parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }, outdent);
-      if (!destination) return;
-      documentStore.enqueue([{ kind: latest.kind, id: latest.id, type: 'move',
-        parent_id: destination.parentId, after_id: destination.afterId, target_kind: destination.targetKind }]);
-      void documentStore.flush().catch(() => {});
-    } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${item.id}"]`)); }
   };
   const beginEntry = () => {
     void save().catch(() => {});
@@ -485,7 +523,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       else restoringFocus.current = false;
       void documentStore.flush().catch(() => {});
     } catch (error) { restoringFocus.current = false; entryError(error, surface.current?.querySelector(`[data-item-id="${ranges[0].id}"]`)); }
-  });
+  }, copySpannedDays);
   const replaceDocument = (text = '', html = '') => void run(async () => {
     await save();
     const entry = pastedEntry(text, html);
@@ -535,12 +573,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       : childrenOf(null);
     clipboard.setData('text/html', build(top, 0).outerHTML); clipboard.setData('text/plain', lines.join('\n'));
   };
-  const copyDocument = (clipboard: DataTransfer) => copyEntries(clipboard);
   // The rows an action applies to: the entry selected in the editor, with its
   // branch. A plain text selection stays plain text.
   const actionRoots = (): number[] | null => {
     const selected = entrySelectionRef.current?.key;
-    if (!selected) return null;
+    if (!selected) return input.current?.entireSelected() && current.current.id !== null ? [current.current.id] : null;
     const id = selected.startsWith('draft:') ? current.current.id : Number(selected.slice('item:'.length));
     return id === null || Number.isNaN(id) ? null : [id];
   };
@@ -673,16 +710,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       focus();
     } catch (error) { entryError(error); restoringFocus.current = false; }
   };
-  const { startEntryGesture, trackEntryGesture, finishEntryGesture, cancelEntryGesture, consumeClick } = useEntryGestures({
-    selectedKey: () => entrySelectionRef.current?.key,
-    select: updateEntrySelection,
-    move: (key, outdent) => {
-      if (!key.startsWith('item:')) { shiftDraft(outdent); return; }
-      const id = Number(key.slice('item:'.length));
-      const item = records.current.find(row => row.id === id);
-      if (item) moveSavedItem(item, outdent);
-    },
-  });
+  const { startEntryGesture, trackEntryGesture, finishEntryGesture, cancelEntryGesture, consumeClick } = useEntryGestures();
   const advance = () => {
     if (lock.current) return;
     const snapshot = current.current;
@@ -929,7 +957,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const entry = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-entry-gesture-key]') : null;
     const gestureKey = entry?.dataset.entryGestureKey;
     if (gestureKey !== entrySelectionRef.current?.key) updateEntrySelection(null);
-    if (entry && gestureKey) startEntryGesture(event, gestureKey, entry);
+    if (entry) startEntryGesture(event, entry);
   }} onPointerMove={trackEntryGesture} onPointerUp={finishEntryGesture} onPointerCancel={cancelEntryGesture} onCopyCapture={event => {
     if (selectionActive.current) {
       event.preventDefault(); event.stopPropagation(); copyEntries(event.clipboardData);
@@ -938,8 +966,28 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const roots = actionRoots();
     if (!roots?.length) return;
     event.preventDefault(); event.stopPropagation(); copyEntries(event.clipboardData, roots);
-  }} onCutCapture={event => { if (selectionActive.current) { event.preventDefault(); event.stopPropagation(); copyDocument(event.clipboardData); replaceDocument(); } }}
+  }} onCutCapture={event => {
+    if (selectionActive.current) {
+      event.preventDefault(); event.stopPropagation(); copyEntries(event.clipboardData); replaceDocument();
+      return;
+    }
+    const roots = actionRoots();
+    if (!roots?.length) return;
+    event.preventDefault(); event.stopPropagation();
+    copyEntries(event.clipboardData, roots);
+    deleteCurrentEntry();
+  }}
   onPasteCapture={event => { if (selectionActive.current) { event.preventDefault(); event.stopPropagation(); replaceDocument(event.clipboardData.getData('text/plain'), event.clipboardData.getData('text/html')); } }} onKeyDownCapture={event => {
+    // A selection spanning entries takes the shortcut across all of them.
+    const grouping = event.metaKey || event.ctrlKey ? formattingShortcut(event.key, event.shiftKey) : null;
+    if ((event.key === 'Tab' || grouping) && !selectionActive.current && !event.defaultPrevented) {
+      const rows = spannedRows();
+      if (rows.length) {
+        event.preventDefault(); event.stopPropagation();
+        if (grouping) formatGroup(rows, grouping); else shiftGroup(rows, event.shiftKey);
+        return;
+      }
+    }
     if (!selectionActive.current || event.defaultPrevented) return;
     event.stopPropagation();
     const mod = event.metaKey || event.ctrlKey;

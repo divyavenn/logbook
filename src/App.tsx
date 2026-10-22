@@ -204,6 +204,9 @@ const Main = styled.main`
   flex: 1; display: flex; flex-direction: column; min-height: 0;
   @media ${compactViewport} { max-width: 100%; overflow: hidden; }
 `;
+// The log fades its content out over this much at each edge, and its first
+// date rests just clear of it.
+const LOG_WASH_HEIGHT = 30;
 const LogFrame = styled.div`
   position: relative; flex: 1; min-height: min(240px, max(64px, calc(100dvh - 160px))); display: flex;
   @media ${compactViewport} { min-height: 0; padding: 0 0 max(12px, env(safe-area-inset-bottom)); overflow-x: clip; }
@@ -482,15 +485,22 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   // Leaving the filter is what makes a day editable again, tags included.
   const jumpToDate = async (date: string) => {
     try {
-      const first = data?.days.find(day => day.date === date)?.entries[0] ?? null;
       await flushDrafts();
       tagRef.current = null; loadedThrough.current = null; setActiveTag(null); setTarget(null);
       setSwitchedView(true);
       await refresh();
       const result = await getJournal({ on: date });
       setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
-      if (first) setTarget({ kind: first.kind, id: first.id });
-      else requestAnimationFrame(() => document.querySelector(`[data-day="${date}"]`)?.scrollIntoView({ block: 'start' }));
+      // The date itself leads, resting where the first one does: clear of the
+      // wash at the top of the log.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const pane = logViewport.current, day = document.querySelector(`[data-day="${date}"]`);
+        if (!pane || !day) return;
+        pane.scrollTo({
+          top: pane.scrollTop + day.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT,
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        });
+      }));
     } catch (e) { entryError(e); }
   };
 

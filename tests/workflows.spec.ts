@@ -117,7 +117,8 @@ test('completed tasks share note ordering and normal logbook text editing', asyn
   await editor.fill('Mixed edited task'); await editor.press('Enter');
   await expect(page.getByRole('group', { name: 'Mixed edited task', exact: true })).toBeVisible();
   await page.getByRole('group', { name: 'Mixed edited task', exact: true }).click();
-  await editor.fill(''); await editor.press('Enter');
+  // Clearing all of its text is enough to remove it.
+  await editor.fill('');
   await expect(page.getByRole('group', { name: 'Mixed edited task', exact: true })).toHaveCount(0);
 });
 

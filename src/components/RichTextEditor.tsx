@@ -12,7 +12,7 @@ import { normalizeTag } from '../tagSyntax';
 import { HiddenTagPositions, TagDecorations, commitTypedTags, resetHiddenTags, restoreHiddenTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
-import { domText, textPositions, type TextOffsets } from '../textSelection';
+import { textPositions, type TextOffsets } from '../textSelection';
 import { Code2, IndentDecrease, IndentIncrease, Link2 } from 'lucide-react';
 import type { EntryFormat } from '../entryFormatting';
 
@@ -122,6 +122,7 @@ export type RichTextHandle = {
   selection: () => TextOffsets | undefined;
   editLink: () => void;
   selectEntry: () => void;
+  entireSelected: () => boolean;
   splitAtSelection: () => { before: { content: string; tags: string[] }; after: { content: string; tags: string[] } } | null;
 };
 type Props = {
@@ -148,7 +149,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
   const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift });
   callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift };
-  // Selecting an entry's whole text selects the entry, however that was done.
+  // Selecting an entry's whole text selects the entry on a touch screen, which
+  // has no double click to take hold of one with. A pointer has that gesture,
+  // and there selecting all of the text is a selection of text.
+  const touchScreen = () => window.matchMedia('(pointer: coarse)').matches;
   // The explicit gesture additionally makes Backspace remove the entry itself.
   const entrySelected = useRef(false);
   const entryReported = useRef(false);
@@ -203,7 +207,6 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
           const inputEvent = event as InputEvent;
           if (!view.editable || view.composing || inputEvent.isComposing) return false;
           if (['deleteContentBackward', 'deleteContentForward'].includes(inputEvent.inputType)) {
-            if (entrySelected.current) { event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true; }
             const backwards = inputEvent.inputType === 'deleteContentBackward';
             if (view.state.selection.empty && view.state.selection.from === entryEdge(view.state.doc, backwards)) {
               event.preventDefault(); callbacks.current.onBoundary?.(backwards ? 'backspace' : 'delete'); return true;
@@ -242,21 +245,6 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
           if (!href) return false;
           event.preventDefault(); event.stopPropagation();
           window.open(href, '_blank', 'noopener,noreferrer');
-          return true;
-        },
-        copy(view, event) {
-          if (!entrySelected.current || !event.clipboardData) return false;
-          event.preventDefault();
-          event.clipboardData.setData('text/plain', domText(view.dom));
-          event.clipboardData.setData('text/html', view.dom.innerHTML);
-          return true;
-        },
-        cut(view, event) {
-          if (!entrySelected.current || !event.clipboardData) return false;
-          event.preventDefault();
-          event.clipboardData.setData('text/plain', domText(view.dom));
-          event.clipboardData.setData('text/html', view.dom.innerHTML);
-          callbacks.current.onDeleteEntry?.();
           return true;
         },
         input(view) {
@@ -353,7 +341,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
             view.dispatch(view.state.tr.setSelection(TextSelection.between(view.state.doc.resolve(anchor), view.state.doc.resolve(head))));
           }
         }
-        if (entrySelected.current && (event.key === 'Backspace' || event.key === 'Delete')) {
+        // Nothing of the entry is left to keep, so the entry goes with it. Only
+        // a pressed key means that: a delete can also arrive as the clearing
+        // half of replacing the text.
+        if (editor && entireEntrySelected(editor) && (event.key === 'Backspace' || event.key === 'Delete')) {
           event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true;
         }
         const pending = suggestionRef.current;
@@ -452,8 +443,9 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
     onUpdate({ editor }) {
       // Formatting changes the document while leaving its full selection in
       // place. Keep the row highlight until typing or navigation collapses it.
-      if (!entireEntrySelected(editor)) entrySelected.current = false;
-      reportEntrySelection(entireEntrySelected(editor));
+      const whole = entireEntrySelected(editor);
+      if (!whole) entrySelected.current = false;
+      reportEntrySelection(whole && (touchScreen() || entrySelected.current));
       const entry = storedEntry(editor);
       lastSnapshot.current = JSON.stringify([entry.content, entry.tags]);
       callbacks.current.onChange(entry.content, entry.tags);
@@ -461,8 +453,9 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
       commitTypedTags(editor);
     },
     onSelectionUpdate({ editor }) {
-      if (!entireEntrySelected(editor)) entrySelected.current = false;
-      reportEntrySelection(entireEntrySelected(editor));
+      const whole = entireEntrySelected(editor);
+      if (!whole) entrySelected.current = false;
+      reportEntrySelection(whole && (touchScreen() || entrySelected.current));
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;
       if (!editor.state.selection.empty || editor.state.selection.from !== linkReplacement.current?.to) linkReplacement.current = null;
       updateSuggestion(editor);
@@ -642,6 +635,9 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
       if (!options?.preventScroll) editor.view.dispatch(editor.state.tr.scrollIntoView());
     },
     editLink() { openLink('context'); },
+    entireSelected() {
+      return !!editor && !editor.isDestroyed && entireEntrySelected(editor);
+    },
     selectEntry() {
       if (!editor || editor.isDestroyed) return;
       editor.commands.selectAll();

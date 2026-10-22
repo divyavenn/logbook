@@ -37,6 +37,17 @@ export function selectedEntryRanges(): EntryRange[] {
   return entries;
 }
 
+// Entries a selection of the written page spans. A selection anchored inside
+// an open entry belongs to that editor, which keeps it to itself.
+export function spannedEntries(key: string): EntryRange[] {
+  const ranges = selectedEntryRanges();
+  if (ranges.length < 2 || ranges[0].key !== key) return [];
+  const native = window.getSelection();
+  const anchored = native && [...document.querySelectorAll<HTMLElement>('[contenteditable="true"]')]
+    .some(editor => editor.contains(native.anchorNode) || editor.contains(native.focusNode));
+  return anchored ? [] : ranges;
+}
+
 export function replaceEntrySelection(ranges: EntryRange[], text = '', html = '') {
   const detail: SelectionEdit = { ranges, text, html, historyKey: crypto.randomUUID() };
   window.dispatchEvent(new CustomEvent('still-replace-entry-selection', { detail }));

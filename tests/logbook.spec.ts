@@ -364,7 +364,7 @@ test('loads older days automatically and saves edits to historical notes', async
   await expect(page.getByRole('group', { name: 'A revised historical thought.', exact: true })).toBeVisible();
   await page.getByRole('group', { name: 'A revised historical thought.', exact: true }).click();
   await page.getByRole('textbox', { name: 'Edit note' }).press('Meta+a');
+  // Nothing of the entry is left to keep, so it goes without saving first.
   await page.getByRole('textbox', { name: 'Edit note' }).press('Backspace');
-  await page.getByRole('textbox', { name: 'Edit note' }).press('Enter');
   await expect(page.getByRole('group', { name: 'A revised historical thought.', exact: true })).toHaveCount(0);
 });

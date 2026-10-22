@@ -282,6 +282,7 @@ test('a selection delete in tag view leaves no blank tagged rows behind', async 
   await expect(written).toBeVisible();
   // The selection has to belong to the page, not to the open composer.
   await written.focus();
+  await expect(written).toBeFocused();
   await page.evaluate(({ firstId, secondId }) => {
     const from = document.querySelector(`[data-item-id="${firstId}"] [role="group"]`)!;
     const to = document.querySelector(`[data-item-id="${secondId}"] [role="group"]`)!;
@@ -328,6 +329,27 @@ test('editing in tag view leaves the hidden tag exactly where it sat', async ({ 
   const full = page.getByRole('group', { name: /^before/ });
   await expect(full.locator('[data-tag="anchored"]')).toBeVisible();
   await expect(full).toHaveText('before #anchored after more');
+});
+
+test('tag view lists matching entries only, with no events or focus time', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Matching note', tags: ['listed'] } });
+  await request.post('/api/sessions', { data: { started_at: new Date(`${today}T10:15:00`).toISOString(), duration_seconds: 1500 } });
+  await page.goto('/');
+  const focus = page.getByText('25m 00s', { exact: true });
+  await expect(focus).toBeVisible();
+
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#listed', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Matching note', exact: true })).toBeVisible();
+  await expect(focus).toHaveCount(0);
+  await expect(page.getByLabel(`Calendar events for ${today}`)).toHaveCount(0);
+
+  // Selecting closed the panel, so the pointer has to leave and come back.
+  await page.mouse.move(700, 400);
+  await rail.hover(); await rail.getByRole('button', { name: 'logbook', exact: true }).click();
+  await expect(focus).toBeVisible();
 });
 
 test('a date in tag view opens that day in the full logbook', async ({ page, request }) => {
@@ -390,7 +412,8 @@ test('a tag-only entry stores its inline atom, and deleting it removes the final
   expect(stored.content).toBe('#only-chip');
   await preview.click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
-  await editor.locator('[data-tag]').click(); await page.keyboard.press('Backspace'); await editor.press('Enter');
+  // The tag is all the entry holds, so deleting it leaves nothing to keep.
+  await editor.locator('[data-tag]').click(); await page.keyboard.press('Backspace');
   await expect(preview).toHaveCount(0);
   await expect(page.getByRole('button', { name: '#only-chip', exact: true })).toHaveCount(0);
 });
