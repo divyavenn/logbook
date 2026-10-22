@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { useJournalContext } from '../JournalContext';
-import type { EntryKind, OutlineItem } from '../types';
+import type { EntryDocument, EntryKind, OutlineItem } from '../types';
 import { VisuallyHidden } from '../styles';
-import { MarkdownContent, markdownText, mergeMarkdown, formatMarkdown, pastedEntry, replaceEntryRange } from '../markdown';
+import { MarkdownContent, documentWithTags, entryText, formatDocument, markdownText, mergeEntries, pastedEntry, replaceEntryRange, serializeEntry, withTags } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
 import { documentUndo, editDocument, historyShortcutDirection } from '../documentHistory';
 import { useEntryGestures, type EntrySelection } from '../useEntryGestures';
@@ -11,7 +11,8 @@ import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
 import { endEntryDrag, entryDragLeft, incomingEntryDrag, moveEntryToDay, startEntryDrag, takeEntryDrag, type DragPlacement, type EntryDrag } from '../entryDrag';
 import { domTextOffset } from '../textSelection';
-import { selectedEntryRanges, watchWholeSelection, type EntryRange } from '../entrySelection';
+import { selectedEntryRanges, spannedEntries } from '../entrySelection';
+import { copySpannedDays, markdownBullet } from '../journalClipboard';
 import { useRangeEditing } from '../useRangeEditing';
 import { useTaskCompletion } from '../useTaskCompletion';
 import { useOutlineDraft } from '../useOutlineDraft';
@@ -19,7 +20,7 @@ import type { Draft } from '../entryDrafts';
 import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
-import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS } from './OutlineStyles';
+import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS } from './OutlineStyles';
 
 type VerticalTarget = { x: number; direction: VerticalDirection };
 // The branch easing, cubic-bezier(.2, 0, 0, 1), so anything moving alongside a
@@ -71,8 +72,19 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   // inline. Every other tag stays visible and editable.
   const hiddenTagsFor = (tags: string[] | undefined) =>
     activeTag && (tags ?? []).includes(activeTag) ? [activeTag] : [];
+  const [removed, setRemoved] = useState(new Set<number>());
+  // An entry that has lost the tag filing it fades before its row is dropped,
+  // so leaving a filtered view reads as an answer rather than a disappearance.
+  const [departing, setDeparting] = useState(new Set<number>());
+  const depart = useCallback((id: number) => {
+    setDeparting(rows => new Set([...rows, id]));
+    window.setTimeout(() => {
+      setRemoved(rows => new Set([...rows, id]));
+      setDeparting(rows => { const next = new Set(rows); next.delete(id); return next; });
+    }, DEPART_MS);
+  }, []);
   const { blank, draft, current, records, persist, stageDraft, save, saving } = useOutlineDraft({
-    key, documentStore, items, defaultKind, composer, day, activeTag,
+    key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled: depart,
   });
   const draftHiddenTags = (value: Draft) =>
     value.hiddenTags.length || !activeTag || !value.savedTags.includes(activeTag) ? value.hiddenTags : [activeTag];
@@ -84,7 +96,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     seenCompleted.current = new Set(initial);
     return initial;
   });
-  const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
   const [entrySelection, setEntrySelection] = useState<EntrySelection | null>(null);
@@ -105,38 +116,30 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     document.addEventListener('pointerdown', dismiss, true);
     return () => document.removeEventListener('pointerdown', dismiss, true);
   }, [entrySelection?.key]);
-  // Whole entries covered by one selection act together: they highlight as
-  // entries, and an action applies to every one of them.
-  const [rangeSelection, setRangeSelection] = useState<string[]>([]);
-  const rangeSelectionRef = useRef<string[]>([]);
-  useEffect(() => watchWholeSelection(ranges => {
-    const mine = ranges.filter(range => range.key === key).map(range => range.id);
-    rangeSelectionRef.current = mine;
-    setRangeSelection(previous => previous.length === mine.length && previous.every((id, index) => id === mine[index]) ? previous : mine);
-  }), [key]);
-  const selectedRows = () => {
-    const ids = new Set(rangeSelectionRef.current.map(Number).filter(id => !Number.isNaN(id)));
-    return records.current.filter(row => ids.has(row.id));
+  // A shortcut over a selection that spans entries applies to all of them. The
+  // rows are read when the key is pressed, so ordinary typing costs nothing.
+  const spannedRows = () => {
+    const ids = new Set(spannedEntries(key).map(range => Number(range.id)).filter(id => !Number.isNaN(id)));
+    return ids.size ? records.current.filter(row => ids.has(row.id)) : [];
   };
   // A child travels with its parent, and mixed levels have no shared move.
-  const selectedGroup = () => {
-    const rows = selectedRows();
+  const movableGroup = (rows: OutlineItem[]) => {
     const ids = new Set(rows.map(row => row.id));
     const roots = sorted(rows.filter(row => !ancestorIds(records.current, row.parent_id).some(id => ids.has(id))));
     return roots.length && roots.every(row => row.parent_id === roots[0].parent_id) ? roots : [];
   };
-  const shiftGroup = (outdent: boolean) => {
-    const rows = selectedGroup();
-    if (!rows.length) return;
+  const shiftGroup = (rows: OutlineItem[], outdent: boolean) => {
+    const group = movableGroup(rows);
+    if (!group.length) return;
     try {
       stageDraft();
-      const group = siblings(records.current, rows[0].parent_id);
-      const index = group.findIndex(row => row.id === rows[0].id);
-      const destination = moveDestination({ id: rows[0].id, parentId: rows[0].parent_id, afterId: group[index - 1]?.id ?? null }, outdent);
+      const siblingRows = siblings(records.current, group[0].parent_id);
+      const index = siblingRows.findIndex(row => row.id === group[0].id);
+      const destination = moveDestination({ id: group[0].id, parentId: group[0].parent_id, afterId: siblingRows[index - 1]?.id ?? null }, outdent);
       if (!destination) return;
-      for (const row of rows) checkDepth(row.id, destination.parentId);
+      for (const row of group) checkDepth(row.id, destination.parentId);
       let afterId = destination.afterId;
-      const changes: OutlineChange[] = rows.map(row => {
+      const changes: OutlineChange[] = group.map(row => {
         const change: OutlineChange = { kind: row.kind, id: row.id, type: 'move',
           parent_id: destination.parentId, after_id: afterId, target_kind: destination.targetKind };
         afterId = row.id;
@@ -145,17 +148,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (destination.parentId !== null) setExpanded(previous => new Set([...previous, destination.parentId!]));
       documentStore.enqueue(changes);
       void documentStore.flush().catch(() => {});
-    } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${rows[0].id}"]`)); }
+    } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${group[0].id}"]`)); }
   };
-  const formatGroup = (format: EntryFormat) => {
-    const rows = selectedRows();
-    if (!rows.length) return;
-    void run(async () => {
-      await save();
-      await editDocument(rows.map(row => ({ kind: row.kind, id: row.id, content: formatMarkdown(row.content, format), tags: row.tags })));
-      await refresh();
-    }, false);
-  };
+  const formatGroup = (rows: OutlineItem[], format: EntryFormat) => void run(async () => {
+    await save();
+    await editDocument(rows.map(row => {
+      const document = formatDocument(documentOf(row), format);
+      return { kind: row.kind, id: row.id, document, ...serializeEntry(document) };
+    }));
+    await refresh();
+  }, false);
   const draggedEntry = useRef<number | null>(null);
   const dropTarget = useRef<HTMLElement | null>(null);
   const [, setSelectedAll] = useState(false);
@@ -224,7 +226,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     persist({ ...value, id: resolve(value.id), parentId: resolve(value.parentId),
       afterId: resolve(value.afterId), beforeId: resolve(value.beforeId ?? null) });
     const remap = (ids: Set<number>) => new Set([...ids].map(id => resolve(id)!));
-    setExpanded(remap); setCollapsed(remap); setPreviewed(remap); setRemoved(remap);
+    setExpanded(remap); setCollapsed(remap); setPreviewed(remap); setRemoved(remap); setDeparting(remap);
   };
   documentStore.failed = (error, ids) => {
     for (const id of ids) entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
@@ -238,18 +240,30 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   });
   useEffect(() => {
     const applied = () => {
-      selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); persist(blank([], composer));
+      selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); setDeparting(new Set()); persist(blank([], composer));
     };
     window.addEventListener('still-history-applied', applied);
     return () => window.removeEventListener('still-history-applied', applied);
   }, [composer, persist]);
   useEffect(() => {
     mounted.current = true;
+    // The composer takes the caret when nothing else holds it. Claiming it
+    // while the reader has something selected over the page would take that
+    // selection away; a selection inside an editor is only its own caret.
+    const written = (node: Node | null) => {
+      const element = node instanceof Element ? node : node?.parentElement;
+      return !element?.closest('[contenteditable="true"]');
+    };
+    const unselected = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return true;
+      return !(written(selection.anchorNode) && written(selection.focusNode));
+    };
     const onFocus = () => {
-      if (defaultKind === 'notes' && composer && !document.querySelector('dialog[open]') && document.activeElement === document.body) input.current?.focus({ preventScroll: true });
+      if (defaultKind === 'notes' && composer && !document.querySelector('dialog[open]') && document.activeElement === document.body && unselected()) input.current?.focus({ preventScroll: true });
     };
     const frame = requestAnimationFrame(() => {
-      if (defaultKind === 'notes' && composer) input.current?.focus({ preventScroll: true });
+      if (defaultKind === 'notes' && composer && unselected()) input.current?.focus({ preventScroll: true });
     });
     window.addEventListener('focus', onFocus);
     return () => {
@@ -276,7 +290,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const group = siblings(records.current, row.parent_id);
     const index = group.findIndex(item => item.id === row.id);
     restoringFocus.current = true;
-    flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: row.id, content: row.content, saved: row.content,
+    flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: row.id, content: row.content, saved: row.content, document: row.document ?? null,
       kind: row.kind, revision: row.revision, tags: row.tags ?? [], savedTags: row.tags ?? [],
       hiddenTags: hiddenTagsFor(row.tags),
       parentId: row.parent_id, afterId: group[index - 1]?.id ?? null, beforeId: index === 0 ? group[1]?.id : null }));
@@ -304,6 +318,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     activate(latest, selection, vertical);
     if (contextLink) input.current?.editLink();
   };
+  const documentOf = (row: { document?: EntryDocument | null; content: string; tags?: string[] }) =>
+    row.document ?? documentWithTags(row.content, row.tags ?? []);
   const checkDepth = (id: number | null, parentId: number | null) => checkEntryDepth(records.current, id, parentId);
   const moveDestination = (snapshot: { id: number | null; parentId: number | null; afterId: number | null }, outdent: boolean) => {
     const parent = records.current.find(item => item.id === snapshot.parentId);
@@ -333,20 +349,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       persist({ ...current.current, kind: targetKind, parentId, afterId, beforeId: null, placement: 'after' });
     });
     void documentStore.flush().catch(() => {});
-  };
-  const moveSavedItem = (item: OutlineItem, outdent: boolean) => {
-    try {
-      stageDraft();
-      const latest = records.current.find(row => row.id === item.id);
-      if (!latest) return;
-      const group = siblings(records.current, latest.parent_id);
-      const index = group.findIndex(row => row.id === latest.id);
-      const destination = moveDestination({ id: latest.id, parentId: latest.parent_id, afterId: group[index - 1]?.id ?? null }, outdent);
-      if (!destination) return;
-      documentStore.enqueue([{ kind: latest.kind, id: latest.id, type: 'move',
-        parent_id: destination.parentId, after_id: destination.afterId, target_kind: destination.targetKind }]);
-      void documentStore.flush().catch(() => {});
-    } catch (error) { entryError(error, surface.current?.querySelector(`[data-item-id="${item.id}"]`)); }
   };
   const beginEntry = () => {
     void save().catch(() => {});
@@ -407,11 +409,21 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const adjacent = elements[index + (backwards ? -1 : 1)];
     return records.current.find(row => row.id === Number(adjacent?.dataset.itemId));
   };
+  // Text joined backwards lands at the end of the branch above it rather than
+  // on the parent heading it, which a folded branch keeps off the screen.
+  // Completed rows stay skipped, as they are in the rendered order this falls
+  // back to.
+  const openChildren = (id: number) => siblings(records.current, id).filter(row => !row.completed_at);
+  const lastInBranch = (row: OutlineItem): OutlineItem => {
+    const children = openChildren(row.id);
+    return children.length ? lastInBranch(children[children.length - 1]) : row;
+  };
   const boundary = (direction: 'backspace' | 'delete') => {
     if (lock.current) return;
     const backwards = direction === 'backspace';
     if (backwards && current.current.parentId !== null) { shiftDraft(true); return; }
-    const other = adjacentEntry(backwards);
+    const adjacent = adjacentEntry(backwards);
+    const other = backwards ? (adjacent && lastInBranch(adjacent)) : adjacent;
     const snapshot = current.current;
     if (!other) {
       if (backwards && !snapshot.content.trim() && !snapshot.tags.length) {
@@ -428,15 +440,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     } else {
       const own = records.current.find(row => row.id === ownId)!;
       const first = backwards ? other : own, second = backwards ? own : other;
-      const content = mergeMarkdown(first.content, second.content);
-      const tags = [...new Set([...first.tags ?? [], ...second.tags ?? []])];
+      const merged = mergeEntries(documentOf(first), documentOf(second));
+      const { content, tags } = serializeEntry(merged);
       const firstText = backwards
         ? surface.current?.querySelector<HTMLElement>(`[data-item-id="${first.id}"] > div > [role="group"]`)
         : surface.current?.querySelector<HTMLElement>('[role="textbox"]');
       const offset = firstText ? domTextOffset(firstText, firstText, firstText.childNodes.length)
         : markdownText(first.content, hiddenTagsFor(first.tags)).length;
       documentStore.enqueue([
-        { kind: first.kind, id: first.id, type: 'update', content, tags },
+        { kind: first.kind, id: first.id, type: 'update', content, tags, document: merged },
+        ...keepChildren([second]),
         { kind: second.kind, id: second.id, type: 'delete' },
       ]);
       activate(records.current.find(row => row.id === first.id)!, { anchor: offset, head: offset });
@@ -451,6 +464,21 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       ? { kind: entry.kind, id: entry.id, type: 'update', content: entry.content, tags: remaining, allow_empty: true }
       : { kind: entry.kind, id: entry.id, type: 'delete' };
   };
+  // Deleting an entry takes its branch with it, so an edit that merely consumes
+  // entries as text lifts out the children it never covered first: joining two
+  // lines, or typing over a selection, is not a request to discard what hung
+  // below them. These moves must be enqueued ahead of the deletes.
+  const keepChildren = (doomed: readonly { id: number; kind: EntryKind }[]): OutlineChange[] => {
+    const gone = new Set(doomed.map(row => row.id));
+    return doomed.flatMap(row => {
+      const parentId = records.current.find(item => item.id === row.id)?.parent_id ?? null;
+      const parent = parentId === null ? null : records.current.find(item => item.id === parentId);
+      return siblings(records.current, row.id).filter(child => !gone.has(child.id)).map(child => ({
+        id: child.id, kind: child.kind, type: 'move' as const,
+        parent_id: parentId, after_id: row.id, target_kind: parent ? parent.kind : defaultKind,
+      }));
+    });
+  };
   const deleteCurrentEntry = () => {
     const previous = adjacentEntry(true), next = adjacentEntry(false);
     const snapshot = current.current;
@@ -464,7 +492,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       untagged = change.type === 'update';
       documentStore.enqueue([change]);
       // An untagged entry still matches this outline's rows until the reload.
-      if (untagged) setRemoved(rows => new Set([...rows, id]));
+      if (untagged) depart(id);
     }
     const other = previous ?? next;
     if (other) {
@@ -484,13 +512,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     }
     void save().catch(() => {});
   };
-  const copySelectedEntries = (clipboard: DataTransfer, ranges: EntryRange[]) => {
-    const whole = ranges.filter(range => range.from === 0 && range.to === range.length && range.length > 0);
-    const roots = whole.map(range => Number(range.id)).filter(id => !Number.isNaN(id));
-    if (roots.length !== ranges.length || !roots.length) return false;
-    copyEntries(clipboard, roots);
-    return true;
-  };
   useRangeEditing(key, () => selectionActive.current, edit => {
     const ranges = edit.ranges.filter(range => range.key === key);
     if (!ranges.length) return;
@@ -499,15 +520,17 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const includesDraft = ranges.some(range => range.id === 'draft' || Number(range.id) === value.id);
       const selected = ranges.map(range => {
         if (range.id === 'draft' || Number(range.id) === value.id) return {
-          ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags, parentId: value.parentId,
+          ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags,
+          document: documentOf(value), parentId: value.parentId,
         };
         const row = records.current.find(row => row.id === Number(range.id));
         if (!row) throw new Error('The selected entry has changed.');
-        return { ...range, id: row.id, kind: row.kind, content: row.content, tags: row.tags, parentId: row.parent_id };
+        return { ...range, id: row.id, kind: row.kind, content: row.content, tags: row.tags,
+          document: documentOf(row), parentId: row.parent_id };
       });
       const first = selected[0], last = selected.at(-1)!;
       const primary = edit.ranges[0].key === key;
-      const replacement = replaceEntryRange(first, last, primary ? edit.text : '', primary ? edit.html : '', hiddenTagsFor([...first.tags, ...last.tags]));
+      const replacement = replaceEntryRange(first, last, primary ? edit.text : '', primary ? edit.html : '');
       if (!includesDraft) stageDraft();
       else if (value.content.trim() || value.tags.length) {
         const stagedId = stageDraft();
@@ -517,19 +540,23 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       }
       // Hidden tags are context, not selected text, so in a filtered view they
       // cannot keep an emptied entry alive as a blank row carrying the tag.
-      const removeAll = !replacement.content.trim() && (!!activeTag || !replacement.tags.length);
+      // Nothing written left is the test, not nothing stored: a remainder of
+      // tags alone cannot keep an entry alive as a blank row in a filtered view.
+      const removeAll = !entryText(replacement.document).trim() && (!!activeTag || !replacement.tags.length);
       const id = first.id ?? documentStore.allocate();
       restoringFocus.current = true;
       const changes: OutlineChange[] = [];
       if (!removeAll) {
-        const content = { id, kind: first.kind, content: replacement.content, tags: replacement.tags, allow_empty: true };
+        const content = { id, kind: first.kind, content: replacement.content, tags: replacement.tags,
+          document: replacement.document, allow_empty: true };
         changes.push(first.id === null
           ? { ...content, type: 'create', date: day, client_id: value.clientId, parent_id: first.parentId, after_id: value.afterId, before_id: value.beforeId }
           : { ...content, type: 'update' });
       }
-      for (const row of selected.slice(removeAll ? 0 : 1)) {
-        if (row.id !== null) changes.push({ id: row.id, kind: row.kind, type: 'delete' });
-      }
+      const doomed = selected.slice(removeAll ? 0 : 1)
+        .filter((row): row is typeof row & { id: number } => row.id !== null);
+      changes.push(...keepChildren(doomed));
+      for (const row of doomed) changes.push({ id: row.id, kind: row.kind, type: 'delete' });
       documentStore.enqueue(changes, edit.historyKey);
       if (includesDraft) persist(blank(records.current, false));
       if (primary) edit.focus = () => {
@@ -543,7 +570,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       else restoringFocus.current = false;
       void documentStore.flush().catch(() => {});
     } catch (error) { restoringFocus.current = false; entryError(error, surface.current?.querySelector(`[data-item-id="${ranges[0].id}"]`)); }
-  }, copySelectedEntries);
+  }, copySpannedDays);
   const replaceDocument = (text = '', html = '') => void run(async () => {
     await save();
     const entry = pastedEntry(text, html);
@@ -559,7 +586,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const results = changes.length ? await editDocument(changes) : [];
     const created = hasContent ? results.at(-1) : null;
     selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges();
-    persist(created ? { ...blank([], true), kind: defaultKind, mode: 'edit', id: created.id, content: created.content, saved: created.content, tags: created.tags ?? [], savedTags: created.tags ?? [] } : blank([], composer));
+    persist(created ? { ...blank([], true), kind: defaultKind, mode: 'edit', id: created.id, content: created.content, saved: created.content, document: created.document ?? null, tags: created.tags ?? [], savedTags: created.tags ?? [] } : blank([], composer));
     if (created) pendingSelection.current = { anchor: markdownText(created.content).length, head: markdownText(created.content).length };
     await refresh();
   });
@@ -573,15 +600,19 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const build = (rows: OutlineItem[], depth: number): HTMLUListElement => {
       const list = document.createElement('ul');
       for (const row of rows) {
-        const tags = row.tags?.filter(tag => tag !== activeTag) ?? [];
         const content = contentOf(row);
-        lines.push('  '.repeat(depth) + '- ' + content.replace(/\n/g, '\n' + '  '.repeat(depth + 1)) + (tags.length ? ' ' + tags.map(tag => '#' + tag).join(' ') : ''));
+        // Tags are already inline in the text, so an entry copies whole.
+        lines.push(markdownBullet(content, depth, row.kind === 'tasks', !!row.completed_at, row.tags ?? []));
         const li = document.createElement('li');
         const element = surface.current?.querySelector(`[data-item-id="${row.id}"]`);
         const text = element?.querySelector(':scope > div > [role="group"], :scope > div .tiptap');
         if (text) li.innerHTML = text.innerHTML;
         else li.textContent = markdownText(content);
-        const children = build(childrenOf(row.id), depth + 1);
+        // A closed branch is not on screen to be selected from, so all of it
+        // comes along. An open one brings only what was actually selected.
+        const under = childrenOf(row.id).filter(child =>
+          !roots || !isExpanded(row.id) || chosen.has(child.id));
+        const children = build(under, depth + 1);
         if (children.children.length) li.append(children);
         list.append(li);
       }
@@ -593,13 +624,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       : childrenOf(null);
     clipboard.setData('text/html', build(top, 0).outerHTML); clipboard.setData('text/plain', lines.join('\n'));
   };
-  const copyDocument = (clipboard: DataTransfer) => copyEntries(clipboard);
-  // The rows an action applies to: entries a selection covers end to end, or
-  // the single entry selected in the editor.
+  // The rows an action applies to: the entry selected in the editor, with its
+  // branch. A plain text selection stays plain text.
   const actionRoots = (): number[] | null => {
-    if (rangeSelectionRef.current.length) return rangeSelectionRef.current.map(Number).filter(id => !Number.isNaN(id));
     const selected = entrySelectionRef.current?.key;
-    if (!selected) return null;
+    if (!selected) return input.current?.entireSelected() && current.current.id !== null ? [current.current.id] : null;
     const id = selected.startsWith('draft:') ? current.current.id : Number(selected.slice('item:'.length));
     return id === null || Number.isNaN(id) ? null : [id];
   };
@@ -732,16 +761,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       focus();
     } catch (error) { entryError(error); restoringFocus.current = false; }
   };
-  const { startEntryGesture, trackEntryGesture, finishEntryGesture, cancelEntryGesture, consumeClick } = useEntryGestures({
-    selectedKey: () => entrySelectionRef.current?.key,
-    select: updateEntrySelection,
-    move: (key, outdent) => {
-      if (!key.startsWith('item:')) { shiftDraft(outdent); return; }
-      const id = Number(key.slice('item:'.length));
-      const item = records.current.find(row => row.id === id);
-      if (item) moveSavedItem(item, outdent);
-    },
-  });
+  const { startEntryGesture, trackEntryGesture, finishEntryGesture, cancelEntryGesture, consumeClick } = useEntryGestures();
   const advance = () => {
     if (lock.current) return;
     const snapshot = current.current;
@@ -806,16 +826,22 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (event.detail >= 2 || (event.target as HTMLElement).closest('button, a')) return;
       updateEntrySelection(null);
       input.current?.focus(undefined, { anchor: Number.MAX_SAFE_INTEGER, head: Number.MAX_SAFE_INTEGER });
-    } : undefined}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed child task' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} hiddenTags={draftHiddenTags(draft)} readOnly={false}
+    } : undefined}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed child task' : inputLabel} value={draft.content} document={draft.document} tags={draft.tags} readOnly={false}
       onBoundary={boundary} onVerticalBoundary={navigateBoundary} onHorizontalBoundary={navigateBoundary} onSelectDocument={selectDocument}
       onEnter={advance} onSelectEntry={selected => updateEntrySelection(selected ? { key: gestureKey, dragX: 0 } : null)} onDeleteEntry={deleteCurrentEntry}
       onShift={shiftDraft}
-      onChange={(content, tags) => {
+      onChange={(content, tags, document) => {
         verticalX.current = null;
         const value = current.current;
         const hiddenTags = draftHiddenTags(value);
-        const keep = content.trim() || tags.length ? hiddenTags : [];
-        persist({ ...value, content, hiddenTags, tags: [...new Set([...tags, ...keep])] });
+        // A new entry written in a filtered view is filed under that view's
+        // tag. A saved one carries whatever its document says: the tag shows
+        // while it is open, so deleting it there is meant.
+        const keep = value.id === null && (content.trim() || tags.length) ? hiddenTags : [];
+        const kept = document && keep.length ? withTags(document, keep) : document;
+        const projected = kept && keep.length ? serializeEntry(kept) : null;
+        persist({ ...value, content: projected?.content ?? content, document: kept, hiddenTags,
+          tags: projected?.tags ?? [...new Set([...tags, ...keep])] });
       }}
       onBlur={event => {
         const blurredClientId = draft.clientId;
@@ -880,15 +906,13 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (item === null) return renderDraft(depth);
       const gestureKey = `item:${item.id}`;
       const gestureSelected = entrySelection?.key === gestureKey;
-      const inRange = rangeSelection.includes(String(item.id));
-      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={item.kind} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)}
+      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={item.kind} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)} $departing={departing.has(item.id)}
       data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
-      data-range-selected={inRange || undefined} $rangeSelected={inRange}
       onPointerLeave={() => clearPreview(item.id)}
       onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
       $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
       $arriving={item.kind === 'tasks' && (completed.has(item.id) || reopened.has(item.id))}>
-      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $strikeable={item.kind === 'tasks' && !archived} $action={archived && item.kind === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, hiddenTagsFor(item.tags)) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ') || (item.kind === 'tasks' ? 'Empty task' : 'Empty note')}
+      <Row>{renderMarker(item.id, item.content)}<Text $done={!!item.completed_at && !archived} $action={archived && item.kind === 'tasks'} role="group" tabIndex={0} aria-label={markdownText(item.content, hiddenTagsFor(item.tags)) || (item.tags ?? []).filter(tag => tag !== activeTag).map(tag => '#' + tag).join(' ') || (item.kind === 'tasks' ? 'Empty task' : 'Empty note')}
         onClick={event => {
           if (consumeClick()) return;
           if (selectedEntryRanges().length > 1) return;
@@ -899,7 +923,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
           if (link && (archived || !item.completed_at)) { event.preventDefault(); select(item, event.currentTarget, link); }
         }}
         onKeyDown={event => { if ((archived || !item.completed_at) && event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(item); } }}
-      ><MarkdownContent content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={hiddenTagsFor(item.tags)} /></Text>
+      ><MarkdownContent document={item.document} content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={hiddenTagsFor(item.tags)} /></Text>
       </Row>
       <Branch data-branch-for={item.id} $open={isExpanded(item.id)} $editing={draftInside(item.id)} aria-hidden={!isExpanded(item.id)}>{renderChildren(item.id, depth + 1)}</Branch>
     </Item>;
@@ -990,7 +1014,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const entry = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-entry-gesture-key]') : null;
     const gestureKey = entry?.dataset.entryGestureKey;
     if (gestureKey !== entrySelectionRef.current?.key) updateEntrySelection(null);
-    if (entry && gestureKey) startEntryGesture(event, gestureKey, entry);
+    if (entry) startEntryGesture(event, entry);
   }} onPointerMove={trackEntryGesture} onPointerUp={finishEntryGesture} onPointerCancel={cancelEntryGesture} onCopyCapture={event => {
     if (selectionActive.current) {
       event.preventDefault(); event.stopPropagation(); copyEntries(event.clipboardData);
@@ -999,13 +1023,27 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const roots = actionRoots();
     if (!roots?.length) return;
     event.preventDefault(); event.stopPropagation(); copyEntries(event.clipboardData, roots);
-  }} onCutCapture={event => { if (selectionActive.current) { event.preventDefault(); event.stopPropagation(); copyDocument(event.clipboardData); replaceDocument(); } }}
+  }} onCutCapture={event => {
+    if (selectionActive.current) {
+      event.preventDefault(); event.stopPropagation(); copyEntries(event.clipboardData); replaceDocument();
+      return;
+    }
+    const roots = actionRoots();
+    if (!roots?.length) return;
+    event.preventDefault(); event.stopPropagation();
+    copyEntries(event.clipboardData, roots);
+    deleteCurrentEntry();
+  }}
   onPasteCapture={event => { if (selectionActive.current) { event.preventDefault(); event.stopPropagation(); replaceDocument(event.clipboardData.getData('text/plain'), event.clipboardData.getData('text/html')); } }} onKeyDownCapture={event => {
-    // Whole entries under one selection take an action together.
-    if (!selectionActive.current && rangeSelectionRef.current.length && !event.defaultPrevented) {
-      const grouped = event.metaKey || event.ctrlKey ? formattingShortcut(event.key, event.shiftKey) : null;
-      if (event.key === 'Tab') { event.preventDefault(); event.stopPropagation(); shiftGroup(event.shiftKey); return; }
-      if (grouped) { event.preventDefault(); event.stopPropagation(); formatGroup(grouped); return; }
+    // A selection spanning entries takes the shortcut across all of them.
+    const grouping = event.metaKey || event.ctrlKey ? formattingShortcut(event.key, event.shiftKey) : null;
+    if ((event.key === 'Tab' || grouping) && !selectionActive.current && !event.defaultPrevented) {
+      const rows = spannedRows();
+      if (rows.length) {
+        event.preventDefault(); event.stopPropagation();
+        if (grouping) formatGroup(rows, grouping); else shiftGroup(rows, event.shiftKey);
+        return;
+      }
     }
     if (!selectionActive.current || event.defaultPrevented) return;
     event.stopPropagation();
@@ -1018,7 +1056,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const format = mod ? formattingShortcut(event.key, event.shiftKey) : null;
     if (format) { event.preventDefault(); void run(async () => {
       await save();
-      const changes = records.current.filter(item => archived || !item.completed_at).map(item => ({ kind: item.kind, id: item.id, content: formatMarkdown(item.content, format), tags: item.tags }));
+      const changes = records.current.filter(item => archived || !item.completed_at).map(item => {
+        const document = formatDocument(documentOf(item), format);
+        return { kind: item.kind, id: item.id, document, ...serializeEntry(document) };
+      });
       if (changes.length) await editDocument(changes);
       persist(blank([], composer)); selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges(); await refresh();
     }); return; }

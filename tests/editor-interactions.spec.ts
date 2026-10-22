@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from './fixtures';
+import { expect, test, type Locator, type Page } from './fixtures';
 
 test('continuous typing keeps the new row and caret in the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 540 });
@@ -81,11 +81,11 @@ for (const kind of ['notes', 'tasks'] as const) {
   });
 }
 
-test('double-click at the end selects an entry for deletion and preserves its children', async ({ page, request }) => {
+test('selecting all of an entry and deleting removes it and its children', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Previous' } });
   const parent = await (await request.post('/api/notes', { data: { date: today, content: 'Select this whole entry' } })).json();
-  await request.post('/api/notes', { data: { date: today, content: 'Keep this child', parent_id: parent.id } });
+  const child = await (await request.post('/api/notes', { data: { date: today, content: 'Nested child', parent_id: parent.id } })).json();
   await page.goto('/');
   await page.getByRole('group', { name: 'Select this whole entry', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
@@ -93,11 +93,14 @@ test('double-click at the end selects an entry for deletion and preserves its ch
   const box = (await editor.boundingBox())!;
   await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
   await expect.poll(() => page.evaluate(() => getSelection()?.toString())).toBe('Select this whole entry');
+  // The entry is selected, so this is a delete: the branch goes with it.
   await page.keyboard.press('Backspace');
   await expect(editor).toHaveText('Previous');
   await page.keyboard.type('!');
   await expect(editor).toHaveText('Previous!');
-  await expect(page.getByRole('group', { name: 'Keep this child', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
+  await expect(page.getByRole('group', { name: 'Nested child', exact: true })).toHaveCount(0);
+  await expect.poll(async () => (await (await request.get('/api/export')).json()).notes
+    .map((row: { id: number }) => row.id)).not.toContain(child.id);
   await expect.poll(async () => (await (await request.get('/api/export')).json()).notes.some((row: { id: number }) => row.id === parent.id)).toBe(false);
 });
 
@@ -200,6 +203,30 @@ test('a selected entry drags from anywhere on its row and shows a grab cursor', 
   }).toEqual(['Second sibling', 'First sibling']);
 });
 
+test('selecting all of an entry marks it on a touch screen only', async ({ page, browser, baseURL, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Wholly selected' } });
+  const open = async (target: Page) => {
+    await target.goto('/');
+    await target.getByRole('group', { name: 'Wholly selected', exact: true }).click();
+    const editor = target.getByRole('textbox', { name: 'Edit note', exact: true });
+    await editor.press('Meta+a');
+    return editor.locator('xpath=ancestor::li[1]');
+  };
+
+  // A pointer has the double click for that, so select all stays text.
+  const row = await open(page);
+  await expect(page.getByRole('textbox', { name: 'Edit note', exact: true })).toHaveCSS('pointer-events', 'auto');
+  await expect(row).not.toHaveAttribute('data-gesture-selected', 'true');
+
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  try {
+    await expect(await open(await context.newPage())).toHaveAttribute('data-gesture-selected', 'true');
+  } finally {
+    await context.close();
+  }
+});
+
 test('a selected entry lets go when something outside it is pressed', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Held entry' } });
@@ -298,12 +325,15 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
     const first = await (await request.post('/api/notes', { data: { date: today, content: '**Keep** remove' } })).json();
     const last = await (await request.post('/api/notes', { data: { date: today, content: 'gone *tail*' } })).json();
     await page.goto('/');
-    await page.getByRole('group', { name: 'Keep remove', exact: true }).click();
     const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
-    await expect(editor).toBeFocused();
-    await editor.press('Meta+ArrowDown');
+    const written = page.locator(`[data-item-id="${first.id}"] > div > [role="group"]`);
+    await expect(written).toBeVisible();
+    // A selection over the written page, not one anchored in an open entry:
+    // an open entry owns the browser selection and keeps it to itself.
+    await written.focus();
+    await expect(written).toBeFocused();
     await page.evaluate(({ first, last }) => {
-      const start = document.querySelector(`[data-item-id="${first}"] [contenteditable] p`)!.lastChild!;
+      const start = document.querySelector(`[data-item-id="${first}"] > div > [role="group"] p`)!.lastChild!;
       const end = document.querySelector(`[data-item-id="${last}"] > div > [role="group"] p`)!.firstChild!;
       getSelection()!.setBaseAndExtent(start, 1, end, 5);
     }, { first: first.id, last: last.id });
@@ -313,7 +343,7 @@ for (const action of ['typing', 'cut', 'paste'] as const) {
     })).toEqual([' remove', 1, 'gone ', 5]);
     if (action === 'typing') await page.keyboard.type('new ');
     else {
-      const copied = await editor.evaluate((element, action) => {
+      const copied = await written.evaluate((element, action) => {
         const clipboardData = new DataTransfer();
         if (action === 'paste') {
           clipboardData.setData('text/plain', 'new ');
@@ -435,8 +465,9 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(row).toHaveAttribute('data-gesture-selected', 'true');
     expect((await editor.locator('em').allTextContents()).join('')).toBe('First lineSecond line');
     const copied = await copyOrCut('copy');
-    // A selected entry copies as a markdown list item, formatting included.
-    expect(copied.text).toBe('- ***First line\\\n  Second line***');
+    // A selected entry copies as a markdown list item, formatting included,
+    // and a task as a native checkbox.
+    expect(copied.text).toBe(`${kind === 'tasks' ? '- [ ] ' : '- '}***First line\\\n  Second line***`);
     expect(copied.html).toContain('<strong>');
     expect(copied.html).toContain('<em>');
     await page.screenshot({ path: `test-results/selected-${kind}-entry.png` });
@@ -454,7 +485,8 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(editor).toHaveText('Typed replacement');
     await expect(row).not.toHaveAttribute('data-gesture-selected', 'true');
     await selectEntry();
-    expect((await copyOrCut('cut')).text).toBe('Typed replacement');
+    // A cut copies the entry the same way a copy does, and takes it away.
+    expect((await copyOrCut('cut')).text).toBe(`${kind === 'tasks' ? '- [ ] ' : '- '}Typed replacement`);
     await expect(row).toHaveCount(0);
     await expect.poll(async () => (await (await request.get('/api/export')).json())[kind].some((row: { id: number }) => row.id === item.id)).toBe(false);
   });

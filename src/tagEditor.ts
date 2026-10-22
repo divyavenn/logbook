@@ -1,64 +1,7 @@
 import { Extension, Node, type Editor } from '@tiptap/core';
-import { NodeSelection, Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Transform } from '@tiptap/pm/transform';
+import { NodeSelection, Plugin, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { tagMatches, normalizeTag } from './tagSyntax';
-import { textPositions } from './textSelection';
-
-export type HiddenTagOffset = { name: string; offset: number };
-type HiddenTagPosition = { name: string; pos: number };
-export const hiddenTagsKey = new PluginKey<HiddenTagPosition[]>('hiddenTagPositions');
-
-const placeHiddenTags = (doc: ProseMirrorNode, offsets: HiddenTagOffset[]): HiddenTagPosition[] => {
-  const positions = textPositions(doc);
-  return offsets.map(({ name, offset }) => ({ name, pos: positions.positionAt(offset) }));
-};
-
-// A tag hidden from the editor still belongs somewhere in the text. Its
-// position rides along with every edit, so putting it back is exact.
-export const HiddenTagPositions = Extension.create<{ offsets: HiddenTagOffset[] }>({
-  name: 'hiddenTagPositions',
-  addOptions() { return { offsets: [] }; },
-  addProseMirrorPlugins() {
-    const { offsets } = this.options;
-    return [new Plugin<HiddenTagPosition[]>({
-      key: hiddenTagsKey,
-      state: {
-        init: (_config, state) => placeHiddenTags(state.doc, offsets),
-        apply(transaction, value) {
-          const replaced = transaction.getMeta(hiddenTagsKey) as HiddenTagOffset[] | undefined;
-          if (replaced) return placeHiddenTags(transaction.doc, replaced);
-          if (!transaction.docChanged) return value;
-          return value.map(tag => ({ name: tag.name, pos: transaction.mapping.map(tag.pos, -1) }));
-        },
-      },
-    })];
-  },
-});
-
-export const resetHiddenTags = (editor: Editor, offsets: HiddenTagOffset[]) => {
-  editor.view.dispatch(editor.state.tr.setMeta(hiddenTagsKey, offsets));
-};
-
-// The document as it is stored: every hidden tag back where it was, kept
-// readable as a tag by padding it away from any word it now touches. Callers
-// holding positions in the edited document map them through the result.
-export function restoreHiddenTags(editor: Editor): { doc: ProseMirrorNode; mapPosition: (pos: number) => number } {
-  const tags = hiddenTagsKey.getState(editor.state) ?? [];
-  if (!tags.length) return { doc: editor.state.doc, mapPosition: pos => pos };
-  const transform = new Transform(editor.state.doc);
-  for (const tag of [...tags].sort((a, b) => b.pos - a.pos)) {
-    const pos = Math.min(Math.max(tag.pos, 0), transform.doc.content.size);
-    const before = pos > 0 ? transform.doc.textBetween(pos - 1, pos) : '';
-    const after = pos < transform.doc.content.size ? transform.doc.textBetween(pos, pos + 1) : '';
-    const lead = before && !/\s/.test(before) ? ' ' : '';
-    const trail = after && !/\s/.test(after) ? ' ' : '';
-    try { transform.insert(pos, editor.schema.text(`${lead}#${tag.name}${trail}`)); }
-    catch { /* The text the tag sat in is gone; it stays metadata only. */ }
-  }
-  return { doc: transform.doc, mapPosition: pos => transform.mapping.map(pos, 1) };
-}
 
 export const TagDecorations = Extension.create({
   name: 'journalTags',

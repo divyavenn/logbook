@@ -252,7 +252,7 @@ def test_backup_download_is_a_complete_consistent_sqlite_file(client, tmp_path, 
     downloaded.write_bytes(response.content)
     with sqlite3.connect(downloaded) as db:
         assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
         assert db.execute('SELECT content FROM entries WHERE id = ?', (note['id'],)).fetchone()[0] == 'Back me up'
         assert db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0] == 1
 

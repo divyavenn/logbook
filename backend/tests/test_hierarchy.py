@@ -48,7 +48,7 @@ def test_move_subtree_outdent_order_and_cycles(client, kind):
 
 
 @pytest.mark.parametrize("kind", ["notes", "tasks"])
-def test_deletion_promotes_children_in_place(client, kind):
+def test_deletion_takes_the_whole_branch_and_closes_the_gap(client, kind):
     before = create(client, kind, "Before")
     parent = create(client, kind, "Parent")
     after = create(client, kind, "After")
@@ -57,9 +57,10 @@ def test_deletion_promotes_children_in_place(client, kind):
     grandchild = create(client, kind, "Grandchild", child1["id"])
     assert client.delete(f"/api/{kind}/{parent['id']}").status_code == 204
     rows = client.get("/api/export").json()[kind]
+    assert [row["id"] for row in rows] == [before["id"], after["id"]]
+    assert not {child1["id"], child2["id"], grandchild["id"]} & {row["id"] for row in rows}
     roots = sorted((row for row in rows if row["parent_id"] is None), key=lambda row: row["position"])
-    assert [row["id"] for row in roots] == [before["id"], child1["id"], child2["id"], after["id"]]
-    assert next(row for row in rows if row["id"] == grandchild["id"])["parent_id"] == child1["id"]
+    assert [row["position"] for row in roots] == [0, 1]
 
 
 def test_completing_leaf_finishes_ready_ancestors_once(client):
@@ -153,7 +154,7 @@ def test_migration_preserves_existing_content_and_order(tmp_path, monkeypatch):
         """)
     initialize(); initialize()
     with connection() as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
         notes = [dict(row) for row in db.execute("SELECT * FROM entries WHERE kind = 'note' ORDER BY position")]
         assert [row["content"] for row in notes] == ["First", "Second"]
         assert all(row["parent_id"] is None for row in notes)
@@ -185,7 +186,7 @@ def test_interrupted_legacy_migration_rolls_back_and_retries(tmp_path, monkeypat
     monkeypatch.setattr(storage, '_migrate_entries', original)
     storage.initialize()
     with storage.connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 12
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
         assert db.execute('SELECT content FROM entries').fetchone()[0] == 'Survives interruption'
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes'").fetchone()
 

@@ -1,4 +1,5 @@
 """Shared request types. Validate input before changing saved entries."""
+import json
 from datetime import date as CalendarDate, datetime, timezone as dt_timezone
 from typing import Annotated, Literal, Self
 from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator, model_validator
@@ -11,6 +12,10 @@ SavedId = Annotated[StrictInt, Field(ge=1)]
 ClientId = Annotated[str, Field(min_length=1, max_length=entry_policy.max_client_id_length)]
 EntryContent = Annotated[str, Field(max_length=entry_policy.max_content_length)]
 EntryTags = Annotated[list[str], Field(max_length=entry_policy.max_tags)]
+EntryNodes = dict
+# A document carries node and mark names around the same text, so it is allowed
+# several times the text limit before it is refused outright.
+DOCUMENT_RATIO = 12
 
 
 class PasswordLogin(BaseModel):
@@ -20,7 +25,21 @@ class PasswordLogin(BaseModel):
 class EntryText(BaseModel):
     content: EntryContent = Field(description="Markdown text only. Tags are stored separately.")
     tags: EntryTags | None = Field(default=None, description="Omit to keep saved tags; use [] to clear them.")
+    document: EntryNodes | None = Field(default=None, description=(
+        "The entry as an editor document. Stored as given; content and tags are "
+        "its projection, kept beside it for search, export and tag filtering."))
     expected_revision: SavedId | None = Field(default=None, exclude=True)
+
+    @field_validator("document")
+    @classmethod
+    def whole_document(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        if value.get("type") != "doc" or not isinstance(value.get("content"), list):
+            raise ValueError("A document needs a doc node with content.")
+        if len(json.dumps(value, separators=(',', ':'))) > entry_policy.max_content_length * DOCUMENT_RATIO:
+            raise ValueError("That document is too large.")
+        return value
 
     @field_validator("tags")
     @classmethod

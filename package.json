@@ -7,11 +7,12 @@
     "dev": "concurrently -k -n api,web 'npm:dev:api' 'npm:dev:web'",
     "dev:api": ".venv/bin/python -m uvicorn backend.app:app --reload --host 127.0.0.1 --port 8000",
     "dev:web": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
-    "start": "sh -c 'if [ -x .venv/bin/python ]; then exec .venv/bin/python -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}; else exec python3 -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}; fi'",
+    "build": "tsc -b && vite build && node scripts/backfill-documents.mjs --emit dist/backfill.mjs",
+    "start": "sh scripts/start.sh",
     "test": ".venv/bin/python -m pytest backend/tests -q",
     "test:editor-model": "node scripts/check-editor-model.mjs",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "migrate:documents": "node scripts/backfill-documents.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.9",

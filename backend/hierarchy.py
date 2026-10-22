@@ -87,18 +87,22 @@ def place(db, table, item_id, parent_id, after_id=None, allow_completed_parent=F
                        (position, sibling["id"], position))
 
 
-def remove_preserving_children(db, table, item_id):
+def remove_with_children(db, table, item_id):
+    """A deleted entry takes its branch with it, finished children included.
+
+    Undo restores the whole branch: history images the rows themselves, so
+    every deleted descendant is already part of the operation's before state.
+    """
     row = get_row(db, table, item_id)
-    group = siblings(db, table, row["parent_id"], row.get("day_id"))
-    children = siblings(db, table, item_id, row.get("day_id"))
-    ordered = []
-    for sibling in group:
-        ordered.extend(children if sibling["id"] == item_id else [sibling])
-    for position, sibling in enumerate(ordered):
-        db.execute("UPDATE entries SET parent_id = ?, position = ?, revision = revision + 1 WHERE id = ?",
-                   (row["parent_id"], position, sibling["id"]))
-    db.execute("DELETE FROM entries WHERE id = ?", (item_id,))
-    return [child['id'] for child in children]
+    doomed = [r["id"] for r in db.execute(
+        "WITH branch(id) AS (SELECT id FROM entries WHERE id = ?"
+        " UNION ALL SELECT entries.id FROM entries JOIN branch ON entries.parent_id = branch.id)"
+        " SELECT id FROM branch", (item_id,))]
+    db.execute(f"DELETE FROM entries WHERE id IN ({','.join('?' for _ in doomed)})", doomed)
+    for position, sibling in enumerate(siblings(db, table, row["parent_id"], row.get("day_id"))):
+        db.execute("UPDATE entries SET position = ?, revision = revision + 1 WHERE id = ? AND position != ?",
+                   (position, sibling["id"], position))
+    return doomed
 
 
 def next_position(db, table, parent_id, day_id=None):

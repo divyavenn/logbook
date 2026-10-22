@@ -1,18 +1,19 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+import type { JSONContent } from '@tiptap/core';
 import { Markdown } from '@tiptap/markdown';
 import type { Mark, Node as DocumentNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import styled from 'styled-components';
-import { formattingExtensions, documentWithTags, hiddenTagPositions, serializeEntry, richTextStyles, safeHref } from '../markdown';
+import { formattingExtensions, documentWithTags, serializeEntry, richTextStyles, safeHref } from '../markdown';
 import { Field, appear } from '../styles';
 import { Modal } from './Modal';
 import { useJournalContext } from '../JournalContext';
 import { normalizeTag } from '../tagSyntax';
-import { HiddenTagPositions, TagDecorations, commitTypedTags, resetHiddenTags, restoreHiddenTags, selectTypedTag } from '../tagEditor';
+import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
-import { domText, textPositions, type TextOffsets } from '../textSelection';
+import { textPositions, type TextOffsets } from '../textSelection';
 import { Code2, IndentDecrease, IndentIncrease, Link2 } from 'lucide-react';
 import type { EntryFormat } from '../entryFormatting';
 
@@ -122,13 +123,15 @@ export type RichTextHandle = {
   selection: () => TextOffsets | undefined;
   editLink: () => void;
   selectEntry: () => void;
+  entireSelected: () => boolean;
   splitAtSelection: () => { before: { content: string; tags: string[] }; after: { content: string; tags: string[] } } | null;
 };
 type Props = {
   ref?: Ref<RichTextHandle>; value: string; tags: string[]; label: string; readOnly: boolean;
-  // Hidden tags are stripped from the text and never rendered as bubbles.
-  hiddenTags?: string[];
-  onChange: (markdown: string, tags: string[]) => void; onBlur: (event?: FocusEvent) => void; onKeyDown: (event: KeyboardEvent) => void;
+  // The entry as it is stored. Opening it needs no parsing; a row written
+  // before documents were kept arrives as markdown in value instead.
+  document?: JSONContent | null;
+  onChange: (markdown: string, tags: string[], document: JSONContent | null) => void; onBlur: (event?: FocusEvent) => void; onKeyDown: (event: KeyboardEvent) => void;
   onEnter: () => void;
   onBoundary?: (direction: 'backspace' | 'delete') => void;
   onVerticalBoundary?: (direction: VerticalDirection, x: number) => boolean;
@@ -139,16 +142,18 @@ type Props = {
   onShift?: (outdent: boolean) => void;
 };
 
-export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, hiddenTags = [], onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift }: Props) {
+export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, document: stored = null, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift }: Props) {
   const { tags } = useJournalContext();
-  const hidden = useRef(hiddenTags); hidden.current = hiddenTags;
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
   const suggest = (next: TagSuggestion | null) => { suggestionRef.current = next; setSuggestion(next); };
   const callbacks = useRef({ onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift });
   callbacks.current = { onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift };
-  // Selecting an entry's whole text selects the entry, however that was done.
+  // Selecting an entry's whole text selects the entry on a touch screen, which
+  // has no double click to take hold of one with. A pointer has that gesture,
+  // and there selecting all of the text is a selection of text.
+  const touchScreen = () => window.matchMedia('(pointer: coarse)').matches;
   // The explicit gesture additionally makes Backspace remove the entry itself.
   const entrySelected = useRef(false);
   const entryReported = useRef(false);
@@ -158,17 +163,17 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
     callbacks.current.onSelectEntry?.(selected);
   };
   const lastSnapshot = useRef(JSON.stringify([value, entryTags]));
-  // Hidden tags are absent from the document but present in what it stores,
-  // so they are reported as neither added nor removed by this editor.
-  const visible = (names: string[]) => hidden.current.length ? names.filter(name => !hidden.current.includes(name)) : names;
   const storedEntry = (currentEditor: Editor) => {
     const doc = currentEditor.state.doc;
     let tagged = false;
     doc.descendants(node => { if (node.type.name === 'journalTag') tagged = true; });
     // Nothing visible is left to anchor a hidden tag to, so none comes back.
-    if (!doc.textContent.trim() && !tagged) return { content: '', tags: [] as string[] };
-    const entry = serializeEntry(restoreHiddenTags(currentEditor).doc.toJSON());
-    return { content: entry.content, tags: visible(entry.tags) };
+    if (!doc.textContent.trim() && !tagged) return { content: '', tags: [] as string[], document: null };
+    // The document the editor holds is the one that gets stored, hidden tags
+    // included: the text and the tag names are both read back out of it.
+    const stored = doc.toJSON();
+    const entry = serializeEntry(stored);
+    return { content: entry.content, tags: entry.tags, document: stored };
   };
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
@@ -186,13 +191,15 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
   const publishEditorValue = (currentEditor: Editor) => {
     commitTypedTags(currentEditor, true);
     const visiblyEmpty = !currentEditor.view.dom.textContent?.trim() && !currentEditor.view.dom.querySelector('[data-tag]');
-    const entry = visiblyEmpty ? { content: '', tags: [] as string[] } : storedEntry(currentEditor);
-    callbacks.current.onChange(entry.content, entry.tags);
+    const entry = visiblyEmpty ? { content: '', tags: [] as string[], document: null } : storedEntry(currentEditor);
+    callbacks.current.onChange(entry.content, entry.tags, entry.document);
   };
+  // A stored document opens as it is. Rows written before documents were kept
+  // are parsed from their markdown instead, tags and all.
+  const openedDocument = () => stored || documentWithTags(value, entryTags);
   const editor: Editor | null = useEditor({
-    extensions: [...formattingExtensions(), Markdown, TagDecorations,
-      HiddenTagPositions.configure({ offsets: hiddenTagPositions(value, hiddenTags) })],
-    content: documentWithTags(value, entryTags, hiddenTags), injectCSS: false, immediatelyRender: true,
+    extensions: [...formattingExtensions(), Markdown, TagDecorations],
+    content: openedDocument(), injectCSS: false, immediatelyRender: true,
     // Literal punctuation stays literal; formatting comes from shortcuts or rich paste.
     enableInputRules: false, enablePasteRules: false,
     editable: !readOnly,
@@ -203,7 +210,6 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
           const inputEvent = event as InputEvent;
           if (!view.editable || view.composing || inputEvent.isComposing) return false;
           if (['deleteContentBackward', 'deleteContentForward'].includes(inputEvent.inputType)) {
-            if (entrySelected.current) { event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true; }
             const backwards = inputEvent.inputType === 'deleteContentBackward';
             if (view.state.selection.empty && view.state.selection.from === entryEdge(view.state.doc, backwards)) {
               event.preventDefault(); callbacks.current.onBoundary?.(backwards ? 'backspace' : 'delete'); return true;
@@ -244,26 +250,11 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
           window.open(href, '_blank', 'noopener,noreferrer');
           return true;
         },
-        copy(view, event) {
-          if (!entrySelected.current || !event.clipboardData) return false;
-          event.preventDefault();
-          event.clipboardData.setData('text/plain', domText(view.dom));
-          event.clipboardData.setData('text/html', view.dom.innerHTML);
-          return true;
-        },
-        cut(view, event) {
-          if (!entrySelected.current || !event.clipboardData) return false;
-          event.preventDefault();
-          event.clipboardData.setData('text/plain', domText(view.dom));
-          event.clipboardData.setData('text/html', view.dom.innerHTML);
-          callbacks.current.onDeleteEntry?.();
-          return true;
-        },
         input(view) {
           // ProseMirror normally reports this through onUpdate. Browser fake
           // clocks can defer its DOM observer, so propagate an explicit clear
           // immediately from the native input event.
-          if (!view.dom.textContent?.trim() && !view.dom.querySelector('[data-tag]')) callbacks.current.onChange('', []);
+          if (!view.dom.textContent?.trim() && !view.dom.querySelector('[data-tag]')) callbacks.current.onChange('', [], null);
           return false;
         },
         contextmenu(view, event) {
@@ -353,7 +344,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
             view.dispatch(view.state.tr.setSelection(TextSelection.between(view.state.doc.resolve(anchor), view.state.doc.resolve(head))));
           }
         }
-        if (entrySelected.current && (event.key === 'Backspace' || event.key === 'Delete')) {
+        // Nothing of the entry is left to keep, so the entry goes with it. Only
+        // a pressed key means that: a delete can also arrive as the clearing
+        // half of replacing the text.
+        if (editor && entireEntrySelected(editor) && (event.key === 'Backspace' || event.key === 'Delete')) {
           event.preventDefault(); callbacks.current.onDeleteEntry?.(); return true;
         }
         const pending = suggestionRef.current;
@@ -452,17 +446,19 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
     onUpdate({ editor }) {
       // Formatting changes the document while leaving its full selection in
       // place. Keep the row highlight until typing or navigation collapses it.
-      if (!entireEntrySelected(editor)) entrySelected.current = false;
-      reportEntrySelection(entireEntrySelected(editor));
+      const whole = entireEntrySelected(editor);
+      if (!whole) entrySelected.current = false;
+      reportEntrySelection(whole && (touchScreen() || entrySelected.current));
       const entry = storedEntry(editor);
       lastSnapshot.current = JSON.stringify([entry.content, entry.tags]);
-      callbacks.current.onChange(entry.content, entry.tags);
+      callbacks.current.onChange(entry.content, entry.tags, entry.document);
       updateSuggestion(editor);
       commitTypedTags(editor);
     },
     onSelectionUpdate({ editor }) {
-      if (!entireEntrySelected(editor)) entrySelected.current = false;
-      reportEntrySelection(entireEntrySelected(editor));
+      const whole = entireEntrySelected(editor);
+      if (!whole) entrySelected.current = false;
+      reportEntrySelection(whole && (touchScreen() || entrySelected.current));
       if (!editor.state.selection.empty || editor.state.selection.from !== linkPrefix.current?.to) linkPrefix.current = null;
       if (!editor.state.selection.empty || editor.state.selection.from !== linkReplacement.current?.to) linkReplacement.current = null;
       updateSuggestion(editor);
@@ -642,6 +638,9 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
       if (!options?.preventScroll) editor.view.dispatch(editor.state.tr.scrollIntoView());
     },
     editLink() { openLink('context'); },
+    entireSelected() {
+      return !!editor && !editor.isDestroyed && entireEntrySelected(editor);
+    },
     selectEntry() {
       if (!editor || editor.isDestroyed) return;
       editor.commands.selectAll();
@@ -661,10 +660,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
         const head = editor.view.posAtDOM(dom.focusNode, dom.focusOffset);
         from = Math.min(anchor, head); to = Math.max(anchor, head);
       }
-      // Split what gets stored, so a hidden tag stays in the half it sat in.
-      const restored = restoreHiddenTags(editor);
-      const doc = restored.doc;
-      from = restored.mapPosition(from); to = restored.mapPosition(to);
+      const doc = editor.state.doc;
       const text = (start: number, end: number) => doc.textBetween(start, end, '\n', node =>
         node.type.name === 'journalTag' ? '#' + node.attrs.name : node.type.name === 'hardBreak' ? '\n' : '');
       // At the end of a heading, quote, or code block, its empty closing
@@ -681,8 +677,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
   useEffect(() => {
     const snapshot = JSON.stringify([value, entryTags]);
     if (editor && snapshot !== lastSnapshot.current) {
-      editor.commands.setContent(documentWithTags(value, entryTags, hidden.current), { emitUpdate: false });
-      resetHiddenTags(editor, hiddenTagPositions(value, hidden.current));
+      editor.commands.setContent(stored || documentWithTags(value, entryTags), { emitUpdate: false });
       lastSnapshot.current = snapshot;
     }
   }, [editor, value, entryTags]);

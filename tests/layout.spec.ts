@@ -13,19 +13,23 @@ test.beforeEach(async ({ page }) => {
   } }));
 });
 
-test('a long task list keeps to the top third and scrolls behind its ink wash', async ({ page }) => {
+test('a long task list takes a tab of its own, and the sidebar keeps its side', async ({ page }) => {
   await page.route('**/api/journal?*', route => route.fulfill({ json: {
     today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null,
     tasks: Array.from({ length: 40 }, (_, i) => ({ id: 9300 + i, content: `Stacked task ${i}`, tags: [], parent_id: null, position: i })),
     days: [{ date: today, focused_seconds: 0, notes: [{ id: 9400, content: 'A note below', tags: [], parent_id: null, position: 0 }] }],
   } }));
   await page.goto('/');
+  // Asking for more than a fifth of the height is asking for a pane of its own.
+  const tabs = page.getByRole('tablist', { name: 'Mobile views' });
+  await expect(tabs.getByRole('tab')).toHaveText(['tasks', 'log']);
+  // There is still room across, so the tags stay in the sidebar.
+  await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(1);
+  await page.getByRole('tab', { name: 'tasks', exact: true }).click();
   const section = page.getByRole('region', { name: 'to do', exact: true });
   await expect(section).toBeVisible();
   const viewport = page.getByTestId('task-scroll');
-  const height = (await section.boundingBox())!.height;
-  expect(height).toBeLessThanOrEqual(Math.round(page.viewportSize()!.height * 0.3) + 1);
-  // The list scrolls inside that band rather than pushing the log down.
+  // The list scrolls inside its own pane.
   expect(await viewport.evaluate(element => element.scrollHeight > element.clientHeight + 8)).toBe(true);
   const wash = page.getByTestId('task-top-ink-wash');
   await expect(wash).toBeAttached();
@@ -38,6 +42,8 @@ test('a long task list keeps to the top third and scrolls behind its ink wash', 
   const paneBounds = (await viewport.boundingBox())!;
   expect(paneBounds.y).toBeGreaterThan(washBounds.y);
   expect(washBounds.x + washBounds.width).toBeLessThan(paneBounds.x + paneBounds.width);
+  // The log is a tab away, whole.
+  await page.getByRole('tab', { name: 'log', exact: true }).click();
   await expect(page.getByRole('group', { name: 'A note below', exact: true })).toBeVisible();
 });
 
@@ -71,24 +77,27 @@ test('global timer stays fixed at the top right while tasks stack above the log'
 
 test('expanding a parent at the foot of the task pane lifts it to show its children', async ({ page }) => {
   await page.unroute('**/api/journal?*');
-  const parent = { id: 9500, content: 'Parent at the foot', tags: [], parent_id: null, position: 6, child_count: 3, completed_child_count: 0 };
+  const parent = { id: 9500, content: 'Parent at the foot', tags: [], parent_id: null, position: 20, child_count: 3, completed_child_count: 0 };
   await page.route('**/api/journal?*', route => route.fulfill({ json: {
     today, server_time: new Date().toISOString(), active_session: null, next_cursor: null, tags: [], tag: null,
     tasks: [
-      ...Array.from({ length: 6 }, (_, i) => ({ id: 9510 + i, content: `Filler task ${i}`, tags: [], parent_id: null, position: i })),
+      // Enough to overflow a pane of its own, which is what a list this long gets.
+      ...Array.from({ length: 20 }, (_, i) => ({ id: 9510 + i, content: `Filler task ${i}`, tags: [], parent_id: null, position: i })),
       parent,
       ...Array.from({ length: 3 }, (_, i) => ({ id: 9520 + i, content: `Hidden child ${i}`, tags: [], parent_id: parent.id, position: i })),
     ],
     days: [{ date: today, focused_seconds: 0, notes: [{ id: 9530, content: 'A note below', tags: [], parent_id: null, position: 0 }] }],
   } }));
   await page.goto('/');
+  await page.getByRole('tab', { name: 'tasks', exact: true }).click();
   const viewport = page.getByTestId('task-scroll');
   const row = page.getByRole('group', { name: 'Parent at the foot', exact: true });
   await row.scrollIntoViewIfNeeded();
   const before = (await row.boundingBox())!;
   await page.evaluate(() => {
     const pane = document.querySelector('[data-testid="task-scroll"]')!;
-    const samples: number[] = [];
+    // Seeded with where the pane already stands, so the steps are its travel.
+    const samples: number[] = [pane.scrollTop];
     (window as unknown as { samples: number[] }).samples = samples;
     pane.addEventListener('scroll', () => samples.push(pane.scrollTop));
   });
@@ -99,8 +108,9 @@ test('expanding a parent at the foot of the task pane lifts it to show its child
   const samples = await page.evaluate(() => (window as unknown as { samples: number[] }).samples);
   expect(samples.length).toBeGreaterThan(3);
   expect(samples).toEqual([...samples].sort((a, b) => a - b));
-  const steps = samples.map((value, index) => value - (index ? samples[index - 1] : 0));
-  expect(Math.max(...steps)).toBeLessThan(samples[samples.length - 1] / 2);
+  const steps = samples.slice(1).map((value, index) => value - samples[index]);
+  const travelled = samples[samples.length - 1] - samples[0];
+  expect(Math.max(...steps)).toBeLessThan(travelled / 2);
   const pane = (await viewport.boundingBox())!;
   const child = (await page.getByRole('group', { name: 'Hidden child 0', exact: true }).boundingBox())!;
   expect(child.y).toBeGreaterThanOrEqual(pane.y);
@@ -147,18 +157,20 @@ test('stacked tasks keep a generous creation area and wrap within the document',
   expect(wordTask.x + wordTask.width).toBeLessThanOrEqual(main.x + main.width);
 });
 
-test('narrow or short viewports use three swipe panes with the timer always visible', async ({ page }) => {
+test('what has no room gets a tab of its own, and the timer stays visible', async ({ page }) => {
   await page.goto('/');
   const timer = page.getByRole('button', { name: 'Start focus timer', exact: true });
   const timerReadout = page.getByTestId('compact-timer-time');
+  // No room across puts the sidebar in a tab; none down puts the log in one.
   for (const size of [
-    { width: 640, height: 800 }, { width: 440, height: 700 }, { width: 260, height: 700 },
-    { width: 440, height: 400 }, { width: 260, height: 180 }, { width: 1000, height: 400 },
+    { width: 640, height: 800, panes: ['log', 'tags'] }, { width: 440, height: 700, panes: ['log', 'tags'] },
+    { width: 260, height: 700, panes: ['log', 'tags'] }, { width: 440, height: 400, panes: ['tasks', 'log', 'tags'] },
+    { width: 260, height: 180, panes: ['tasks', 'log', 'tags'] }, { width: 1000, height: 400, panes: ['tasks', 'log'] },
   ]) {
     await page.setViewportSize(size);
     const tabs = page.getByRole('tablist', { name: 'Mobile views' });
     await expect(tabs).toBeVisible();
-    await expect(tabs.getByRole('tab')).toHaveText(['tasks', 'log', 'tags']);
+    await expect(tabs.getByRole('tab')).toHaveText(size.panes);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(timer).toBeInViewport();
     await expect(timerReadout).toHaveText('00:00:00');
@@ -167,7 +179,7 @@ test('narrow or short viewports use three swipe panes with the timer always visi
     ]);
     expect(activeDot!.y + activeDot!.height / 2).toBeCloseTo(timerBox!.y + timerBox!.height / 2, 0);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveCSS('font-size', '0px');
-    expect(await tabs.getByRole('tab').evaluateAll(elements => elements.map(element => getComputedStyle(element, '::before').width))).toEqual(['6px', '6px', '6px']);
+    expect(await tabs.getByRole('tab').evaluateAll(elements => elements.map(element => getComputedStyle(element, '::before').width))).toEqual(size.panes.map(() => '6px'));
     await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(1);
     await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
     const pager = page.getByTestId('mobile-pager');
@@ -186,19 +198,23 @@ test('narrow or short viewports use three swipe panes with the timer always visi
       scrollWidth: element.scrollWidth,
       panes: [...element.children].map(child => ({ clientWidth: (child as HTMLElement).clientWidth, scrollWidth: (child as HTMLElement).scrollWidth })),
     }));
-    expect(paneGeometry.scrollWidth).toBe(paneGeometry.clientWidth * 3);
+    expect(paneGeometry.scrollWidth).toBe(paneGeometry.clientWidth * size.panes.length);
     expect(paneGeometry.panes.every(pane => pane.clientWidth === paneGeometry.clientWidth && pane.scrollWidth <= pane.clientWidth), JSON.stringify(paneGeometry)).toBe(true);
     if (size.width <= 640) {
       const main = (await page.getByRole('main').boundingBox())!;
       expect(main.x).toBe(48);
       expect(size.width - main.x - main.width).toBe(16);
     }
-    await page.getByRole('tab', { name: 'tags', exact: true }).click();
-    await expect(page.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('group', { name: 'Page controls' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'all', exact: true })).toBeVisible();
-    await page.getByRole('tab', { name: 'tasks', exact: true }).click();
-    await expect(page.getByRole('tab', { name: 'tasks', exact: true })).toHaveAttribute('aria-selected', 'true');
+    // Where there is room beside the log, the sidebar keeps it and has no tab.
+    if (size.panes.includes('tags')) {
+      await page.getByRole('tab', { name: 'tags', exact: true }).click();
+      await expect(page.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(page.getByRole('group', { name: 'Page controls' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'all', exact: true })).toBeVisible();
+    }
+    // Where the log keeps the task list above it, there is no tasks tab.
+    await page.getByRole('tab', { name: size.panes.includes('tasks') ? 'tasks' : 'log', exact: true }).click();
+    await expect(page.getByRole('tab', { name: size.panes.includes('tasks') ? 'tasks' : 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('group', { name: 'First task', exact: true })).toBeInViewport();
     expect((await page.getByRole('group', { name: 'First task', exact: true }).boundingBox())!.height).toBeLessThanOrEqual(40);
     await page.getByRole('tab', { name: 'log', exact: true }).click();
@@ -263,12 +279,14 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
     }
     await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
   };
+  // A tall narrow window keeps the task list with the log, so the panes are
+  // the log and the tags, in that order.
   await swipe(box.x + box.width * .82, box.x + box.width * .18);
   await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(2, 1);
+  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
   await swipe(box.x + box.width * .18, box.x + box.width * .82);
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
+  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
 });
 
 test('swipe log loads earlier dates infinitely and preserves its active tag filter', async ({ page }) => {
@@ -314,7 +332,11 @@ test('journal opacity wash remains above the first date at the top of the viewpo
   expect((await wash.evaluate(element => getComputedStyle(element, '::after').backgroundImage)).match(/radial-gradient/g)?.length).toBe(5);
   const [journalBox, washBox] = await Promise.all([journal.boundingBox(), wash.boundingBox()]);
   expect(washBox!.x).toBeLessThan(journalBox!.x);
-  expect(washBox!.x + washBox!.width).toBeGreaterThan(journalBox!.x + journalBox!.width);
+  // It stops short of the scrollbar column, so the bar's ends stay crisp.
+  const right = journalBox!.x + journalBox!.width;
+  expect(washBox!.x + washBox!.width).toBeLessThanOrEqual(right - 8);
+  // The gap is only the bar's own column: content still fades under the wash.
+  expect(washBox!.x + washBox!.width).toBeGreaterThanOrEqual(right - 16);
   await page.screenshot({ path: '/tmp/still-log-top-ink-wash.png' });
 });
 

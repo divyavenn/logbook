@@ -1,20 +1,22 @@
 import { editEntries } from './api';
-import { entryKind } from './apiDecoders';
+import { entryDocument, entryKind } from './apiDecoders';
 import { siblingEntries } from './entryTree';
 import { preserveRecovery, readStored, storage } from './storage';
 import { boolean, integer, nullable, object, positiveId, strings, text, type Decoder } from './validation';
 import type { DocumentChange } from './entryChanges';
-import type { EntryKind, OutlineItem } from './types';
+import type { EntryDocument, EntryKind, OutlineItem } from './types';
 import entryPolicy from '../shared/entry-policy.json';
 
 export type Draft = {
   active: boolean; mode: 'new' | 'edit'; id: number | null; content: string; saved: string;
+  // The edited entry as a document, beside the markdown it projects to.
+  document?: EntryDocument | null;
   kind: EntryKind; clientId: string; requestId: string; revision: number | null;
   parentId: number | null; afterId: number | null; beforeId?: number | null;
   placement: 'tail' | 'after'; hiddenTags: string[]; tags: string[]; savedTags: string[];
 };
 export function freshDraft(rows: OutlineItem[], active: boolean, kind: EntryKind, parentId: number | null = null, afterId?: number | null): Draft {
-  return { tags: [], savedTags: [], hiddenTags: [], active, mode: 'new', id: null, content: '', saved: '',
+  return { tags: [], savedTags: [], hiddenTags: [], active, mode: 'new', id: null, content: '', saved: '', document: null,
     clientId: crypto.randomUUID(), requestId: crypto.randomUUID(), revision: null, parentId,
     placement: afterId === undefined ? 'tail' : 'after', kind,
     afterId: afterId === undefined ? siblingEntries(rows, parentId).at(-1)?.id ?? null : afterId };
@@ -51,6 +53,7 @@ export function readDraft(key: string, fallback: Draft, entries: OutlineItem[] =
       mode: field('mode', value => { if (value === 'new' || value === 'edit') return value; throw new Error('Invalid draft mode.'); }, fallback.mode),
       id,
       content: field('content', text, fallback.content), saved: field('saved', text, fallback.saved),
+      document: field('document', entryDocument, fallback.document ?? null),
       kind: field('kind', value => entryKind(value, saved?.kind ?? fallback.kind), saved?.kind ?? fallback.kind),
       clientId: field('clientId', requestId, fallback.clientId), requestId: field('requestId', requestId, fallback.requestId),
       revision: field('revision', value => nullable(value, positiveId), fallback.revision),

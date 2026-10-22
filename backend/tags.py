@@ -22,6 +22,8 @@ def entry_dict(row):
     result = dict(row)
     if 'tags' in result and isinstance(result['tags'], str):
         result['tags'] = json.loads(result['tags'])
+    if isinstance(result.get('document'), str):
+        result['document'] = json.loads(result['document'])
     return result
 
 
@@ -63,6 +65,15 @@ def list_tags(db):
         UNION ALL
         SELECT value AS name, 0 AS note_count, COUNT(*) AS task_count FROM entries, json_each(entries.tags) WHERE kind = 'task' GROUP BY value
         ) GROUP BY name ORDER BY name''')]
+
+
+def tagged_ids(db, table: EntryKind) -> set[int]:
+    """Entries carrying any tag at all, and everything beneath them."""
+    kind = stored_kind(table)
+    return {r[0] for r in db.execute('''WITH RECURSIVE tagged(id) AS (
+        SELECT item.id FROM entries item WHERE item.kind = ? AND EXISTS(SELECT 1 FROM json_each(item.tags))
+        UNION SELECT child.id FROM entries child JOIN tagged ON child.parent_id = tagged.id WHERE child.kind = ?
+        ) SELECT id FROM tagged''', (kind, kind))}
 
 
 def matching_ids(db, table: EntryKind, name: str) -> list[int]:

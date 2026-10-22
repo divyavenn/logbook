@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures';
+import { expect, openTasks, test } from './fixtures';
 
 test('new entries appear without entrance motion or blinking', async ({ page }) => {
   await page.goto('/');
@@ -174,9 +174,10 @@ for (const kind of ['notes', 'tasks'] as const) {
       await expect(composer).toBeHidden();
       await row(inserted.id).focus(); await row(inserted.id).press('Enter');
       await expect(editor).toBeFocused(); await editor.fill('');
-      await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
-      await expect(editor).toBeHidden(); await expect(composer).toBeHidden();
+      // Clearing all of its text removes it, and editing moves to a neighbour.
       await expect.poll(async () => (await (await request.get('/api/export')).json())[kind].some((item: { id: number }) => item.id === inserted.id)).toBe(false);
+      await page.getByRole('button', { name: 'Start focus timer', exact: true }).focus();
+      await expect(composer).toBeHidden();
     }
   });
 
@@ -251,7 +252,7 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
-    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await openTasks(mobile);
     const rootIds = () => mobile.locator('[data-outline-kind="tasks"] > ul > li[data-item-id]').evaluateAll(elements => elements.map(element => element.getAttribute('data-item-id')));
     const preview = mobile.getByRole('group', { name: 'First mobile task', exact: true });
     await expect(preview).toBeInViewport();
@@ -283,52 +284,41 @@ test('mobile editing stays aligned and a refreshed empty sibling keeps its Enter
   }
 });
 
-test('mobile entry swipes change panes until a hold selects the entry for indenting', async ({ browser, baseURL, request }) => {
+test('a touch swipe over an entry changes panes, holding it or not', async ({ browser, baseURL, request }) => {
   const first = await (await request.post('/api/tasks', { data: { content: 'Swipe parent' } })).json();
   const second = await (await request.post('/api/tasks', { data: { content: 'Swipe child', after_id: first.id } })).json();
-  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 700 }, hasTouch: true });
+  // Room neither way, so the tasks have a pane of their own to swipe from.
+  const context = await browser.newContext({ baseURL: baseURL!, viewport: { width: 440, height: 400 }, hasTouch: true });
   const mobile = await context.newPage();
   try {
     await mobile.goto('/');
-    await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
+    await openTasks(mobile);
     const row = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
     await expect(row).toBeInViewport();
     await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
     let pointerId = 7;
-    const swipe = async (element: typeof row, from: number, to: number, hold = false) => {
+    const swipe = async (from: number, to: number, hold = false) => {
       pointerId += 1;
-      await element.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId, isPrimary: true, clientX: from, clientY: 180 });
-      if (hold) {
-        await mobile.waitForTimeout(400);
-        await expect(element).toHaveAttribute('data-gesture-selected', 'true');
-      }
-      await element.dispatchEvent('pointermove', { pointerType: 'touch', pointerId, isPrimary: true, clientX: (from + to) / 2, clientY: 182 });
-      await element.dispatchEvent('pointerup', { pointerType: 'touch', pointerId, isPrimary: true, clientX: to, clientY: 184 });
+      await row.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId, isPrimary: true, clientX: from, clientY: 180 });
+      if (hold) await mobile.waitForTimeout(400);
+      await row.dispatchEvent('pointermove', { pointerType: 'touch', pointerId, isPrimary: true, clientX: (from + to) / 2, clientY: 182 });
+      await row.dispatchEvent('pointerup', { pointerType: 'touch', pointerId, isPrimary: true, clientX: to, clientY: 184 });
     };
-    await swipe(row, 340, 90);
-    await expect(mobile.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
-    expect(((await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>).find(task => task.id === second.id)?.parent_id).toBeNull();
+    const nesting = async () => ((await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>)
+      .find(task => task.id === second.id)?.parent_id;
 
+    await swipe(340, 90);
+    await expect(mobile.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+    expect(await nesting()).toBeNull();
+
+    // Holding first changes nothing: the entry is never taken hold of, and the
+    // swipe turns the page just the same.
     await mobile.getByRole('tab', { name: 'tasks', exact: true }).click();
     await expect.poll(() => mobile.getByTestId('mobile-pager').evaluate(element => element.scrollLeft)).toBe(0);
-    await swipe(row, 90, 165, true);
-    await expect.poll(async () => {
-      const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
-      return tasks.find(task => task.id === second.id)?.parent_id;
-    }).toBe(first.id);
-    await expect(mobile.getByRole('tab', { name: 'tasks', exact: true })).toHaveAttribute('aria-selected', 'true');
-
-    const expandParent = mobile.getByRole('button', { name: 'Expand Swipe parent', exact: true });
-    await expect(expandParent).toBeVisible();
-    await expandParent.click();
-    const nestedRow = mobile.locator(`[data-kind="tasks"][data-item-id="${second.id}"]`).first();
-    await expect(nestedRow).toBeVisible();
-    await swipe(nestedRow, 165, 90, true);
-    await expect.poll(async () => {
-      const tasks = (await (await request.get('/api/export')).json()).tasks as Array<{ id: number; parent_id: number | null }>;
-      return tasks.find(task => task.id === second.id)?.parent_id;
-    }).toBeNull();
-    await expect(mobile.getByRole('tab', { name: 'tasks', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await swipe(340, 90, true);
+    await expect(row).not.toHaveAttribute('data-gesture-selected', 'true');
+    await expect(mobile.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+    expect(await nesting()).toBeNull();
   } finally {
     await context.close();
   }
@@ -518,4 +508,24 @@ test('recovery applies an earlier completed-task draft through the unified endpo
   }).toBe('Task recovered correctly');
   expect(await page.evaluate(key => localStorage.getItem(key), key)).toBeNull();
   await request.delete(`/api/tasks/${task.id}`);
+});
+
+test('Backspace joins onto the last row of the branch above, not the parent heading it', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const make = async (content: string, parent_id?: number) =>
+    (await request.post('/api/notes', { data: { date: today, content, parent_id } })).json();
+  const parent = await make('Branch head ');
+  const child = await make('Middle child ', parent.id);
+  const deepest = await make('Deepest last ', child.id);
+  const following = await make('Joined up');
+  await page.goto('/');
+  const row = page.locator(`[data-item-id="${following.id}"] [role="group"]`).first();
+  await row.focus(); await row.press('Enter');
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await editor.press('Meta+ArrowUp'); await editor.press('Backspace');
+  // The deepest last row absorbs the text even while its branch is folded.
+  await expect.poll(async () => {
+    const rows = (await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string }>;
+    return Object.fromEntries(rows.map(entry => [entry.id, entry.content]));
+  }).toEqual({ [parent.id]: 'Branch head ', [child.id]: 'Middle child ', [deepest.id]: 'Deepest last Joined up' });
 });

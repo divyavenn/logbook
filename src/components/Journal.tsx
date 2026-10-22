@@ -169,7 +169,7 @@ export function Tasks({ tasks, entering = false, refresh }: { tasks: Task[]; ent
   if (activeTag && !tasks.length) return null;
   return <TaskSection ref={section} $entering={entering} $empty={!tasks.length} aria-labelledby="task-title"><SectionTitle id="task-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand to do' : 'Fold to do'} onClick={() => { setUnfolding(true); setFolded(value => !value); }}>to do</SectionTitle>
     {!folded && <TaskFrame $appearing={unfolding}>
-      <TaskViewport data-testid="task-scroll"><Body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
+      <TaskViewport data-testid="task-scroll"><Body data-task-body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
       <TaskEdgeWash data-testid="task-top-ink-wash" aria-hidden="true" />
       <TaskEdgeWash $edge="bottom" data-testid="task-bottom-ink-wash" aria-hidden="true" />
     </TaskFrame>}
@@ -223,9 +223,10 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
           onClick={() => { if (activeTag) openDate(day.date); else if (sessionsEnabled) openSessions(day.date); }}
           title={activeTag ? 'Open this date in the full logbook' : sessionsEnabled ? 'View and edit focus sessions' : undefined}>
           <DateLabel dateTime={day.date}>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</DateLabel>
-          <FocusTotal>{duration(seconds, true)}</FocusTotal>
+          {/* A filtered day is a list of matching entries, not the day itself. */}
+          {!activeTag && <FocusTotal data-focus-total>{duration(seconds, true)}</FocusTotal>}
         </DateHead>
-        {!!day.events?.length && <EventList aria-label={`Calendar events for ${day.date}`}>
+        {!activeTag && !!day.events?.length && <EventList aria-label={`Calendar events for ${day.date}`}>
           {day.events.map(event => {
             const text = eventText(event);
             const content = <><EventTitle data-calendar-event-title>{event.title}</EventTitle> <EventMeta data-calendar-event-meta>{eventDetail(event)}</EventMeta></>;

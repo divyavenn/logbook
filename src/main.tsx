@@ -22,7 +22,12 @@ const AppSurface = styled.div<{ $blurred: boolean; $blocked: boolean }>`
 const UNLOCKED_KEY = 'still-unlocked';
 
 function Root() {
-  const [state, setState] = useState<'checking' | 'locked' | 'unlocking' | 'revealing' | 'ready'>('checking');
+  // Opening is not the moment to wait on an answer we already have. The last
+  // one stands until the server corrects it, and every request still proves
+  // itself, so a stale yes costs a round trip and shows only what this device
+  // had cached anyway.
+  const [state, setState] = useState<'checking' | 'locked' | 'unlocking' | 'revealing' | 'ready'>(
+    () => storage.getItem(UNLOCKED_KEY) === 'true' ? 'ready' : 'checking');
   useEffect(() => installTouchHaptics(), []);
   useEffect(() => {
     let cancelled = false;

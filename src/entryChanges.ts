@@ -1,7 +1,8 @@
-import type { EntryKind } from './types';
+import type { EntryDocument, EntryKind } from './types';
 
 type Identity = { kind: EntryKind; id: number; expected_revision?: number | null };
-type TextChange = { content: string; tags?: string[]; allow_empty?: boolean };
+// A document is sent beside the text it projects to, and is what gets stored.
+type TextChange = { content: string; tags?: string[]; document?: EntryDocument | null; allow_empty?: boolean };
 type Placement = { parent_id?: number | null; after_id?: number | null; before_id?: number | null };
 
 export type CreateEntry = TextChange & Placement & {

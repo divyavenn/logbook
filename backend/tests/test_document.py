@@ -323,16 +323,19 @@ def test_completion_and_reopen_retries_are_idempotent_with_stale_revision(client
     assert client.post(f"/api/tasks/{task['id']}/reopen", json=body).status_code == 200
 
 
-def test_deleting_parent_archives_promoted_checked_child(client):
+def test_deleting_parent_takes_checked_and_open_children_with_it(client):
     parent = create(client, 'tasks', 'Parent')
     checked = create(client, 'tasks', 'Checked', parent['id'])
     open_child = create(client, 'tasks', 'Open', parent['id'])
+    keep = create(client, 'tasks', 'Keep')
     client.post(f"/api/tasks/{checked['id']}/complete")
     result = batch(client, [{'kind': 'tasks', 'id': parent['id'], 'delete': True}])
     assert result['items'] == [None]
     journal = client.get('/api/journal').json()
-    assert [row['id'] for row in journal['tasks']] == [open_child['id']]
-    assert any(row['id'] == checked['id'] for day in journal['days'] for row in day['tasks'])
+    assert [row['id'] for row in journal['tasks']] == [keep['id']]
+    # A checked child is not archived into a day on its way out; it is gone.
+    assert not any(row['id'] in {checked['id'], open_child['id']}
+                   for day in journal['days'] for row in day['tasks'])
 
 
 def test_move_into_checked_group_completes_branch_and_can_archive(client):
@@ -407,3 +410,100 @@ def test_move_to_a_date_rejects_a_parent_from_another_day(client):
         {'kind': 'notes', 'id': note['id'], 'move': True, 'date': '2026-09-18', 'parent_id': other['id']},
     ]})
     assert response.status_code == 409
+
+
+def test_carrying_a_checked_task_to_another_date_leaves_it_a_task(client):
+    task = create(client, 'tasks', 'Finished work')
+    client.post(f"/api/tasks/{task['id']}/complete")
+    archived = batch(client, [{'kind': 'tasks', 'id': task['id'], 'move': True, 'date': '2026-09-17'}])['items'][0]
+
+    # It stays a checked task, on the date it was carried to, not a note there.
+    assert archived['completed_at'] is not None
+    assert client.get('/api/export').json()['notes'] == []
+    days = {day['date']: day for day in client.get('/api/journal?limit=10').json()['days']}
+    assert [row['id'] for row in days['2026-09-17']['tasks']] == [task['id']]
+    assert task['id'] not in {row['id'] for row in client.get('/api/journal').json()['tasks']}
+
+
+def test_a_tagged_task_is_listed_under_its_tag_alone(client):
+    plain = create(client, 'tasks', 'Still listed')
+    filed = create(client, 'tasks', 'Filed away')
+    child = create(client, 'tasks', 'Beneath the filed one', filed['id'])
+    batch(client, [{'kind': 'tasks', 'id': filed['id'], 'content': 'Filed away', 'tags': ['errands']}])
+
+    listed = client.get('/api/journal').json()['tasks']
+    assert [row['id'] for row in listed] == [plain['id']]
+    filtered = client.get('/api/journal?tag=errands').json()['tasks']
+    assert {row['id'] for row in filtered} == {filed['id'], child['id']}
+
+
+def test_filing_a_subtask_leaves_its_parent_without_a_count(client):
+    parent = create(client, 'tasks', 'Parent')
+    child = create(client, 'tasks', 'Only child', parent['id'])
+    batch(client, [{'kind': 'tasks', 'id': child['id'], 'content': 'Only child', 'tags': ['errands']}])
+
+    listed = {row['id']: row for row in client.get('/api/journal').json()['tasks']}
+    assert child['id'] not in listed
+    assert listed[parent['id']]['child_count'] == 0
+    assert listed[parent['id']]['completed_child_count'] == 0
+
+
+def test_deleting_a_parent_takes_its_whole_branch_and_undo_brings_it_back(client):
+    parent = create(client, 'tasks', 'Parent')
+    done = create(client, 'tasks', 'Finished child', parent['id'])
+    open_child = create(client, 'tasks', 'Open child', parent['id'])
+    grandchild = create(client, 'tasks', 'Grandchild', open_child['id'])
+    assert client.post(f"/api/tasks/{done['id']}/complete").status_code == 200
+    result = batch(client, [{'kind': 'tasks', 'id': parent['id'], 'delete': True}])
+    assert client.get('/api/export').json()['tasks'] == []
+    history(client, result['operation_id'])
+    restored = {row['id']: row['parent_id'] for row in client.get('/api/export').json()['tasks']}
+    assert restored == {parent['id']: None, done['id']: parent['id'],
+                        open_child['id']: parent['id'], grandchild['id']: open_child['id']}
+
+
+def test_deleting_one_task_endpoint_also_removes_its_children(client):
+    parent = create(client, 'tasks', 'Doomed parent')
+    child = create(client, 'tasks', 'Doomed child', parent['id'])
+    keep = create(client, 'tasks', 'Untouched')
+    assert client.delete(f"/api/tasks/{parent['id']}").status_code == 204
+    assert [row['id'] for row in client.get('/api/export').json()['tasks']] == [keep['id']]
+    assert child['id'] not in [row['id'] for row in client.get('/api/export').json()['tasks']]
+
+
+def test_deleting_a_note_parent_removes_nested_notes(client):
+    parent = create(client, 'notes', 'Parent note')
+    child = create(client, 'notes', 'Nested note', parent['id'])
+    create(client, 'notes', 'Deeper note', child['id'])
+    assert client.delete(f"/api/notes/{parent['id']}").status_code == 204
+    assert client.get('/api/export').json()['notes'] == []
+
+
+DOCUMENT = {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [
+    {'type': 'text', 'text': 'hello '}, {'type': 'journalTag', 'attrs': {'name': 'alpha'}}]}]}
+
+
+def test_a_document_is_kept_beside_its_text_and_returns_with_the_entry(client):
+    today = client.get('/api/journal').json()['today']
+    created = client.post('/api/notes', json={
+        'date': today, 'content': 'hello #alpha', 'tags': ['alpha'], 'document': DOCUMENT}).json()
+    assert created['document'] == DOCUMENT
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == DOCUMENT
+    # A write carrying no document leaves the stored one alone.
+    client.patch(f"/api/notes/{created['id']}", json={'content': 'hello #alpha', 'tags': ['alpha']})
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == DOCUMENT
+    # Anything that is not a whole document is refused before storage.
+    for broken in [{'type': 'paragraph'}, {'type': 'doc'}, {'type': 'doc', 'content': 'text'}]:
+        assert client.post('/api/notes', json={'date': today, 'content': 'x', 'document': broken}).status_code == 422
+
+
+def test_undo_restores_the_document_a_change_replaced(client):
+    today = client.get('/api/journal').json()['today']
+    created = client.post('/api/notes', json={
+        'date': today, 'content': 'hello #alpha', 'tags': ['alpha'], 'document': DOCUMENT}).json()
+    replacement = {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': 'rewritten'}]}]}
+    result = batch(client, [{'kind': 'notes', 'id': created['id'], 'content': 'rewritten',
+                             'tags': [], 'document': replacement}])
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == replacement
+    history(client, result['operation_id'])
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == DOCUMENT

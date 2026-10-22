@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from .db import connection
 from .entries import check_revision, create_entry, move_entry, required, update_entry
 from .entry_kinds import api_kind, stored_kind
-from .hierarchy import remove_preserving_children
+from .hierarchy import remove_with_children
 from .history import record, snapshot
 from .models import Content, DocumentBatch, DocumentChange, EntryText
 from .stats import stamp
@@ -31,7 +31,7 @@ def _apply_change(db: sqlite3.Connection, change: DocumentChange, now: str, revi
         if row:
             if not revision_checked:
                 check_revision(row, change.expected_revision)
-            promoted.extend(remove_preserving_children(db, kind, item_id))
+            remove_with_children(db, kind, item_id)
         return None
 
     if item_id and row is None:
@@ -48,7 +48,7 @@ def _apply_change(db: sqlite3.Connection, change: DocumentChange, now: str, revi
     try:
         content_model = EntryText if change.allow_empty else Content
         tags = change.tags if change.tags is not None else (row or {}).get('tags', [])
-        value = content_model(content=change.content, tags=tags)
+        value = content_model(content=change.content, tags=tags, document=change.document)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     if row:

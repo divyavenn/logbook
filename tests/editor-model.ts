@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { markdownText, replaceEntryRange } from '../src/markdown';
+import { documentWithTags, markdownText, replaceEntryRange } from '../src/markdown';
 import { completionPreview, waitForMotion } from '../src/taskCompletion';
 import type { OutlineItem } from '../src/types';
 import { normalizeJournal, stats } from '../src/apiDecoders';
@@ -102,10 +102,15 @@ test('storage failures keep the latest data usable in this tab', t => withStorag
   assert.ok(errors.mock.callCount() > 0);
 }));
 
+// Every edit starts from a document now, so these build one the way the app
+// does for a row still kept as markdown.
+const at = (content: string, tags: string[], from: number, to: number) =>
+  ({ document: documentWithTags(content, tags), from, to });
+
 test('partial deletion across entries preserves formatting, spaces, and the join caret', () => {
   const result = replaceEntryRange(
-    { content: 'Keep **bold** gone', tags: [], from: 10, to: 14 },
-    { content: 'gone *tail*', tags: [], from: 0, to: 5 },
+    at('Keep **bold** gone', [], 10, 14),
+    at('gone *tail*', [], 0, 5),
   );
   assert.equal(result.content, 'Keep **bold** *tail*');
   assert.equal(result.offset, 10);
@@ -113,8 +118,8 @@ test('partial deletion across entries preserves formatting, spaces, and the join
 
 test('replacing a selection retains only tags outside the selected text', () => {
   const result = replaceEntryRange(
-    { content: '#keep alpha gone', tags: ['keep'], from: 12, to: 16 },
-    { content: 'gone #remove tail', tags: ['remove'], from: 0, to: 13 },
+    at('#keep alpha gone', ['keep'], 12, 16),
+    at('gone #remove tail', ['remove'], 0, 13),
     'new ',
   );
   assert.equal(markdownText(result.content), '#keep alpha new tail');
@@ -124,25 +129,26 @@ test('replacing a selection retains only tags outside the selected text', () => 
 
 test('hard breaks before a partial selection retain their offsets', () => {
   const result = replaceEntryRange(
-    { content: 'one\\\ntwo cut', tags: [], from: 8, to: 11 },
-    { content: 'cut last', tags: [], from: 0, to: 4 },
+    at('one\\\ntwo cut', [], 8, 11),
+    at('cut last', [], 0, 4),
   );
   assert.equal(markdownText(result.content), 'one\ntwo last');
   assert.equal(result.offset, 8);
 });
 
-test('a selection boundary within one outline keeps its unselected suffix and filter tag', () => {
-  const row = { content: 'remove keep', tags: ['work'], from: 0, to: 7 };
-  const result = replaceEntryRange(row, row, '', '', ['work']);
-  assert.equal(result.content, 'keep');
+test('a selection boundary within one outline keeps its unselected suffix and tag', () => {
+  const row = at('remove keep', ['work'], 0, 7);
+  const result = replaceEntryRange(row, row, '', '');
+  // The tag is in the entry, so it survives by being outside the selection.
+  assert.equal(result.content, 'keep #work');
   assert.deepEqual(result.tags, ['work']);
   assert.equal(result.offset, 0);
 });
 
 test('fully selected entries produce an empty replacement', () => {
   const result = replaceEntryRange(
-    { content: 'first', tags: [], from: 0, to: 5 },
-    { content: 'last', tags: [], from: 0, to: 4 },
+    at('first', [], 0, 5),
+    at('last', [], 0, 4),
   );
   assert.equal(result.content, '');
   assert.deepEqual(result.tags, []);
@@ -150,8 +156,8 @@ test('fully selected entries produce an empty replacement', () => {
 
 test('multiline replacement preserves boundary spaces before joining text', () => {
   const result = replaceEntryRange(
-    { content: 'Keep remove', tags: [], from: 5, to: 11 },
-    { content: 'gone tail', tags: [], from: 0, to: 5 },
+    at('Keep remove', [], 5, 11),
+    at('gone tail', [], 0, 5),
     'new\nnext ',
   );
   assert.equal(markdownText(result.content), 'Keep new\nnext tail');

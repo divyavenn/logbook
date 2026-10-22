@@ -10,6 +10,11 @@ from .models import EntryText
 from .tags import entry_dict
 
 
+def stored_document(document: dict | None) -> str | None:
+    """The document as it is kept: compact JSON, or nothing for a text-only write."""
+    return json.dumps(document, separators=(',', ':')) if document is not None else None
+
+
 def required(db, table, item_id):
     # table names are internal constants, never supplied by the caller.
     if table in ('notes', 'tasks'):
@@ -26,9 +31,12 @@ def required(db, table, item_id):
 
 def update_entry(db: sqlite3.Connection, row, value: EntryText, now: str):
     tags = value.tags if value.tags is not None else row['tags']
-    if row['content'] != value.content or row['tags'] != tags:
-        db.execute('UPDATE entries SET content = ?, tags = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
-                   (value.content, json.dumps(tags), now, row['id']))
+    # A write without a document leaves the stored one alone rather than
+    # clearing it: the text it was projected from has not been replaced.
+    document = value.document if value.document is not None else row.get('document')
+    if row['content'] != value.content or row['tags'] != tags or row.get('document') != document:
+        db.execute('UPDATE entries SET document = ?, content = ?, tags = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
+                   (stored_document(document), value.content, json.dumps(tags), now, row['id']))
     return required(db, api_kind(row['kind']), row['id'])
 
 
@@ -45,9 +53,10 @@ def create_entry(db: sqlite3.Connection, kind: EntryKind, value: EntryText, now:
         completed_at = now if parent and parent['completed_at'] else None
         day_id = parent['day_id'] if parent else None
     validate_parent(db, kind, parent_id, day_id, allow_completed=bool(completed_at))
-    cursor = db.execute('''INSERT INTO entries(kind, day_id, content, tags, created_at, updated_at, completed_at, parent_id, client_id)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                        (stored_kind(kind), day_id, value.content, json.dumps(value.tags or []), now, now, completed_at, parent_id, client_id))
+    cursor = db.execute('''INSERT INTO entries(kind, day_id, document, content, tags, created_at, updated_at, completed_at, parent_id, client_id)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (stored_kind(kind), day_id, stored_document(value.document), value.content,
+                         json.dumps(value.tags or []), now, now, completed_at, parent_id, client_id))
     place(db, kind, cursor.lastrowid, parent_id, after_id, allow_completed_parent=bool(completed_at), before_id=before_id)
     return required(db, kind, cursor.lastrowid)
 
@@ -64,7 +73,10 @@ def move_entry(db, table, item_id, parent_id, after_id, now, before_id=None, day
     if parent_id is not None and parent is None:
         raise HTTPException(404, 'The parent entry no longer exists.')
     day_id = ensure_day(db, day, now) if day is not None else row['day_id']
-    target_kind = parent['kind'] if parent else ('task' if day_id is None else 'note')
+    # Carrying a dated entry to another date leaves it as it is. Outdenting one
+    # to a day's root is what makes a checked task a note there.
+    carried = day is not None and row['day_id'] is not None
+    target_kind = parent['kind'] if parent else ('task' if day_id is None else (row['kind'] if carried else 'note'))
     target_table = api_kind(target_kind)
     if parent and parent['day_id'] != day_id:
         raise HTTPException(409, 'Nested entries must belong to the same list or date.')

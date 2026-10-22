@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
 import { cacheJournal, cachedJournal, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
@@ -13,12 +13,24 @@ import { JournalContext, flushDrafts } from './JournalContext';
 import { Modal } from './components/Modal';
 import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
-import { compactViewport, shortViewport } from './layout';
+import { compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
 import { entryError } from './entryFeedback';
 
 const JOURNAL_PAGE_SIZE = 14;
-const MOBILE_VIEWS = ['tasks', 'log', 'tags'] as const;
+type View = 'tasks' | 'log' | 'tags';
+// Space decides what gets a tab of its own: the sidebar when there is no room
+// beside the log, the log when there is none above it. A phone has neither, so
+// it tabs both. The task list asking for more than this much of the height
+// counts as no room above, and gives it back a little lower so it cannot flap.
+// The pane last read is the one the logbook opens on.
+const PANE_KEY = 'still-pane';
+const rememberedPane = (): View => {
+  const stored = storage.getItem(PANE_KEY);
+  return stored === 'tasks' || stored === 'log' || stored === 'tags' ? stored : 'log';
+};
+const TASKS_CROWD_HEIGHT = 0.2;
+const TASKS_SETTLE_HEIGHT = 0.17;
 const REPOSITORY_URL = import.meta.env.VITE_REPOSITORY_URL || 'https://github.com/divyavenn/still';
 const SessionsModal = lazy(() => import('./components/SessionsModal').then(module => ({ default: module.SessionsModal })));
 const StatsModal = lazy(() => import('./components/StatsModal').then(module => ({ default: module.StatsModal })));
@@ -204,6 +216,9 @@ const Main = styled.main`
   flex: 1; display: flex; flex-direction: column; min-height: 0;
   @media ${compactViewport} { max-width: 100%; overflow: hidden; }
 `;
+// The log fades its content out over this much at each edge, and its first
+// date rests just clear of it.
+const LOG_WASH_HEIGHT = 30;
 const LogFrame = styled.div`
   position: relative; flex: 1; min-height: min(240px, max(64px, calc(100dvh - 160px))); display: flex;
   @media ${compactViewport} { min-height: 0; padding: 0 0 max(12px, env(safe-area-inset-bottom)); overflow-x: clip; }
@@ -218,15 +233,20 @@ const LogViewport = styled.div`
 `;
 const LogEdgeWash = styled.div<{ $edge?: 'top' | 'bottom' }>`
   ${({ $edge = 'top' }) => edgeWash($edge)};
-  left: -24px; right: -24px;
-  @media ${compactViewport} { height: 24px; }
+  /* Bleeding past the left keeps the fade clear of the frame's edge; on the
+     right it stops short of the scrollbar column so the bar's ends are never
+     washed over. Compact hides the bar, so there it bleeds both ways. */
+  left: -24px; right: 12px;
+  @media ${compactViewport} { right: -24px; height: 24px; }
 `;
 const ConnectionState = styled.div`padding: 50px 0; display: grid; gap: 16px; justify-items: start; @media ${shortViewport} { display: none; }`;
 
 export default function App({ locked = false, load = !locked, onReady, onLoadError }: {
   locked?: boolean; load?: boolean; onReady?: () => void; onLoadError?: () => void;
 }) {
-  const [data, setData] = useState<JournalData | null>(null);
+  // Paint the page we last saw on the first render, before anything is asked
+  // of the network. A refresh replaces it as soon as one answers.
+  const [data, setData] = useState<JournalData | null>(() => load ? cachedJournal(null) : null);
   const [night, setNight] = useState(() => storage.getItem('still-theme') === 'night');
   useEffect(() => {
     document.documentElement.dataset.theme = night ? 'night' : 'day';
@@ -262,10 +282,24 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [searchOpen, setSearchOpen] = useState(false);
   const [soundOpen, setSoundOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [paged, setPaged] = useState(() => window.matchMedia(compactViewport).matches);
+  const [cramped, setCramped] = useState(() => ({
+    across: window.matchMedia(narrowViewport).matches,
+    down: window.matchMedia(shortViewport).matches,
+  }));
+  // A task list taller than its share of the screen crowds the log out of the
+  // page, which is the same problem a short window has.
+  const [crowded, setCrowded] = useState(false);
+  const short = cramped.down || crowded;
+  const views = useMemo<readonly View[]>(() => [
+    ...(short ? (['tasks', 'log'] as const) : (['log'] as const)),
+    ...(cramped.across ? (['tags'] as const) : []),
+  ], [short, cramped.across]);
+  const paged = views.length > 1;
+  // The small-screen reading of the journal, as against merely tabbed panes.
+  const small = cramped.across || cramped.down;
   const [hasHoverSidebar, setHasHoverSidebar] = useState(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
   const viewportWidth = useRef(window.innerWidth);
-  const { pagerRef: mobilePager, selectView: selectMobileView, trackScroll: trackMobileScroll, view: mobileView } = usePager(MOBILE_VIEWS, 'log', paged);
+  const { pagerRef: mobilePager, selectView: selectMobileView, trackScroll: trackMobileScroll, view: mobileView } = usePager(views, rememberedPane(), paged);
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerIntent, setTimerIntent] = useState<'start' | 'stop' | null>(null);
@@ -285,19 +319,57 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const media = window.matchMedia(compactViewport);
+    const across = window.matchMedia(narrowViewport);
+    const down = window.matchMedia(shortViewport);
     const coarse = window.matchMedia('(pointer: coarse)');
     const resize = () => {
       const widthChanged = Math.abs(window.innerWidth - viewportWidth.current) > 80;
       viewportWidth.current = window.innerWidth;
       const active = document.activeElement;
       const editing = active instanceof HTMLElement && (active.isContentEditable || active.matches('input, textarea'));
-      setPaged(previous => coarse.matches && editing && !widthChanged && media.matches !== previous ? previous : media.matches);
+      setCramped(previous => {
+        // A soft keyboard shrinks the window under an open editor. That is not
+        // the page changing shape, so the layout is left as it stands.
+        const settled = { across: across.matches, down: down.matches };
+        const typing = coarse.matches && editing && !widthChanged;
+        if (typing && (settled.across !== previous.across || settled.down !== previous.down)) return previous;
+        return settled.across === previous.across && settled.down === previous.down ? previous : settled;
+      });
     };
-    media.addEventListener('change', resize);
+    across.addEventListener('change', resize);
+    down.addEventListener('change', resize);
     window.addEventListener('resize', resize);
-    return () => { media.removeEventListener('change', resize); window.removeEventListener('resize', resize); };
+    return () => {
+      across.removeEventListener('change', resize); down.removeEventListener('change', resize);
+      window.removeEventListener('resize', resize);
+    };
   }, []);
+  // How tall the task list wants to be, measured on its own content so the
+  // answer does not depend on the room it has been given.
+  useEffect(() => {
+    const measure = () => {
+      const body = document.querySelector<HTMLElement>('[data-task-body]');
+      const rows = body?.querySelectorAll<HTMLElement>('li[data-item-id]');
+      const last = rows?.[rows.length - 1];
+      // Saved rows only. The composer comes and goes with the focus, and a
+      // layout that measured it could be flipped by its own answer.
+      if (!body || !last) { setCrowded(false); return; }
+      const height = last.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+      const share = height / window.innerHeight;
+      setCrowded(previous => share > TASKS_CROWD_HEIGHT ? true : share < TASKS_SETTLE_HEIGHT ? false : previous);
+    };
+    measure();
+    const body = document.querySelector('[data-task-body]');
+    const observer = new ResizeObserver(measure);
+    if (body) observer.observe(body);
+    window.addEventListener('resize', measure);
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, [data?.tasks, paged]);
+  // A pane can stop existing when the window changes shape.
+  useEffect(() => {
+    if (paged && !views.includes(mobileView)) selectMobileView('log');
+    else if (paged) storage.setItem(PANE_KEY, mobileView);
+  }, [paged, views, mobileView, selectMobileView]);
   useEffect(() => {
     const media = window.matchMedia('(hover: hover) and (pointer: fine)');
     const update = () => setHasHoverSidebar(media.matches);
@@ -480,15 +552,22 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   // Leaving the filter is what makes a day editable again, tags included.
   const jumpToDate = async (date: string) => {
     try {
-      const first = data?.days.find(day => day.date === date)?.entries[0] ?? null;
       await flushDrafts();
       tagRef.current = null; loadedThrough.current = null; setActiveTag(null); setTarget(null);
       setSwitchedView(true);
       await refresh();
       const result = await getJournal({ on: date });
       setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
-      if (first) setTarget({ kind: first.kind, id: first.id });
-      else requestAnimationFrame(() => document.querySelector(`[data-day="${date}"]`)?.scrollIntoView({ block: 'start' }));
+      // The date itself leads, resting where the first one does: clear of the
+      // wash at the top of the log.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const pane = logViewport.current, day = document.querySelector(`[data-day="${date}"]`);
+        if (!pane || !day) return;
+        pane.scrollTo({
+          top: pane.scrollTop + day.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT,
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        });
+      }));
     } catch (e) { entryError(e); }
   };
 
@@ -518,6 +597,28 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     </ThemeToggle>
   </SidebarControls>;
 
+  const taskBand = data ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} refresh={refresh} /> : null;
+  const logBand = data ? <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
+    <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView}
+      refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)}
+      {...(small ? { sessionsEnabled: false, showHistory: true } : {})}
+      secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
+  </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame> : null;
+  // The log keeps the task list above it whenever there is room for both.
+  const pane = (view: View) => {
+    if (view === 'tasks') return taskBand;
+    if (view === 'tags') return <MobileTags>
+      <MobileTagCollection aria-label="Filter by tag">
+        <MobileTagPill type="button" $selected={activeTag === null} aria-pressed={activeTag === null} onClick={() => void selectTag(null)}><MobileTagPillLabel>all</MobileTagPillLabel></MobileTagPill>
+        {(data?.tags ?? []).map(tag => <MobileTagPill key={tag.name} type="button" $selected={activeTag === tag.name}
+          aria-pressed={activeTag === tag.name} onClick={() => void selectTag(tag.name)}><MobileTagPillLabel>#{tag.name}</MobileTagPillLabel></MobileTagPill>)}
+      </MobileTagCollection>
+      <MobileTagControls>{sidebarControls}</MobileTagControls>
+    </MobileTags>;
+    if (short) return logBand;
+    return <>{data ? taskBand : <ConnectionState><Muted>Loading…</Muted></ConnectionState>}{logBand}</>;
+  };
+
   return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}>
     <TimerChrome>
       <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(visibleElapsed)}</TimerTime>
@@ -528,42 +629,21 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         onKeyDown={event => { if (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10') { event.preventDefault(); setSoundOpen(true); } }}
         onClick={() => void toggleTimer()}><TimerIcon size={16} aria-hidden="true" /></TimerButton>
     </TimerChrome>
-    {(!paged || hasHoverSidebar) && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
+    {(!cramped.across || hasHoverSidebar) && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
     <Main data-focus-surface>
       {paged ? <>
         <ShortHeader>
           <MobileTabs role="tablist" aria-label="Mobile views">
-            <MobileTab id="mobile-tab-tasks" type="button" role="tab" aria-controls="mobile-panel-tasks" aria-selected={mobileView === 'tasks'} $active={mobileView === 'tasks'} onClick={() => selectMobileView('tasks')}>tasks</MobileTab>
-            <MobileTab id="mobile-tab-log" type="button" role="tab" aria-controls="mobile-panel-log" aria-selected={mobileView === 'log'} $active={mobileView === 'log'} onClick={() => selectMobileView('log')}>log</MobileTab>
-            <MobileTab id="mobile-tab-tags" type="button" role="tab" aria-controls="mobile-panel-tags" aria-selected={mobileView === 'tags'} $active={mobileView === 'tags'} onClick={() => selectMobileView('tags')}>tags</MobileTab>
+            {views.map(view => <MobileTab key={view} id={`mobile-tab-${view}`} type="button" role="tab"
+              aria-controls={`mobile-panel-${view}`} aria-selected={mobileView === view} $active={mobileView === view}
+              onClick={() => selectMobileView(view)}>{view}</MobileTab>)}
           </MobileTabs>
         </ShortHeader>
         <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}>
-          <MobilePane id="mobile-panel-tasks" role="tabpanel" aria-labelledby="mobile-tab-tasks" aria-hidden={mobileView !== 'tasks'} inert={mobileView !== 'tasks'}>{data ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} refresh={refresh} /> : null}</MobilePane>
-          <MobilePane id="mobile-panel-log" role="tabpanel" aria-labelledby="mobile-tab-log" aria-hidden={mobileView !== 'log'} inert={mobileView !== 'log'}>{data && <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
-            <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView} refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)}
-              sessionsEnabled={false} showHistory secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
-          </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame>}</MobilePane>
-          <MobilePane id="mobile-panel-tags" role="tabpanel" aria-labelledby="mobile-tab-tags" aria-hidden={mobileView !== 'tags'} inert={mobileView !== 'tags'}>
-            <MobileTags>
-              <MobileTagCollection aria-label="Filter by tag">
-                <MobileTagPill type="button" $selected={activeTag === null} aria-pressed={activeTag === null} onClick={() => void selectTag(null)}><MobileTagPillLabel>all</MobileTagPillLabel></MobileTagPill>
-                {(data?.tags ?? []).map(tag => <MobileTagPill key={tag.name} type="button" $selected={activeTag === tag.name}
-                  aria-pressed={activeTag === tag.name} onClick={() => void selectTag(tag.name)}><MobileTagPillLabel>#{tag.name}</MobileTagPillLabel></MobileTagPill>)}
-              </MobileTagCollection>
-              <MobileTagControls>{sidebarControls}</MobileTagControls>
-            </MobileTags>
-          </MobilePane>
+          {views.map(view => <MobilePane key={view} id={`mobile-panel-${view}`} role="tabpanel"
+            aria-labelledby={`mobile-tab-${view}`} aria-hidden={mobileView !== view} inert={mobileView !== view}>{pane(view)}</MobilePane>)}
         </MobilePager>
-      </> : <>
-        {!data ? <ConnectionState><Muted>Loading…</Muted></ConnectionState> :
-          <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} refresh={refresh} />}
-      {data &&
-        <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
-        <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView} refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)} secondsForDay={secondsForDay} hasMore={!!data.next_cursor} loadMore={loadMore} />
-        </LogViewport><LogEdgeWash data-testid="log-top-ink-wash" aria-hidden="true" /><LogEdgeWash $edge="bottom" data-testid="log-bottom-ink-wash" aria-hidden="true" /></LogFrame>
-      }
-      </>}
+      </> : pane('log')}
     </Main>
     <Suspense fallback={null}>
       {openedModals.current.has('sessions') && <SessionsModal date={sessionsDate} onClose={() => setSessionsDate(null)} onChange={refresh} />}

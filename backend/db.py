@@ -32,13 +32,17 @@ CREATE TABLE IF NOT EXISTS calendar_subscriptions (
 );
 """
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 ENTRY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK(kind IN ('note', 'task')),
     day_id INTEGER REFERENCES days(id),
+    -- The document is the stored entry. Content and tags are its projection,
+    -- written beside it for search, export and tag filtering, and never read
+    -- back into the editor.
+    document TEXT,
     content TEXT NOT NULL,
     tags TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(tags) AND json_type(tags) = 'array'),
     parent_id INTEGER REFERENCES entries(id) ON DELETE SET NULL,
@@ -322,6 +326,8 @@ def initialize():
         elif not entries:
             _create_entry_schema(db)
         _upgrade_entries_v8(db)
+        if 'document' not in {row['name'] for row in db.execute('PRAGMA table_info(entries)')}:
+            db.execute('ALTER TABLE entries ADD COLUMN document TEXT')
         # Trigger bodies are not replaced by CREATE TRIGGER IF NOT EXISTS.
         db.execute("DROP TRIGGER IF EXISTS entries_parent_update")
         _create_entry_schema(db)

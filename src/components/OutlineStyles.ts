@@ -22,23 +22,21 @@ export const Children = styled(List)<{ $task: boolean }>`
   @media ${compactViewport} { padding-left: 9px; }
 `;
 export const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--entry-row-height);`;
-export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $rangeSelected?: boolean; $dragX?: number }>`
+// An entry leaving a filtered view takes its leave slowly: it is answering an
+// edit the reader just made, not reporting a finished task.
+export const DEPART_MS = 320;
+export const Item = styled.li<{ $leaving?: boolean; $departing?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
-  opacity: ${({ $leaving }) => $leaving ? 0 : 1};
-  transform: ${({ $leaving }) => $leaving ? 'translateY(-3px)' : 'none'};
+  opacity: ${({ $leaving, $departing }) => $leaving || $departing ? 0 : 1};
+  transform: ${({ $leaving, $departing }) => $departing ? 'translateY(-2px)' : $leaving ? 'translateY(-3px)' : 'none'};
   transition-property: opacity, transform, translate;
   /* A swipe follows the finger, so only its return trip is animated. */
-  transition-duration: ${({ $leaving }) => $leaving ? '180ms, 180ms' : '280ms, 280ms'}, ${({ $dragX = 0 }) => $dragX ? '0s' : '220ms'};
+  transition-duration: ${({ $leaving, $departing }) => $departing ? `${DEPART_MS}ms, ${DEPART_MS}ms` : $leaving ? '180ms, 180ms' : '280ms, 280ms'}, ${({ $dragX = 0 }) => $dragX ? '0s' : '220ms'};
   transition-timing-function: cubic-bezier(.2, 0, 0, 1);
   ${({ $arriving }) => $arriving && css`@starting-style { opacity: 0; transform: translateY(-7px); }`}
   > ${Row} { transition: background-color 120ms ease-out, box-shadow 140ms ease-out; }
   &[data-drop-position="before"] > ${Row} { box-shadow: 0 -1px 0 var(--link); }
   &[data-drop-position="after"] > ${Row} { box-shadow: 0 1px 0 var(--link); }
-  /* A selection covering whole entries marks the entries, not their text. */
-  ${({ $rangeSelected, $gestureSelected }) => $rangeSelected && !$gestureSelected && css`
-    > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; }
-    > ${Row} ::selection { background: transparent; color: inherit; }
-  `}
   ${({ $gestureSelected }) => $gestureSelected && css`
     user-select: none; -webkit-user-select: none;
     > ${Row} { background: color-mix(in srgb, var(--link) 10%, transparent); border-radius: 6px; cursor: grab; }
@@ -161,20 +159,14 @@ export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done:
   }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
-export const Text = styled.div<{ $done?: boolean; $action?: boolean; $strikeable?: boolean }>`
+export const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
   ${richTextStyles}; cursor: text;
   flex: ${({ $action }) => $action ? '0 1 auto' : '1'}; min-width: 0; min-height: var(--entry-row-height); padding: var(--entry-padding); border: 0; background: transparent; color: var(--ink);
-  /* A row that can be checked off carries its rule all along, so completing
-     it draws the line on rather than striking it through at once. */
-  ${({ $strikeable, $done }) => ($strikeable ?? $done) && css`
-    text-decoration: line-through;
-    text-decoration-color: ${$done ? 'currentColor' : 'transparent'};
-    /* Selected text is repainted in the selection's own colours, which would
-       draw the rule that is waiting to be drawn. */
-    ${!$done && css`&::selection, & *::selection { text-decoration-line: none; }`}
-  `}
+  /* Done reads as the checkmark and the muted ink. No rule is drawn over the
+     text: selected text is repainted in the selection's colours, decorations
+     included, so one would show through a highlight. */
   ${({ $done }) => $done && css`color: var(--muted); a { color: var(--muted); }`}
-  transition: color 200ms ease-out, text-decoration-color 200ms ease-out;
+  transition: color 200ms ease-out;
   text-align: left; line-height: var(--entry-line-height); font-size: var(--entry-size); white-space: pre-wrap; overflow-wrap: anywhere;
   &:focus-visible { outline: none; }
 `;

@@ -10,7 +10,9 @@ test('parent progress retains completed children, finishes automatically, and ca
   await expect(toggle).toHaveAttribute('aria-description', '0 of 2 children completed');
   await toggle.click();
   await page.getByRole('button', { name: 'Complete Progress first', exact: true }).click();
-  await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toHaveCSS('text-decoration-line', 'line-through');
+  // Done is the checkmark and the muted ink; no rule is drawn over the text.
+  await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toHaveCSS('text-decoration-line', 'none');
+  await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toHaveCSS('color', 'rgb(98, 103, 98)');
   await expect(page.getByRole('button', { name: 'Reopen Progress first', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const progress = page.getByRole('button', { name: 'Collapse Progress project', exact: true });
   await expect(progress).toHaveAttribute('aria-description', '1 of 2 children completed');
@@ -117,7 +119,8 @@ test('completed tasks share note ordering and normal logbook text editing', asyn
   await editor.fill('Mixed edited task'); await editor.press('Enter');
   await expect(page.getByRole('group', { name: 'Mixed edited task', exact: true })).toBeVisible();
   await page.getByRole('group', { name: 'Mixed edited task', exact: true }).click();
-  await editor.fill(''); await editor.press('Enter');
+  // Clearing all of its text is enough to remove it.
+  await editor.fill('');
   await expect(page.getByRole('group', { name: 'Mixed edited task', exact: true })).toHaveCount(0);
 });
 

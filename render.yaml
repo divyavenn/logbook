@@ -4,7 +4,8 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r backend/requirements.lock.txt && npm ci && npm run build
-    startCommand: python -m uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+    # Migrates the schema and fills in any missing entry documents, then serves.
+    startCommand: sh scripts/start.sh
     healthCheckPath: /api/health
     envVars:
       - key: STILL_DB_PATH

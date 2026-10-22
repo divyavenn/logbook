@@ -1,5 +1,5 @@
 import { ENTRY_KINDS, type CalendarEvent, type CalendarSubscription, type CompletionResult, type DayMetrics, type DocumentResult,
-  type EntryKind, type JournalData, type JournalDay, type OutlineItem, type ReopenResult, type SearchResults, type Session, type Stats, type Task } from './types';
+  type EntryDocument, type EntryKind, type JournalData, type JournalDay, type OutlineItem, type ReopenResult, type SearchResults, type Session, type Stats, type Task } from './types';
 import { array, boolean, integer, nonnegative, nullable, object, optional, positiveId, strings, text } from './validation';
 
 export function entryKind(value: unknown, fallback: EntryKind): EntryKind {
@@ -9,10 +9,19 @@ export function entryKind(value: unknown, fallback: EntryKind): EntryKind {
   throw new Error('Unknown entry kind.');
 }
 
+// A document is kept as the server sent it. Its shape is the editor's to read,
+// and a malformed one is simply absent: the markdown projection still renders.
+export function entryDocument(value: unknown): EntryDocument | null {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const node = value as { type?: unknown; content?: unknown };
+  return node.type === 'doc' && Array.isArray(node.content) ? (value as EntryDocument) : null;
+}
+
 export function entry(value: unknown, fallback: EntryKind = 'notes'): OutlineItem {
   const row = object(value);
   return {
     id: positiveId(row.id), kind: entryKind(row.kind, fallback), content: text(row.content),
+    document: entryDocument(row.document),
     parent_id: nullable(row.parent_id, positiveId), position: optional(row.position, nonnegative, 0),
     revision: optional(row.revision, positiveId, 1), tags: [...new Set(optional(row.tags, strings, []))],
     created_at: row.created_at == null ? undefined : text(row.created_at),
