@@ -10,8 +10,8 @@ const require = createRequire(import.meta.url);
 const { build } = createRequire(require.resolve('vite'))('esbuild');
 const temporary = await mkdtemp(join(tmpdir(), 'still-backfill-'));
 try {
-  const bundle = join(temporary, 'backfill.cjs');
-  await build({ entryPoints: ['scripts/documentBackfill.ts'], bundle: true, platform: 'node', format: 'cjs',
+  const bundle = join(temporary, 'backfill.mjs');
+  await build({ entryPoints: ['scripts/documentBackfill.ts'], bundle: true, platform: 'node', format: 'esm', target: 'node22',
     mainFields: ['module', 'main'], outfile: bundle, logLevel: 'warning', external: ['node:sqlite'] });
   const result = spawnSync(process.execPath, [bundle, ...process.argv.slice(2)], { stdio: 'inherit' });
   if (result.error) throw result.error;

@@ -9,10 +9,68 @@ type Row = { id: number; content: string; tags: string; document: string | null 
 
 const [path, ...flags] = process.argv.slice(2);
 if (!path) {
-  console.error('Usage: backfill-documents <database> [--write]');
+  console.error('Usage: backfill-documents <database|url> [--write]');
+  console.error('  A url goes through the API and needs STILL_PASSWORD; a running');
+  console.error('  logbook can be migrated that way without being taken down.');
   process.exit(2);
 }
 const write = flags.includes('--write');
+
+// A tag held only in the list, with no "#name" in the text, is dropped: the
+// text is what the entry says.
+const inText = (content: string, name: string) =>
+  new RegExp(`#${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}_-])`, 'iu').test(content);
+
+function planned(row: { content: string; tags: string[] }) {
+  const present = row.tags.filter(name => inText(row.content, name));
+  const document = documentWithTags(row.content, present);
+  const tags = [...new Set(serializeEntry(document).tags.map(normalizeTag))];
+  return { document, tags, dropped: row.tags.filter(name => !present.includes(name)) };
+}
+
+if (/^https?:\/\//.test(path)) {
+  const password = process.env.STILL_PASSWORD;
+  if (!password) {
+    console.error('Set STILL_PASSWORD to the logbook password.');
+    process.exit(2);
+  }
+  const base = path.replace(/\/$/, '');
+  const headers = { authorization: `Bearer ${password}`, 'content-type': 'application/json' };
+  const response = await fetch(`${base}/api/export`, { headers });
+  if (!response.ok) {
+    console.error(`The logbook answered ${response.status} ${response.statusText}.`);
+    process.exit(1);
+  }
+  const exported = await response.json() as {
+    notes: { id: number; content: string; tags: string[]; document?: unknown }[];
+    tasks: { id: number; content: string; tags: string[]; document?: unknown }[];
+  };
+  const kinds = [['notes', exported.notes], ['tasks', exported.tasks]] as const;
+  let done = 0, had = 0, failed = 0;
+  for (const [kind, list] of kinds) {
+    for (const row of list) {
+      if (row.document) { had++; continue; }
+      const plan = planned(row);
+      for (const name of plan.dropped) console.log(`  dropping #${name} from ${kind} ${row.id}`);
+      if (!write) { done++; continue; }
+      const saved = await fetch(`${base}/api/${kind}/${row.id}`, {
+        method: 'PATCH', headers,
+        // The text is sent back exactly as it was stored, so only the document
+        // and the corrected tag list change.
+        body: JSON.stringify({ content: row.content, tags: plan.tags, document: plan.document }),
+      });
+      if (saved.ok) done++;
+      else { failed++; console.error(`  ${kind} ${row.id} answered ${saved.status} ${saved.statusText}`); }
+    }
+  }
+  console.log(`entries            ${exported.notes.length + exported.tasks.length}`);
+  console.log(`documents written  ${done}${write ? '' : ' (dry run)'}`);
+  console.log(`already had one    ${had}`);
+  if (failed) console.log(`refused            ${failed}`);
+  if (!write) console.log('\nNothing was changed. Pass --write to apply.');
+  process.exit(failed ? 1 : 0);
+}
+
 const db = new DatabaseSync(path, { readOnly: !write });
 const columns = db.prepare('PRAGMA table_info(entries)').all() as { name: string }[];
 if (!columns.some(column => column.name === 'document')) {
@@ -30,15 +88,10 @@ const update = write
 for (const row of rows) {
   if (row.document) { already++; continue; }
   const stored: string[] = JSON.parse(row.tags);
-  // A name held only in the tag list, with no "#name" in the text, is dropped:
-  // the text is what the entry says.
-  const present = stored.filter(name => serializeEntry(documentWithTags(row.content, [name])).tags.includes(name)
-    && new RegExp(`#${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'iu').test(row.content));
-  const missing = stored.filter(name => !present.includes(name));
-  if (missing.length) dropped.push({ id: row.id, names: missing });
-  const document = documentWithTags(row.content, present);
-  const projected = serializeEntry(document);
-  const tags = JSON.stringify([...new Set(projected.tags.map(normalizeTag))]);
+  const plan = planned({ content: row.content, tags: stored });
+  if (plan.dropped.length) dropped.push({ id: row.id, names: plan.dropped });
+  const document = plan.document;
+  const tags = JSON.stringify(plan.tags);
   if (tags !== JSON.stringify(stored)) retagged++;
   // The content column is left alone. It is already the better text: writing
   // it back from the document would add the serializer's own escaping.
