@@ -171,6 +171,8 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
     { width: 260, height: 180, panes: ['tasks', 'log', 'tags'] }, { width: 1000, height: 400, panes: ['tasks', 'log'] },
   ]) {
     await page.setViewportSize(size);
+    // The rail answers a hover, so the pointer is parked clear of it first.
+    await page.mouse.move(size.width / 2, size.height - 8);
     const tabs = page.getByRole('tablist', { name: 'Mobile views' });
     await expect(tabs).toBeVisible();
     await expect(tabs.getByRole('tab')).toHaveText(size.panes);
@@ -181,9 +183,11 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
       page.getByRole('tab', { name: 'log', exact: true }).boundingBox(), timer.boundingBox(),
     ]);
     expect(activeDot!.y + activeDot!.height / 2).toBeCloseTo(timerBox!.y + timerBox!.height / 2, 0);
-    // The dots sit across the middle of the top, not over the sidebar rail.
+    // Centred while the sidebar keeps its side; where the tags have taken a
+    // tab there is no sidebar, and the dots take its place at the left.
     const dots = (await tabs.boundingBox())!;
-    expect(dots.x + dots.width / 2).toBeCloseTo(size.width / 2, 0);
+    if (size.panes.includes('tags')) expect(dots.x).toBeLessThan(size.width / 4);
+    else expect(dots.x + dots.width / 2).toBeCloseTo(size.width / 2, 0);
     const rails = page.getByRole('navigation', { name: 'Tags' });
     if (await rails.count()) {
       const rail = (await rails.boundingBox())!;
@@ -199,7 +203,11 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
       .toEqual(size.panes.slice(1).map(() => 12));
     // The rail and the tags tab are the same thing; never both at once.
     await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(size.panes.includes('tags') ? 0 : 1);
-    await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
+    // Where a rail exists its controls stay tucked away until it is hovered.
+    // Where the tags have a tab instead, the controls live in that pane.
+    if (!size.panes.includes('tags')) {
+      await expect(page.getByRole('navigation', { name: 'Tags' }).getByRole('group', { name: 'Page controls' })).toBeHidden();
+    }
     const pager = page.getByTestId('mobile-pager');
     await expect(pager).toHaveCSS('scrollbar-width', 'none');
     await expect(pager).toHaveCSS('scroll-snap-type', 'x mandatory');

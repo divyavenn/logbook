@@ -7,7 +7,7 @@ export const GlobalStyle = createGlobalStyle`
   :root {
     color-scheme: light;
     --paper: #f2f1ed; --ink: #242422; --muted: #626762; --line: #d4d2cb; --sage: #59605d; --soft: #e8e6df;
-    --surface: #faf9f6; --field: #fffefa; --date-bg: #dfe7ed; --tag-bg: #e8e6df; --tag-ink: #525a56; --tag-selected: #1871ba;
+    --surface: #faf9f6; --field: #fffefa; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #e8e6df; --tag-ink: #525a56; --tag-selected: #1871ba;
     --code-bg: #e6e7e1; --code-ink: #4d615d; --quote: #5f645f; --selection: #ccdbe7; --focus: #6f7f88;
     --link: #1871ba; --url: #70588f; --checkbox: #747773; --scrollbar: #c0beb7;
     --timer-ring: #9ba6ad; --timer: #56626b; --timer-hover: #626f78; --timer-ink: #faf9f6;
@@ -20,7 +20,7 @@ export const GlobalStyle = createGlobalStyle`
   :root[data-theme='night'] {
     color-scheme: dark;
     --paper: #011627; --ink: #c0c7d1; --muted: #a3b0bf; --line: #294559; --sage: #b1c4cc; --soft: #193447;
-    --surface: #0a2133; --field: #102a3f; --date-bg: #173449; --tag-bg: #26394a; --tag-ink: #c0c7d1; --tag-selected: #75d1c4;
+    --surface: #0a2133; --field: #102a3f; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #26394a; --tag-ink: #c0c7d1; --tag-selected: #75d1c4;
     --code-bg: #183340; --code-ink: #9bc2b9; --quote: #a3b9be; --selection: #315366; --focus: #75d1c4;
     --link: #75d1c4; --url: #b7a4dd; --checkbox: #8ca0b0; --scrollbar: #35556a;
     --timer-ring: #486578; --timer: #24394a; --timer-hover: #304b60; --timer-ink: #dbe4ea;

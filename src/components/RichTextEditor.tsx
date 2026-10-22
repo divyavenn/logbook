@@ -3,7 +3,7 @@ import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/core';
 import { Markdown } from '@tiptap/markdown';
 import type { Mark, Node as DocumentNode } from '@tiptap/pm/model';
-import { NodeSelection, TextSelection } from '@tiptap/pm/state';
+import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state';
 import styled from 'styled-components';
 import { formattingExtensions, documentWithTags, serializeEntry, richTextStyles, safeHref } from '../markdown';
 import { Field, appear } from '../styles';
@@ -608,6 +608,11 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
     focus(options, selection) {
       if (!editor || editor.isDestroyed) return;
       editor.view.dom.focus({ ...options, preventScroll: true });
+      // An entry holding nothing but its tags opens in front of them, so the
+      // first letter is written before the tag rather than after it.
+      if (!selection && !editor.state.doc.textContent.trim()) {
+        editor.view.dispatch(editor.state.tr.setSelection(Selection.atStart(editor.state.doc)));
+      }
       if (selection) {
         const { positionAt } = textPositions(editor.state.doc);
         editor.view.dispatch(editor.state.tr.setSelection(TextSelection.between(
@@ -663,9 +668,13 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
       const doc = editor.state.doc;
       const text = (start: number, end: number) => doc.textBetween(start, end, '\n', node =>
         node.type.name === 'journalTag' ? '#' + node.attrs.name : node.type.name === 'hardBreak' ? '\n' : '');
+      // Tags are not writing. Nothing written after the caret means there is
+      // nothing to carry into a new entry, so the whole of this one stays.
+      const written = (start: number, end: number) => doc.textBetween(start, end, '\n', node =>
+        node.type.name === 'hardBreak' ? '\n' : '');
       // At the end of a heading, quote, or code block, its empty closing
       // structure is not content to carry into the next entry.
-      if (from === to && !text(to, doc.content.size)) return {
+      if (from === to && !written(to, doc.content.size).trim()) return {
         before: serializeEntry(doc.toJSON()), after: { content: '', tags: [] },
       };
       return {

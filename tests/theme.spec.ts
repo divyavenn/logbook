@@ -37,7 +37,10 @@ test('reference typography, wider margins and persistent night mode', async ({ p
   await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(242, 241, 237)');
   await expect(page.getByTestId('page')).toHaveCSS('background-color', 'rgb(242, 241, 237)');
   await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-16', exact: true })).toHaveCSS('opacity', '0.76');
-  await expect(page.locator('time[datetime="2026-09-16"]')).toHaveCSS('background-color', 'rgb(223, 231, 237)');
+  // The date is outlined in the muted ink of the text, not filled with it.
+  const pill = page.locator('time[datetime="2026-09-16"]');
+  await expect(pill).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(pill).toHaveCSS('border-top-color', 'color(srgb 0.384314 0.403922 0.384314 / 0.22)');
   await page.getByRole('navigation', { name: 'Tags' }).hover();
   const shortcuts = page.getByRole('button', { name: 'Keyboard shortcuts', exact: true });
   await shortcuts.hover();

@@ -198,6 +198,11 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const [busy, setBusy] = useState(false);
   const focus = () => {
     if (selectionActive.current) { restoringFocus.current = false; return; }
+    // A new entry seeded with a filtered view's tag starts in front of it, so
+    // the first letter goes before the tag rather than behind it.
+    const seeded = current.current;
+    if (!pendingSelection.current && seeded.id === null && seeded.hiddenTags.length
+      && !entryText(documentOf(seeded)).trim()) pendingSelection.current = { anchor: 0, head: 0 };
     if (pendingVertical.current) input.current?.focusAt(pendingVertical.current.x, pendingVertical.current.direction, { preventScroll: false });
     else input.current?.focus({ preventScroll: false }, pendingSelection.current);
     if (pendingLinkEdit.current) input.current?.editLink();
@@ -209,7 +214,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const dismissEmptyDraft = () => {
     if (lock.current) return false;
     const snapshot = current.current;
-    if (snapshot.id !== null || snapshot.content.trim() || snapshot.tags.length) return false;
+    // Nothing written, and no tag the reader put there: a filtered view's own
+    // tag is seeded into every new entry and does not make one worth keeping.
+    const typed = snapshot.tags.filter(tag => !snapshot.hiddenTags.includes(tag));
+    if (snapshot.id !== null || entryText(documentOf(snapshot)).trim() || typed.length) return false;
     persist(blank(records.current, false));
     return true;
   };

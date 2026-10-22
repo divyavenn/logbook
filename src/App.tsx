@@ -148,10 +148,11 @@ const TimerButton = styled.button<{ $running: boolean }>`
 const ShortHeader = styled.div`
   height: 44px; flex-shrink: 0;
 `;
-const MobileTabs = styled.div`
-  /* Centred along the top, clear of the sidebar on one side and the timer on
-     the other, and level with both. */
-  position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; translate: -50% 0; z-index: 43;
+const MobileTabs = styled.div<{ $aside: boolean }>`
+  /* Centred along the top while the sidebar keeps its own side. Once the tags
+     have taken a tab there is no sidebar, so the dots take its place. */
+  position: fixed; top: max(12px, env(safe-area-inset-top)); z-index: 43;
+  ${({ $aside }) => $aside ? 'left: 12px;' : 'left: 50%; translate: -50% 0;'}
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
@@ -638,7 +639,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     <Main data-focus-surface>
       {paged ? <>
         <ShortHeader>
-          <MobileTabs role="tablist" aria-label="Mobile views">
+          <MobileTabs role="tablist" aria-label="Mobile views" $aside={views.includes('tags')}>
             {views.map(view => <MobileTab key={view} id={`mobile-tab-${view}`} type="button" role="tab"
               aria-controls={`mobile-panel-${view}`} aria-selected={mobileView === view} $active={mobileView === view}
               onClick={() => selectMobileView(view)}>{view}</MobileTab>)}
