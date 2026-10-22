@@ -1,3 +1,7 @@
+import type { JSONContent } from '@tiptap/core';
+
+export type EntryDocument = JSONContent;
+
 export const ENTRY_KINDS = { note: 'notes', task: 'tasks' } as const;
 export type StoredEntryKind = keyof typeof ENTRY_KINDS;
 export type EntryKind = typeof ENTRY_KINDS[StoredEntryKind];
@@ -5,6 +9,9 @@ export type EntryKind = typeof ENTRY_KINDS[StoredEntryKind];
 export type OutlineItem = {
   id: number;
   kind: EntryKind;
+  // The stored entry. Content is its projection as markdown, kept for search,
+  // export and the clipboard; only rows written before documents lack one.
+  document?: EntryDocument | null;
   content: string;
   parent_id: number | null;
   position: number;

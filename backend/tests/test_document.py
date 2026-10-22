@@ -477,3 +477,33 @@ def test_deleting_a_note_parent_removes_nested_notes(client):
     create(client, 'notes', 'Deeper note', child['id'])
     assert client.delete(f"/api/notes/{parent['id']}").status_code == 204
     assert client.get('/api/export').json()['notes'] == []
+
+
+DOCUMENT = {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [
+    {'type': 'text', 'text': 'hello '}, {'type': 'journalTag', 'attrs': {'name': 'alpha'}}]}]}
+
+
+def test_a_document_is_kept_beside_its_text_and_returns_with_the_entry(client):
+    today = client.get('/api/journal').json()['today']
+    created = client.post('/api/notes', json={
+        'date': today, 'content': 'hello #alpha', 'tags': ['alpha'], 'document': DOCUMENT}).json()
+    assert created['document'] == DOCUMENT
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == DOCUMENT
+    # A write carrying no document leaves the stored one alone.
+    client.patch(f"/api/notes/{created['id']}", json={'content': 'hello #alpha', 'tags': ['alpha']})
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == DOCUMENT
+    # Anything that is not a whole document is refused before storage.
+    for broken in [{'type': 'paragraph'}, {'type': 'doc'}, {'type': 'doc', 'content': 'text'}]:
+        assert client.post('/api/notes', json={'date': today, 'content': 'x', 'document': broken}).status_code == 422
+
+
+def test_undo_restores_the_document_a_change_replaced(client):
+    today = client.get('/api/journal').json()['today']
+    created = client.post('/api/notes', json={
+        'date': today, 'content': 'hello #alpha', 'tags': ['alpha'], 'document': DOCUMENT}).json()
+    replacement = {'type': 'doc', 'content': [{'type': 'paragraph', 'content': [{'type': 'text', 'text': 'rewritten'}]}]}
+    result = batch(client, [{'kind': 'notes', 'id': created['id'], 'content': 'rewritten',
+                             'tags': [], 'document': replacement}])
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == replacement
+    history(client, result['operation_id'])
+    assert client.get('/api/journal').json()['days'][0]['notes'][0]['document'] == DOCUMENT

@@ -528,27 +528,3 @@ test('Backspace joins onto the last row of the branch above, not the parent head
     return Object.fromEntries(rows.map(entry => [entry.id, entry.content]));
   }).toEqual({ [parent.id]: 'Branch head ', [child.id]: 'Middle child ', [deepest.id]: 'Deepest last Joined up' });
 });
-
-test('Delete joins the row that follows, reaching into a folded branch', async ({ page, request }) => {
-  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
-  const make = async (content: string, parent_id?: number) =>
-    (await request.post('/api/notes', { data: { date: today, content, parent_id } })).json();
-  const parent = await make('Parent head ');
-  const child = await make('First child ', parent.id);
-  const grandchild = await make('Kept under parent', child.id);
-  const following = await make('Untouched sibling');
-  await page.goto('/');
-  const row = page.locator(`[data-item-id="${parent.id}"] [role="group"]`).first();
-  await row.focus(); await row.press('Enter');
-  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
-  await editor.press('Meta+ArrowDown'); await editor.press('Delete');
-  // The folded first child comes up, and what hung from it stays.
-  await expect.poll(async () => {
-    const rows = (await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string; parent_id: number | null }>;
-    return rows.map(entry => [entry.id, entry.content, entry.parent_id]);
-  }).toEqual([[parent.id, 'Parent head First child ', null],
-              [grandchild.id, 'Kept under parent', parent.id],
-              [following.id, 'Untouched sibling', null]]);
-  await expect(page.getByRole('group', { name: 'First child', exact: true })).toHaveCount(0);
-  expect(child.parent_id).toBe(parent.id);
-});

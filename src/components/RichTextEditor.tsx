@@ -1,15 +1,16 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
+import type { JSONContent } from '@tiptap/core';
 import { Markdown } from '@tiptap/markdown';
 import type { Mark, Node as DocumentNode } from '@tiptap/pm/model';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import styled from 'styled-components';
-import { formattingExtensions, documentWithTags, hiddenTagPositions, serializeEntry, richTextStyles, safeHref } from '../markdown';
+import { formattingExtensions, documentWithTags, serializeEntry, richTextStyles, safeHref } from '../markdown';
 import { Field, appear } from '../styles';
 import { Modal } from './Modal';
 import { useJournalContext } from '../JournalContext';
 import { normalizeTag } from '../tagSyntax';
-import { HiddenTagPositions, TagDecorations, commitTypedTags, resetHiddenTags, restoreHiddenTags, selectTypedTag } from '../tagEditor';
+import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
 import { textPositions, type TextOffsets } from '../textSelection';
@@ -127,9 +128,10 @@ export type RichTextHandle = {
 };
 type Props = {
   ref?: Ref<RichTextHandle>; value: string; tags: string[]; label: string; readOnly: boolean;
-  // Hidden tags are stripped from the text and never rendered as bubbles.
-  hiddenTags?: string[];
-  onChange: (markdown: string, tags: string[]) => void; onBlur: (event?: FocusEvent) => void; onKeyDown: (event: KeyboardEvent) => void;
+  // The entry as it is stored. Opening it needs no parsing; a row written
+  // before documents were kept arrives as markdown in value instead.
+  document?: JSONContent | null;
+  onChange: (markdown: string, tags: string[], document: JSONContent | null) => void; onBlur: (event?: FocusEvent) => void; onKeyDown: (event: KeyboardEvent) => void;
   onEnter: () => void;
   onBoundary?: (direction: 'backspace' | 'delete') => void;
   onVerticalBoundary?: (direction: VerticalDirection, x: number) => boolean;
@@ -140,9 +142,8 @@ type Props = {
   onShift?: (outdent: boolean) => void;
 };
 
-export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, hiddenTags = [], onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift }: Props) {
+export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, document: stored = null, onChange, onBlur, onKeyDown, onEnter, onBoundary, onVerticalBoundary, onHorizontalBoundary, onSelectDocument, onSelectEntry, onDeleteEntry, onShift }: Props) {
   const { tags } = useJournalContext();
-  const hidden = useRef(hiddenTags); hidden.current = hiddenTags;
   const [suggestion, setSuggestion] = useState<TagSuggestion | null>(null);
   const [mobileFormat, setMobileFormat] = useState<MobileFormatState | null>(null);
   const suggestionRef = useRef<TagSuggestion | null>(null);
@@ -162,17 +163,17 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
     callbacks.current.onSelectEntry?.(selected);
   };
   const lastSnapshot = useRef(JSON.stringify([value, entryTags]));
-  // Hidden tags are absent from the document but present in what it stores,
-  // so they are reported as neither added nor removed by this editor.
-  const visible = (names: string[]) => hidden.current.length ? names.filter(name => !hidden.current.includes(name)) : names;
   const storedEntry = (currentEditor: Editor) => {
     const doc = currentEditor.state.doc;
     let tagged = false;
     doc.descendants(node => { if (node.type.name === 'journalTag') tagged = true; });
     // Nothing visible is left to anchor a hidden tag to, so none comes back.
-    if (!doc.textContent.trim() && !tagged) return { content: '', tags: [] as string[] };
-    const entry = serializeEntry(restoreHiddenTags(currentEditor).doc.toJSON());
-    return { content: entry.content, tags: visible(entry.tags) };
+    if (!doc.textContent.trim() && !tagged) return { content: '', tags: [] as string[], document: null };
+    // The document the editor holds is the one that gets stored, hidden tags
+    // included: the text and the tag names are both read back out of it.
+    const stored = doc.toJSON();
+    const entry = serializeEntry(stored);
+    return { content: entry.content, tags: entry.tags, document: stored };
   };
   const linkOpen = useRef(false);
   const [link, setLink] = useState<{ from: number; to: number; mode: LinkMode } | null>(null);
@@ -190,13 +191,15 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
   const publishEditorValue = (currentEditor: Editor) => {
     commitTypedTags(currentEditor, true);
     const visiblyEmpty = !currentEditor.view.dom.textContent?.trim() && !currentEditor.view.dom.querySelector('[data-tag]');
-    const entry = visiblyEmpty ? { content: '', tags: [] as string[] } : storedEntry(currentEditor);
-    callbacks.current.onChange(entry.content, entry.tags);
+    const entry = visiblyEmpty ? { content: '', tags: [] as string[], document: null } : storedEntry(currentEditor);
+    callbacks.current.onChange(entry.content, entry.tags, entry.document);
   };
+  // A stored document opens as it is. Rows written before documents were kept
+  // are parsed from their markdown instead, tags and all.
+  const openedDocument = () => stored || documentWithTags(value, entryTags);
   const editor: Editor | null = useEditor({
-    extensions: [...formattingExtensions(), Markdown, TagDecorations,
-      HiddenTagPositions.configure({ offsets: hiddenTagPositions(value, hiddenTags) })],
-    content: documentWithTags(value, entryTags, hiddenTags), injectCSS: false, immediatelyRender: true,
+    extensions: [...formattingExtensions(), Markdown, TagDecorations],
+    content: openedDocument(), injectCSS: false, immediatelyRender: true,
     // Literal punctuation stays literal; formatting comes from shortcuts or rich paste.
     enableInputRules: false, enablePasteRules: false,
     editable: !readOnly,
@@ -251,7 +254,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
           // ProseMirror normally reports this through onUpdate. Browser fake
           // clocks can defer its DOM observer, so propagate an explicit clear
           // immediately from the native input event.
-          if (!view.dom.textContent?.trim() && !view.dom.querySelector('[data-tag]')) callbacks.current.onChange('', []);
+          if (!view.dom.textContent?.trim() && !view.dom.querySelector('[data-tag]')) callbacks.current.onChange('', [], null);
           return false;
         },
         contextmenu(view, event) {
@@ -448,7 +451,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
       reportEntrySelection(whole && (touchScreen() || entrySelected.current));
       const entry = storedEntry(editor);
       lastSnapshot.current = JSON.stringify([entry.content, entry.tags]);
-      callbacks.current.onChange(entry.content, entry.tags);
+      callbacks.current.onChange(entry.content, entry.tags, entry.document);
       updateSuggestion(editor);
       commitTypedTags(editor);
     },
@@ -657,10 +660,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
         const head = editor.view.posAtDOM(dom.focusNode, dom.focusOffset);
         from = Math.min(anchor, head); to = Math.max(anchor, head);
       }
-      // Split what gets stored, so a hidden tag stays in the half it sat in.
-      const restored = restoreHiddenTags(editor);
-      const doc = restored.doc;
-      from = restored.mapPosition(from); to = restored.mapPosition(to);
+      const doc = editor.state.doc;
       const text = (start: number, end: number) => doc.textBetween(start, end, '\n', node =>
         node.type.name === 'journalTag' ? '#' + node.attrs.name : node.type.name === 'hardBreak' ? '\n' : '');
       // At the end of a heading, quote, or code block, its empty closing
@@ -677,8 +677,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, h
   useEffect(() => {
     const snapshot = JSON.stringify([value, entryTags]);
     if (editor && snapshot !== lastSnapshot.current) {
-      editor.commands.setContent(documentWithTags(value, entryTags, hidden.current), { emitUpdate: false });
-      resetHiddenTags(editor, hiddenTagPositions(value, hidden.current));
+      editor.commands.setContent(stored || documentWithTags(value, entryTags), { emitUpdate: false });
       lastSnapshot.current = snapshot;
     }
   }, [editor, value, entryTags]);

@@ -11,7 +11,8 @@
     "start": "sh -c 'if [ -x .venv/bin/python ]; then exec .venv/bin/python -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}; else exec python3 -m uvicorn backend.app:app --host 0.0.0.0 --port ${PORT:-8000}; fi'",
     "test": ".venv/bin/python -m pytest backend/tests -q",
     "test:editor-model": "node scripts/check-editor-model.mjs",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "migrate:documents": "node scripts/backfill-documents.mjs"
   },
   "dependencies": {
     "@chenglou/pretext": "^0.0.9",

@@ -48,7 +48,7 @@ def _apply_change(db: sqlite3.Connection, change: DocumentChange, now: str, revi
     try:
         content_model = EntryText if change.allow_empty else Content
         tags = change.tags if change.tags is not None else (row or {}).get('tags', [])
-        value = content_model(content=change.content, tags=tags)
+        value = content_model(content=change.content, tags=tags, document=change.document)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
     if row:

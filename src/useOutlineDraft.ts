@@ -9,10 +9,12 @@ import type { EntryKind, OutlineItem } from './types';
 
 type DraftContext = {
   key: string; documentStore: OutlineDocument; items: OutlineItem[]; defaultKind: EntryKind;
+  // Called when a saved edit drops the tag this view filters by.
+  onUnfiled?: (id: number) => void;
   composer: boolean; day?: string; activeTag: string | null;
 };
 
-export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag }: DraftContext) {
+export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled }: DraftContext) {
   const mounted = useRef(true);
   const blank = (rows: OutlineItem[], active: boolean, parentId: number | null = null, afterId?: number | null, draftKind: EntryKind = defaultKind): Draft =>
     ({ ...fresh(rows, active, draftKind, parentId, afterId), hiddenTags: activeTag ? [activeTag] : [] });
@@ -69,14 +71,17 @@ export function useOutlineDraft({ key, documentStore, items, defaultKind, compos
       return null;
     }
     const id = value.id ?? documentStore.allocate();
-    const content = { id, kind: value.kind, content: value.content, tags: value.tags };
+    const content = { id, kind: value.kind, content: value.content, tags: value.tags, document: value.document ?? null };
     const change: OutlineChange = value.id === null
       ? { ...content, type: 'create', date: day, client_id: value.clientId, parent_id: value.parentId, after_id: value.afterId, before_id: value.beforeId }
       : { ...content, type: 'update' };
     documentStore.enqueue([change], historyKey ?? value.clientId);
+    // The tag that filed this entry here has been taken off it, so the entry
+    // takes its leave of this view.
+    if (activeTag && value.savedTags.includes(activeTag) && !value.tags.includes(activeTag)) onUnfiled?.(id);
     persist({ ...value, id, saved: value.content, savedTags: value.tags });
     return id;
-  }, [activeTag, day, documentStore, persist]);
+  }, [activeTag, day, documentStore, onUnfiled, persist]);
   const save = useCallback(() => {
     const id = stageDraft();
     if (mounted.current) setSaving(true);

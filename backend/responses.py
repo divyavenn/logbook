@@ -9,6 +9,9 @@ class EntryOutput(BaseModel):
     id: int = Field(ge=1)
     kind: StoredEntryKind
     day_id: int | None = None
+    # The entry as an editor document, absent only on rows written before it
+    # was kept. Content is its projection: the same text, as markdown.
+    document: dict | None = None
     content: str
     tags: list[str] = Field(default_factory=list)
     parent_id: int | None

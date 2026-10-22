@@ -219,6 +219,31 @@ export function documentWithTags(content: string, tags: string[], hiddenTags: st
   return document;
 }
 
+// A tag the editor was never shown is still the entry's own. It joins the
+// document where the entry is written, once, rather than being re-derived from
+// a list of names on every read.
+export function withTags(document: JSONContent, names: string[]): JSONContent {
+  const present = new Set<string>();
+  const find = (node: JSONContent) => {
+    if (node.type === 'journalTag') present.add(normalizeTag(String(node.attrs?.name ?? '')));
+    node.content?.forEach(find);
+  };
+  find(document);
+  const missing = names.map(normalizeTag).filter(name => !present.has(name));
+  if (!missing.length) return document;
+  const content = [...(document.content ?? [])];
+  let last = content.at(-1);
+  if (!last || last.type !== 'paragraph') { last = { type: 'paragraph', content: [] }; content.push(last); }
+  const children = [...(last.content ?? [])];
+  for (const name of missing) {
+    const tail = children.at(-1);
+    if (children.length && !(tail?.type === 'text' && /\s$/u.test(tail.text ?? ''))) children.push({ type: 'text', text: ' ' });
+    children.push({ type: 'journalTag', attrs: { name } });
+  }
+  content[content.length - 1] = { ...last, content: children };
+  return { ...document, content };
+}
+
 export function serializeEntry(document: JSONContent): { content: string; tags: string[] } {
   const tags = new Set<string>();
   const visit = (node: JSONContent): JSONContent | null => {
@@ -233,10 +258,22 @@ export function serializeEntry(document: JSONContent): { content: string; tags: 
       for (const match of tagMatches(text)) tags.add(match.name);
       return text ? { ...node, text } : null;
     }
-    const content = node.content?.map(visit).filter((child): child is JSONContent => child !== null);
+    const children = (node.content ?? [])
+      .map(child => ({ fromTag: child.type === 'journalTag', node: visit(child) }))
+      .filter((child): child is { fromTag: boolean; node: JSONContent } => child.node !== null);
+    const content = node.content ? children.map(child => child.node) : undefined;
     if (node.content?.some(child => child.type === 'journalTag') && content) {
       for (let i = 1; i < content.length; i++) {
         if (/\s$/.test(content[i - 1].text ?? '') && /^\s/.test(content[i].text ?? '')) content[i].text = content[i].text!.replace(/^[ \t]+/, '');
+      }
+      // A tag reads as a tag only with a space beside it. Two run together, or
+      // one against a word, would parse back as neither.
+      for (let i = content.length - 1; i > 0; i--) {
+        if (!children[i].fromTag && !children[i - 1].fromTag) continue;
+        if (content[i].type !== 'text' || content[i - 1].type !== 'text') continue;
+        if (/\s$/.test(content[i - 1].text ?? '') || /^\s/.test(content[i].text ?? '')) continue;
+        const spacer = { fromTag: false, node: { type: 'text', text: ' ' } };
+        content.splice(i, 0, spacer.node); children.splice(i, 0, spacer);
       }
       for (let i = content.length - 1; i >= 0; i--) if (content[i].type === 'text' && !content[i].text) content.splice(i, 1);
     }
@@ -316,8 +353,24 @@ function renderNode(node: JSONContent, key: number): ReactNode {
   }
 }
 
-export const MarkdownContent = memo(function MarkdownContent({ content, tags = [], hiddenTags = [] }: { content: string; tags?: string[]; hiddenTags?: string[] }) {
-  const document = useMemo(() => documentWithTags(content, tags, hiddenTags), [content, tags, hiddenTags]);
+// Hiding the active tag is a matter of not drawing it. The stored document
+// keeps every tag the entry was written with, so nothing has to be put back.
+function withoutTags(node: JSONContent, hidden: Set<string>): JSONContent | null {
+  if (node.type === 'journalTag') return hidden.has(normalizeTag(String(node.attrs?.name ?? ''))) ? null : node;
+  if (!node.content) return node;
+  return { ...node, content: node.content.map(child => withoutTags(child, hidden)).filter((child): child is JSONContent => child !== null) };
+}
+
+export const MarkdownContent = memo(function MarkdownContent({ document: stored, content, tags = [], hiddenTags = [] }: {
+  document?: JSONContent | null; content: string; tags?: string[]; hiddenTags?: string[];
+}) {
+  const document = useMemo(() => {
+    // A stored document needs no parsing. Rows written before documents were
+    // kept still arrive as markdown, and are read the long way round.
+    if (!stored) return documentWithTags(content, tags, hiddenTags);
+    const hidden = new Set(hiddenTags.map(normalizeTag));
+    return (hidden.size ? withoutTags(stored, hidden) : stored) ?? { type: 'doc' as const };
+  }, [stored, content, tags, hiddenTags]);
   // Explicit React elements only: raw HTML, scripts, images and unsafe links never execute.
   return <>{document.content?.map(renderNode)}</>;
 });

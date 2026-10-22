@@ -22,6 +22,8 @@ def entry_dict(row):
     result = dict(row)
     if 'tags' in result and isinstance(result['tags'], str):
         result['tags'] = json.loads(result['tags'])
+    if isinstance(result.get('document'), str):
+        result['document'] = json.loads(result['document'])
     return result
 
 

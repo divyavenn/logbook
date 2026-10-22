@@ -12,12 +12,12 @@ CREATE TABLE IF NOT EXISTS document_changes (
  operation_id TEXT NOT NULL REFERENCES document_operations(id),
  entity TEXT NOT NULL CHECK(entity IN ('notes','tasks')), row_id INTEGER NOT NULL,
  phase TEXT NOT NULL CHECK(phase IN ('before','after')), present INTEGER NOT NULL,
- kind TEXT, content TEXT, tags TEXT, day_id INTEGER, parent_id INTEGER, position INTEGER,
+ kind TEXT, document TEXT, content TEXT, tags TEXT, day_id INTEGER, parent_id INTEGER, position INTEGER,
     created_at TEXT, updated_at TEXT, completed_at TEXT, client_id TEXT, revision INTEGER,
  PRIMARY KEY(operation_id, entity, row_id, phase)
 );
 '''
-FIELDS = ['kind', 'content', 'tags', 'day_id', 'parent_id', 'position', 'created_at', 'updated_at', 'completed_at', 'client_id', 'revision']
+FIELDS = ['kind', 'document', 'content', 'tags', 'day_id', 'parent_id', 'position', 'created_at', 'updated_at', 'completed_at', 'client_id', 'revision']
 
 
 def snapshot(db):

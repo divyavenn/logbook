@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { useJournalContext } from '../JournalContext';
 import type { EntryKind, OutlineItem } from '../types';
 import { VisuallyHidden } from '../styles';
-import { MarkdownContent, markdownText, mergeMarkdown, formatMarkdown, pastedEntry, replaceEntryRange } from '../markdown';
+import { MarkdownContent, markdownText, mergeMarkdown, formatMarkdown, pastedEntry, replaceEntryRange, serializeEntry, withTags } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
 import { documentUndo, editDocument, historyShortcutDirection } from '../documentHistory';
 import { useEntryGestures, type EntrySelection } from '../useEntryGestures';
@@ -20,7 +20,7 @@ import type { Draft } from '../entryDrafts';
 import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
-import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS } from './OutlineStyles';
+import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS } from './OutlineStyles';
 
 type VerticalTarget = { x: number; direction: VerticalDirection };
 // The branch easing, cubic-bezier(.2, 0, 0, 1), so anything moving alongside a
@@ -72,8 +72,19 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   // inline. Every other tag stays visible and editable.
   const hiddenTagsFor = (tags: string[] | undefined) =>
     activeTag && (tags ?? []).includes(activeTag) ? [activeTag] : [];
+  const [removed, setRemoved] = useState(new Set<number>());
+  // An entry that has lost the tag filing it fades before its row is dropped,
+  // so leaving a filtered view reads as an answer rather than a disappearance.
+  const [departing, setDeparting] = useState(new Set<number>());
+  const depart = useCallback((id: number) => {
+    setDeparting(rows => new Set([...rows, id]));
+    window.setTimeout(() => {
+      setRemoved(rows => new Set([...rows, id]));
+      setDeparting(rows => { const next = new Set(rows); next.delete(id); return next; });
+    }, DEPART_MS);
+  }, []);
   const { blank, draft, current, records, persist, stageDraft, save, saving } = useOutlineDraft({
-    key, documentStore, items, defaultKind, composer, day, activeTag,
+    key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled: depart,
   });
   const draftHiddenTags = (value: Draft) =>
     value.hiddenTags.length || !activeTag || !value.savedTags.includes(activeTag) ? value.hiddenTags : [activeTag];
@@ -85,7 +96,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     seenCompleted.current = new Set(initial);
     return initial;
   });
-  const [removed, setRemoved] = useState(new Set<number>());
   const [suppressedPreviews, setSuppressedPreviews] = useState(new Set<number>());
   const previewSuppressedAt = useRef(new Map<number, number>());
   const [entrySelection, setEntrySelection] = useState<EntrySelection | null>(null);
@@ -213,7 +223,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     persist({ ...value, id: resolve(value.id), parentId: resolve(value.parentId),
       afterId: resolve(value.afterId), beforeId: resolve(value.beforeId ?? null) });
     const remap = (ids: Set<number>) => new Set([...ids].map(id => resolve(id)!));
-    setExpanded(remap); setCollapsed(remap); setPreviewed(remap); setRemoved(remap);
+    setExpanded(remap); setCollapsed(remap); setPreviewed(remap); setRemoved(remap); setDeparting(remap);
   };
   documentStore.failed = (error, ids) => {
     for (const id of ids) entryError(error, surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`));
@@ -227,7 +237,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   });
   useEffect(() => {
     const applied = () => {
-      selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); persist(blank([], composer));
+      selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); setDeparting(new Set()); persist(blank([], composer));
     };
     window.addEventListener('still-history-applied', applied);
     return () => window.removeEventListener('still-history-applied', applied);
@@ -277,7 +287,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const group = siblings(records.current, row.parent_id);
     const index = group.findIndex(item => item.id === row.id);
     restoringFocus.current = true;
-    flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: row.id, content: row.content, saved: row.content,
+    flushSync(() => persist({ ...blank(records.current, true), mode: 'edit', id: row.id, content: row.content, saved: row.content, document: row.document ?? null,
       kind: row.kind, revision: row.revision, tags: row.tags ?? [], savedTags: row.tags ?? [],
       hiddenTags: hiddenTagsFor(row.tags),
       parentId: row.parent_id, afterId: group[index - 1]?.id ?? null, beforeId: index === 0 ? group[1]?.id : null }));
@@ -394,11 +404,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const adjacent = elements[index + (backwards ? -1 : 1)];
     return records.current.find(row => row.id === Number(adjacent?.dataset.itemId));
   };
-  // A join reaches the row that truly adjoins this one, which a folded branch
-  // keeps off the screen: backwards that is the end of the branch above rather
-  // than the parent heading it, and forwards it is this entry's own first
-  // child rather than the next sibling. Completed rows stay skipped, as they
-  // are in the rendered order these fall back to.
+  // Text joined backwards lands at the end of the branch above it rather than
+  // on the parent heading it, which a folded branch keeps off the screen.
+  // Completed rows stay skipped, as they are in the rendered order this falls
+  // back to.
   const openChildren = (id: number) => siblings(records.current, id).filter(row => !row.completed_at);
   const lastInBranch = (row: OutlineItem): OutlineItem => {
     const children = openChildren(row.id);
@@ -409,10 +418,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const backwards = direction === 'backspace';
     if (backwards && current.current.parentId !== null) { shiftDraft(true); return; }
     const adjacent = adjacentEntry(backwards);
-    const own = current.current.id;
-    const other = backwards
-      ? (adjacent && lastInBranch(adjacent))
-      : ((own === null ? undefined : openChildren(own)[0]) ?? adjacent);
+    const other = backwards ? (adjacent && lastInBranch(adjacent)) : adjacent;
     const snapshot = current.current;
     if (!other) {
       if (backwards && !snapshot.content.trim() && !snapshot.tags.length) {
@@ -481,7 +487,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       untagged = change.type === 'update';
       documentStore.enqueue([change]);
       // An untagged entry still matches this outline's rows until the reload.
-      if (untagged) setRemoved(rows => new Set([...rows, id]));
+      if (untagged) depart(id);
     }
     const other = previous ?? next;
     if (other) {
@@ -570,7 +576,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const results = changes.length ? await editDocument(changes) : [];
     const created = hasContent ? results.at(-1) : null;
     selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges();
-    persist(created ? { ...blank([], true), kind: defaultKind, mode: 'edit', id: created.id, content: created.content, saved: created.content, tags: created.tags ?? [], savedTags: created.tags ?? [] } : blank([], composer));
+    persist(created ? { ...blank([], true), kind: defaultKind, mode: 'edit', id: created.id, content: created.content, saved: created.content, document: created.document ?? null, tags: created.tags ?? [], savedTags: created.tags ?? [] } : blank([], composer));
     if (created) pendingSelection.current = { anchor: markdownText(created.content).length, head: markdownText(created.content).length };
     await refresh();
   });
@@ -806,16 +812,22 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (event.detail >= 2 || (event.target as HTMLElement).closest('button, a')) return;
       updateEntrySelection(null);
       input.current?.focus(undefined, { anchor: Number.MAX_SAFE_INTEGER, head: Number.MAX_SAFE_INTEGER });
-    } : undefined}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed child task' : inputLabel} value={draft.content} tags={draft.tags.filter(tag => tag !== activeTag)} hiddenTags={draftHiddenTags(draft)} readOnly={false}
+    } : undefined}>{renderMarker(draft.id, draft.content)}<RichTextEditor key={draft.clientId} ref={input} label={archived && draft.kind === 'tasks' && draft.parentId !== null && draft.mode === 'new' ? 'New completed child task' : inputLabel} value={draft.content} document={draft.document} tags={draft.tags} readOnly={false}
       onBoundary={boundary} onVerticalBoundary={navigateBoundary} onHorizontalBoundary={navigateBoundary} onSelectDocument={selectDocument}
       onEnter={advance} onSelectEntry={selected => updateEntrySelection(selected ? { key: gestureKey, dragX: 0 } : null)} onDeleteEntry={deleteCurrentEntry}
       onShift={shiftDraft}
-      onChange={(content, tags) => {
+      onChange={(content, tags, document) => {
         verticalX.current = null;
         const value = current.current;
         const hiddenTags = draftHiddenTags(value);
-        const keep = content.trim() || tags.length ? hiddenTags : [];
-        persist({ ...value, content, hiddenTags, tags: [...new Set([...tags, ...keep])] });
+        // A new entry written in a filtered view is filed under that view's
+        // tag. A saved one carries whatever its document says: the tag shows
+        // while it is open, so deleting it there is meant.
+        const keep = value.id === null && (content.trim() || tags.length) ? hiddenTags : [];
+        const kept = document && keep.length ? withTags(document, keep) : document;
+        const projected = kept && keep.length ? serializeEntry(kept) : null;
+        persist({ ...value, content: projected?.content ?? content, document: kept, hiddenTags,
+          tags: projected?.tags ?? [...new Set([...tags, ...keep])] });
       }}
       onBlur={event => {
         const blurredClientId = draft.clientId;
@@ -880,7 +892,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (item === null) return renderDraft(depth);
       const gestureKey = `item:${item.id}`;
       const gestureSelected = entrySelection?.key === gestureKey;
-      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={item.kind} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)}
+      return <Item key={item.id} data-outline-key={key} data-done={!!item.completed_at && !archived} data-kind={item.kind} data-item-id={item.id} data-depth={depth} $leaving={completing.has(item.id)} $departing={departing.has(item.id)}
       data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
       onPointerLeave={() => clearPreview(item.id)}
       onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
@@ -897,7 +909,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
           if (link && (archived || !item.completed_at)) { event.preventDefault(); select(item, event.currentTarget, link); }
         }}
         onKeyDown={event => { if ((archived || !item.completed_at) && event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(item); } }}
-      ><MarkdownContent content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={hiddenTagsFor(item.tags)} /></Text>
+      ><MarkdownContent document={item.document} content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={hiddenTagsFor(item.tags)} /></Text>
       </Row>
       <Branch data-branch-for={item.id} $open={isExpanded(item.id)} $editing={draftInside(item.id)} aria-hidden={!isExpanded(item.id)}>{renderChildren(item.id, depth + 1)}</Branch>
     </Item>;

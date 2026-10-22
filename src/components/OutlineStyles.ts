@@ -22,13 +22,16 @@ export const Children = styled(List)<{ $task: boolean }>`
   @media ${compactViewport} { padding-left: 9px; }
 `;
 export const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--entry-row-height);`;
-export const Item = styled.li<{ $leaving?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
+// An entry leaving a filtered view takes its leave slowly: it is answering an
+// edit the reader just made, not reporting a finished task.
+export const DEPART_MS = 320;
+export const Item = styled.li<{ $leaving?: boolean; $departing?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
-  opacity: ${({ $leaving }) => $leaving ? 0 : 1};
-  transform: ${({ $leaving }) => $leaving ? 'translateY(-3px)' : 'none'};
+  opacity: ${({ $leaving, $departing }) => $leaving || $departing ? 0 : 1};
+  transform: ${({ $leaving, $departing }) => $departing ? 'translateY(-2px)' : $leaving ? 'translateY(-3px)' : 'none'};
   transition-property: opacity, transform, translate;
   /* A swipe follows the finger, so only its return trip is animated. */
-  transition-duration: ${({ $leaving }) => $leaving ? '180ms, 180ms' : '280ms, 280ms'}, ${({ $dragX = 0 }) => $dragX ? '0s' : '220ms'};
+  transition-duration: ${({ $leaving, $departing }) => $departing ? `${DEPART_MS}ms, ${DEPART_MS}ms` : $leaving ? '180ms, 180ms' : '280ms, 280ms'}, ${({ $dragX = 0 }) => $dragX ? '0s' : '220ms'};
   transition-timing-function: cubic-bezier(.2, 0, 0, 1);
   ${({ $arriving }) => $arriving && css`@starting-style { opacity: 0; transform: translateY(-7px); }`}
   > ${Row} { transition: background-color 120ms ease-out, box-shadow 140ms ease-out; }
