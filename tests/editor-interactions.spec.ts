@@ -465,8 +465,9 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(row).toHaveAttribute('data-gesture-selected', 'true');
     expect((await editor.locator('em').allTextContents()).join('')).toBe('First lineSecond line');
     const copied = await copyOrCut('copy');
-    // A selected entry copies as a markdown list item, formatting included.
-    expect(copied.text).toBe('- ***First line\\\n  Second line***');
+    // A selected entry copies as a markdown list item, formatting included,
+    // and a task as a native checkbox.
+    expect(copied.text).toBe(`${kind === 'tasks' ? '- [ ] ' : '- '}***First line\\\n  Second line***`);
     expect(copied.html).toContain('<strong>');
     expect(copied.html).toContain('<em>');
     await page.screenshot({ path: `test-results/selected-${kind}-entry.png` });
@@ -485,7 +486,7 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect(row).not.toHaveAttribute('data-gesture-selected', 'true');
     await selectEntry();
     // A cut copies the entry the same way a copy does, and takes it away.
-    expect((await copyOrCut('cut')).text).toBe('- Typed replacement');
+    expect((await copyOrCut('cut')).text).toBe(`${kind === 'tasks' ? '- [ ] ' : '- '}Typed replacement`);
     await expect(row).toHaveCount(0);
     await expect.poll(async () => (await (await request.get('/api/export')).json())[kind].some((row: { id: number }) => row.id === item.id)).toBe(false);
   });

@@ -3,6 +3,7 @@ import { editDocument } from './documentHistory';
 import type { OutlineItem } from './types';
 import type { DocumentChange, OutlineChange } from './entryChanges';
 import { branchIds, orderedEntries as ordered } from './entryTree';
+import { documentWithTags } from './markdown';
 import { readOutlineRecovery, type PendingEdit } from './outlineRecovery';
 import { storage } from './storage';
 export type { OutlineChange } from './entryChanges';
@@ -124,6 +125,12 @@ export class OutlineDocument {
 
   enqueue(changes: OutlineChange[], key: string = crypto.randomUUID()) {
     if (!changes.length) return;
+    // An edit that writes text without a document authored markdown: joining
+    // two lines, replacing a selection, taking a tag off. Its document is read
+    // from that text here, once, so no path can leave the two disagreeing.
+    changes = changes.map(change => 'content' in change && change.document == null
+      ? { ...change, document: documentWithTags(change.content, change.tags ?? []) }
+      : change);
     this.edits.push({ changes, key, requestId: crypto.randomUUID() });
     this.persist();
     this.changed();

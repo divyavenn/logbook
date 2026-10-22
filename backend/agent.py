@@ -217,31 +217,41 @@ def markdown_journal(journal: AgentJournal) -> str:
     }, indent=2, ensure_ascii=False), '```', '']
 
     def append_entries(rows: list[AgentEntry], depth: int = 0) -> None:
+        # The same bullet the clipboard writes: two spaces a level, a native
+        # checkbox for a task, and the tags inline in the text they sit in.
         for row in rows:
-            indent = '    ' * depth
-            marker = ('[x] ' if row.completed_at else '[ ] ') if row.kind == 'task' else ''
+            indent = '  ' * depth
+            marker = ('- [x] ' if row.completed_at else '- [ ] ') if row.kind == 'task' else '- '
             content = row.content_markdown.splitlines() or ['']
-            lines.append(f'{indent}- {marker}{content[0]}')
-            lines.extend(f'{indent}    {line}' for line in content[1:])
-            metadata = {'id': f'{row.kind}:{row.id}', 'parent_id': row.parent_id, 'tags': row.tags,
-                        'matched': row.matched, 'source_task_id': row.source_task_id, 'completed_at': row.completed_at}
-            lines.extend([f'{indent}    ', f'{indent}    Metadata: `{json.dumps(metadata, ensure_ascii=False)}`'])
+            # A tag the text does not already carry is named at the end of the
+            # bullet, so no tag is lost with the metadata line.
+            lowered = row.content_markdown.lower()
+            inline = [f'#{tag}' for tag in row.tags if f'#{tag}'.lower() not in lowered]
+            lines.append(' '.join([f'{indent}{marker}{content[0]}', *inline]).rstrip())
+            lines.extend(f'{indent}  {line}' for line in content[1:])
             append_entries(row.children, depth + 1)
 
-    if journal.query.tasks != 'none':
-        lines.extend(['## Tasks (current snapshot, not date-filtered)', ''])
+    if journal.query.tasks != 'none' and journal.tasks:
+        lines.extend(['## to do', ''])
         append_entries(journal.tasks)
         lines.append('')
     for day in journal.days:
         focus = day.focus
-        lines.extend([f'## {day.date}', '',
-            f'Focus: {focus.total_seconds:g} seconds total; {focus.completed_seconds:g} completed; {focus.running_seconds:g} running.',
-            f'Longest completed session on this date: {focus.longest_completed_session_seconds:g} seconds.', '',
-            '| Session ID | Status | Start (UTC) | Seconds on this date | Whole session seconds |',
-            '| --- | --- | --- | ---: | ---: |'])
-        for session in focus.sessions:
-            lines.append(f'| {session.id} | {session.status} | {session.started_at} | {session.seconds_on_day:g} | {session.duration_seconds:g} |')
-        lines.append('')
+        # A day with nothing written and nothing focused is not worth a heading.
+        if not day.bullets and not focus.sessions and not focus.total_seconds:
+            continue
+        lines.extend([f'## {day.date}', ''])
+        if focus.total_seconds or focus.sessions:
+            lines.extend([
+                f'Focus: {focus.total_seconds:g} seconds total; {focus.completed_seconds:g} completed; {focus.running_seconds:g} running.',
+                f'Longest completed session on this date: {focus.longest_completed_session_seconds:g} seconds.', '',
+            ])
+        if focus.sessions:
+            lines.extend(['| Session ID | Status | Start (UTC) | Seconds on this date | Whole session seconds |',
+                          '| --- | --- | --- | ---: | ---: |'])
+            for session in focus.sessions:
+                lines.append(f'| {session.id} | {session.status} | {session.started_at} | {session.seconds_on_day:g} | {session.duration_seconds:g} |')
+            lines.append('')
         append_entries(day.bullets)
         lines.append('')
     return '\n'.join(lines)

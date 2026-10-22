@@ -22,7 +22,7 @@ test('a reader without JavaScript can discover and query the complete saved docu
     expect(data.days[0].focus.completed_seconds).toBe(0);
     const markdown = await context.request.get(`/journal.md?${query}`);
     expect(markdown.headers()['content-type']).toContain('text/markdown');
-    expect(await markdown.text()).toContain('    - Read the [reference](https://example.com/reference)');
+    expect(await markdown.text()).toContain('  - Read the [reference](https://example.com/reference)');
     const direct = await context.request.get(`/?${query}`, { headers: { Accept: 'application/json' } });
     expect((await direct.json()).days).toEqual(data.days);
   } finally {

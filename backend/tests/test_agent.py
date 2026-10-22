@@ -171,8 +171,11 @@ def test_markdown_discovery_schema_and_content_negotiation(client):
     assert markdown.headers['cache-control'] == 'no-store'
     assert '\n## 2026-09-16\n' in markdown.text
     assert '- [Résumé](https://example.com/a\\(b\\))' in markdown.text
-    assert '\n    - Second' in markdown.text
-    assert '"tags": ["work"]' in markdown.text and '#work' not in markdown.text
+    # Two spaces a level, the same nesting the clipboard writes.
+    assert '\n  - Second' in markdown.text
+    assert 'Metadata:' not in markdown.text
+    # Tags read inline now, where the metadata line used to carry them.
+    assert '#work' in markdown.text
     metadata = json.loads(markdown.text.split('```json\n', 1)[1].split('\n```', 1)[0])
     assert metadata['next_url'].startswith('/journal.md?')
     assert client.get(metadata['next_url']).status_code == 200

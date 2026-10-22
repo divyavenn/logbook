@@ -1,5 +1,19 @@
 import { domText } from './textSelection';
 
+// One shape for everything that leaves the logbook as text: nested bullets two
+// spaces a level, tasks as native markdown checkboxes, tags inline in the text
+// they were written in. The server's /journal.md follows the same rule.
+export function markdownBullet(text: string, depth: number, task = false, done = false, tags: string[] = []): string {
+  const indent = '  '.repeat(depth);
+  const marker = task ? (done ? '- [x] ' : '- [ ] ') : '- ';
+  const [first = '', ...rest] = text.split('\n');
+  // A tag the text does not already carry is named at the end of the bullet.
+  const lowered = text.toLowerCase();
+  const named = tags.filter(tag => !lowered.includes(`#${tag.toLowerCase()}`)).map(tag => `#${tag}`);
+  return [[indent + marker + first, ...named].join(' ').trimEnd(),
+    ...rest.map(line => indent + '  ' + line)].join('\n');
+}
+
 // A selection reaching across dates copies as the logbook reads: a heading for
 // each date, then the events and entries the selection covers, nested as they
 // are on the page. Within one date the outline copies its own entries.
@@ -22,9 +36,9 @@ export function copySpannedDays(clipboard: DataTransfer): boolean {
       document_.append(heading);
     }
     const list = document.createElement('ul');
-    const add = (text: string, depth: number, html?: Element) => {
+    const add = (text: string, depth: number, html?: Element, task = false, done = false) => {
       if (!text) return;
-      lines.push('  '.repeat(depth) + '- ' + text.replace(/\n/g, '\n' + '  '.repeat(depth + 1)));
+      lines.push(markdownBullet(text, depth, task, done));
       const item = document.createElement('li');
       if (html) item.innerHTML = html.innerHTML; else item.textContent = text;
       list.append(item);
@@ -35,7 +49,8 @@ export function copySpannedDays(clipboard: DataTransfer): boolean {
     for (const row of day.querySelectorAll<HTMLElement>('li[data-item-id]')) {
       const content = row.querySelector<HTMLElement>(':scope > div > [role="group"], :scope > div [contenteditable="true"]');
       if (!content || content.closest('li') !== row || !range.intersectsNode(content)) continue;
-      add(domText(content).trim(), Number(row.dataset.depth ?? 0), content);
+      add(domText(content).trim(), Number(row.dataset.depth ?? 0), content,
+        row.dataset.kind === 'tasks', row.dataset.done === 'true');
     }
     if (list.children.length) document_.append(list);
   }

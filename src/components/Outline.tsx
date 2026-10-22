@@ -12,7 +12,7 @@ import { entryError } from '../entryFeedback';
 import { endEntryDrag, entryDragLeft, incomingEntryDrag, moveEntryToDay, startEntryDrag, takeEntryDrag, type DragPlacement, type EntryDrag } from '../entryDrag';
 import { domTextOffset } from '../textSelection';
 import { selectedEntryRanges, spannedEntries } from '../entrySelection';
-import { copySpannedDays } from '../journalClipboard';
+import { copySpannedDays, markdownBullet } from '../journalClipboard';
 import { useRangeEditing } from '../useRangeEditing';
 import { useTaskCompletion } from '../useTaskCompletion';
 import { useOutlineDraft } from '../useOutlineDraft';
@@ -590,15 +590,19 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const build = (rows: OutlineItem[], depth: number): HTMLUListElement => {
       const list = document.createElement('ul');
       for (const row of rows) {
-        const tags = row.tags?.filter(tag => tag !== activeTag) ?? [];
         const content = contentOf(row);
-        lines.push('  '.repeat(depth) + '- ' + content.replace(/\n/g, '\n' + '  '.repeat(depth + 1)) + (tags.length ? ' ' + tags.map(tag => '#' + tag).join(' ') : ''));
+        // Tags are already inline in the text, so an entry copies whole.
+        lines.push(markdownBullet(content, depth, row.kind === 'tasks', !!row.completed_at, row.tags ?? []));
         const li = document.createElement('li');
         const element = surface.current?.querySelector(`[data-item-id="${row.id}"]`);
         const text = element?.querySelector(':scope > div > [role="group"], :scope > div .tiptap');
         if (text) li.innerHTML = text.innerHTML;
         else li.textContent = markdownText(content);
-        const children = build(childrenOf(row.id), depth + 1);
+        // A closed branch is not on screen to be selected from, so all of it
+        // comes along. An open one brings only what was actually selected.
+        const under = childrenOf(row.id).filter(child =>
+          !roots || !isExpanded(row.id) || chosen.has(child.id));
+        const children = build(under, depth + 1);
         if (children.children.length) li.append(children);
         list.append(li);
       }

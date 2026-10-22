@@ -46,7 +46,7 @@ test('a shortcut over a selection spanning entries applies to all of them', asyn
   await expect.poll(async () => (await notes(page)).filter(row => row.parent_id === above.id).length).toBe(0);
 });
 
-test('a selected entry copies with its children as a markdown list', async ({ page, context, request }) => {
+test('a selected entry copies its branch when closed, and alone when open', async ({ page, context, request }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   const make = async (content: string, parent_id: number | null = null) =>
@@ -62,9 +62,17 @@ test('a selected entry copies with its children as a markdown list', async ({ pa
   await editor.dblclick({ position: { x: box.width - 5, y: 12 } });
   await expect(editor.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-gesture-selected', 'true');
   await page.keyboard.press('Meta+c');
-  // The branch comes along, indented, and nothing outside the entry does.
+  // Closed, none of the branch is on screen to be selected, so all of it comes.
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()))
     .toBe('- Copy parent\n  - Copy child');
+
+  // Opened, the child is there to be selected, and was not. The entry stays
+  // selected, so only what the branch shows changes.
+  await page.getByRole('button', { name: 'Expand Copy parent', exact: true }).hover();
+  await expect(page.getByRole('group', { name: 'Copy child', exact: true })).toBeVisible();
+  await expect(editor.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-gesture-selected', 'true');
+  await page.keyboard.press('Meta+c');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('- Copy parent');
 });
 
 test('deleting a selected entry takes its children, while joining lines keeps them', async ({ page, request }) => {
