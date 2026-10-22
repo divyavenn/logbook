@@ -178,6 +178,12 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
       page.getByRole('tab', { name: 'log', exact: true }).boundingBox(), timer.boundingBox(),
     ]);
     expect(activeDot!.y + activeDot!.height / 2).toBeCloseTo(timerBox!.y + timerBox!.height / 2, 0);
+    // The dots sit across the middle of the top, not over the sidebar rail.
+    const dots = (await tabs.boundingBox())!;
+    expect(dots.x + dots.width / 2).toBeCloseTo(size.width / 2, 0);
+    const rail = await page.getByRole('navigation', { name: 'Tags' }).boundingBox();
+    if (rail) expect(dots.x).toBeGreaterThan(rail.x + rail.width);
+    expect(dots.x + dots.width).toBeLessThan(timerBox!.x);
     await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveCSS('font-size', '0px');
     expect(await tabs.getByRole('tab').evaluateAll(elements => elements.map(element => getComputedStyle(element, '::before').width))).toEqual(size.panes.map(() => '6px'));
     await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(1);

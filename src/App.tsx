@@ -149,7 +149,9 @@ const ShortHeader = styled.div`
   height: 44px; flex-shrink: 0;
 `;
 const MobileTabs = styled.div`
-  position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; z-index: 43;
+  /* Centred along the top, clear of the sidebar on one side and the timer on
+     the other, and level with both. */
+  position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; translate: -50% 0; z-index: 43;
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
