@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { useJournalContext } from '../JournalContext';
-import type { EntryKind, OutlineItem } from '../types';
+import type { EntryDocument, EntryKind, OutlineItem } from '../types';
 import { VisuallyHidden } from '../styles';
-import { MarkdownContent, markdownText, mergeMarkdown, formatMarkdown, pastedEntry, replaceEntryRange, serializeEntry, withTags } from '../markdown';
+import { MarkdownContent, documentWithTags, entryText, formatDocument, markdownText, mergeEntries, pastedEntry, replaceEntryRange, serializeEntry, withTags } from '../markdown';
 import { RichTextEditor, type RichTextHandle, type TextOffsets, type VerticalDirection } from './RichTextEditor';
 import { documentUndo, editDocument, historyShortcutDirection } from '../documentHistory';
 import { useEntryGestures, type EntrySelection } from '../useEntryGestures';
@@ -152,7 +152,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   };
   const formatGroup = (rows: OutlineItem[], format: EntryFormat) => void run(async () => {
     await save();
-    await editDocument(rows.map(row => ({ kind: row.kind, id: row.id, content: formatMarkdown(row.content, format), tags: row.tags })));
+    await editDocument(rows.map(row => {
+      const document = formatDocument(documentOf(row), format);
+      return { kind: row.kind, id: row.id, document, ...serializeEntry(document) };
+    }));
     await refresh();
   }, false);
   const draggedEntry = useRef<number | null>(null);
@@ -315,6 +318,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     activate(latest, selection, vertical);
     if (contextLink) input.current?.editLink();
   };
+  const documentOf = (row: { document?: EntryDocument | null; content: string; tags?: string[] }) =>
+    row.document ?? documentWithTags(row.content, row.tags ?? []);
   const checkDepth = (id: number | null, parentId: number | null) => checkEntryDepth(records.current, id, parentId);
   const moveDestination = (snapshot: { id: number | null; parentId: number | null; afterId: number | null }, outdent: boolean) => {
     const parent = records.current.find(item => item.id === snapshot.parentId);
@@ -435,15 +440,15 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     } else {
       const own = records.current.find(row => row.id === ownId)!;
       const first = backwards ? other : own, second = backwards ? own : other;
-      const content = mergeMarkdown(first.content, second.content);
-      const tags = [...new Set([...first.tags ?? [], ...second.tags ?? []])];
+      const merged = mergeEntries(documentOf(first), documentOf(second));
+      const { content, tags } = serializeEntry(merged);
       const firstText = backwards
         ? surface.current?.querySelector<HTMLElement>(`[data-item-id="${first.id}"] > div > [role="group"]`)
         : surface.current?.querySelector<HTMLElement>('[role="textbox"]');
       const offset = firstText ? domTextOffset(firstText, firstText, firstText.childNodes.length)
         : markdownText(first.content, hiddenTagsFor(first.tags)).length;
       documentStore.enqueue([
-        { kind: first.kind, id: first.id, type: 'update', content, tags },
+        { kind: first.kind, id: first.id, type: 'update', content, tags, document: merged },
         ...keepChildren([second]),
         { kind: second.kind, id: second.id, type: 'delete' },
       ]);
@@ -515,15 +520,17 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const includesDraft = ranges.some(range => range.id === 'draft' || Number(range.id) === value.id);
       const selected = ranges.map(range => {
         if (range.id === 'draft' || Number(range.id) === value.id) return {
-          ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags, parentId: value.parentId,
+          ...range, id: value.id, kind: value.kind, content: value.content, tags: value.tags,
+          document: documentOf(value), parentId: value.parentId,
         };
         const row = records.current.find(row => row.id === Number(range.id));
         if (!row) throw new Error('The selected entry has changed.');
-        return { ...range, id: row.id, kind: row.kind, content: row.content, tags: row.tags, parentId: row.parent_id };
+        return { ...range, id: row.id, kind: row.kind, content: row.content, tags: row.tags,
+          document: documentOf(row), parentId: row.parent_id };
       });
       const first = selected[0], last = selected.at(-1)!;
       const primary = edit.ranges[0].key === key;
-      const replacement = replaceEntryRange(first, last, primary ? edit.text : '', primary ? edit.html : '', hiddenTagsFor([...first.tags, ...last.tags]));
+      const replacement = replaceEntryRange(first, last, primary ? edit.text : '', primary ? edit.html : '');
       if (!includesDraft) stageDraft();
       else if (value.content.trim() || value.tags.length) {
         const stagedId = stageDraft();
@@ -533,12 +540,15 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       }
       // Hidden tags are context, not selected text, so in a filtered view they
       // cannot keep an emptied entry alive as a blank row carrying the tag.
-      const removeAll = !replacement.content.trim() && (!!activeTag || !replacement.tags.length);
+      // Nothing written left is the test, not nothing stored: a remainder of
+      // tags alone cannot keep an entry alive as a blank row in a filtered view.
+      const removeAll = !entryText(replacement.document).trim() && (!!activeTag || !replacement.tags.length);
       const id = first.id ?? documentStore.allocate();
       restoringFocus.current = true;
       const changes: OutlineChange[] = [];
       if (!removeAll) {
-        const content = { id, kind: first.kind, content: replacement.content, tags: replacement.tags, allow_empty: true };
+        const content = { id, kind: first.kind, content: replacement.content, tags: replacement.tags,
+          document: replacement.document, allow_empty: true };
         changes.push(first.id === null
           ? { ...content, type: 'create', date: day, client_id: value.clientId, parent_id: first.parentId, after_id: value.afterId, before_id: value.beforeId }
           : { ...content, type: 'update' });
@@ -1046,7 +1056,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const format = mod ? formattingShortcut(event.key, event.shiftKey) : null;
     if (format) { event.preventDefault(); void run(async () => {
       await save();
-      const changes = records.current.filter(item => archived || !item.completed_at).map(item => ({ kind: item.kind, id: item.id, content: formatMarkdown(item.content, format), tags: item.tags }));
+      const changes = records.current.filter(item => archived || !item.completed_at).map(item => {
+        const document = formatDocument(documentOf(item), format);
+        return { kind: item.kind, id: item.id, document, ...serializeEntry(document) };
+      });
       if (changes.length) await editDocument(changes);
       persist(blank([], composer)); selectionActive.current = false; setSelectedAll(false); window.getSelection()?.removeAllRanges(); await refresh();
     }); return; }
