@@ -204,7 +204,11 @@ test('hover tabs filter nested notes and tasks, hide only the active tag, and ke
   await expect(page.getByRole('group', { name: 'Included subtask', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Matched nested root', exact: true }).locator('xpath=ancestor::li[1]')).toHaveAttribute('data-depth', '0');
   // Only the tag being filtered by is hidden; the others stay as they were.
-  await expect(page.locator('[data-tag="focused"]')).toHaveCount(0);
+  await expect(page.locator('li[data-item-id]:not([data-item-id="draft"]) [data-tag="focused"]')).toHaveCount(0);
+  // A new entry is seeded with the tag that will file it, shown from the start
+  // so the caret can sit in front of it.
+  await expect(page.getByRole('textbox', { name: 'New task', exact: true })
+    .locator('[data-tag="focused"]')).toBeVisible();
   await expect(page.locator('[data-tag="secondary"]')).toHaveCount(1);
   await page.getByRole('group', { name: 'Focus parent', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });

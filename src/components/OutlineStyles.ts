@@ -22,9 +22,9 @@ export const Children = styled(List)<{ $task: boolean }>`
   @media ${compactViewport} { padding-left: 9px; }
 `;
 export const Row = styled.div`position: relative; display: flex; align-items: flex-start; min-height: var(--entry-row-height);`;
-// An entry leaving a filtered view takes its leave slowly: it is answering an
-// edit the reader just made, not reporting a finished task.
-export const DEPART_MS = 320;
+// An entry leaving a filtered view fades as it goes, but briefly: it is
+// answering an edit the reader just made and should not hold them up.
+export const DEPART_MS = 180;
 export const Item = styled.li<{ $leaving?: boolean; $departing?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
   opacity: ${({ $leaving, $departing }) => $leaving || $departing ? 0 : 1};

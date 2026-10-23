@@ -145,13 +145,17 @@ const TimerButton = styled.button<{ $running: boolean }>`
   &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
   &[aria-pressed='true']::before { border-color: var(--timer-running-ring); }
 `;
+// The strip above the panes is where a page turn comes from: it is the part of
+// the page that is not entries, and the entries keep the up-and-down of their
+// own list.
 const ShortHeader = styled.div`
-  height: 44px; flex-shrink: 0;
+  height: 44px; flex-shrink: 0; touch-action: pan-x;
 `;
-const MobileTabs = styled.div`
-  /* Centred along the top, clear of the sidebar on one side and the timer on
-     the other, and level with both. */
-  position: fixed; top: max(12px, env(safe-area-inset-top)); left: 50%; translate: -50% 0; z-index: 43;
+const MobileTabs = styled.div<{ $aside: boolean }>`
+  /* Centred along the top while the sidebar keeps its own side. Once the tags
+     have taken a tab there is no sidebar, so the dots take its place. */
+  position: fixed; top: max(12px, env(safe-area-inset-top)); z-index: 43;
+  ${({ $aside }) => $aside ? 'left: 12px;' : 'left: 50%; translate: -50% 0;'}
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
@@ -230,6 +234,9 @@ const LogViewport = styled.div`
   padding: 30px 12px 24px 8px; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent;
   @media ${compactViewport} {
     min-height: 0; padding: 24px 2px 10px 0; scrollbar-width: none;
+    /* A touch that starts on the entries scrolls them and never turns the
+       page, so neither gesture has to be guessed at. */
+    touch-action: pan-y;
     &::-webkit-scrollbar { display: none; }
   }
 `;
@@ -320,6 +327,19 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const refreshResult = useRef<Promise<void> | null>(null);
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
+  // A drag across the band above the entries turns the page by one, as soon as
+  // it has gone far enough to mean it, and once per drag. The dots and the
+  // timer live in that band and answer taps, so a drag over them turns the
+  // page like anywhere else, and the tap it would have been is dropped.
+  const strip = useRef<HTMLDivElement>(null);
+  const turning = useRef<{ from: number; turned: boolean } | null>(null);
+  const turnPage = (at: number) => {
+    const start = turning.current;
+    if (!start || start.turned || Math.abs(at - start.from) < 32) return;
+    start.turned = true;
+    const index = views.indexOf(mobileView) + (at < start.from ? 1 : -1);
+    if (index >= 0 && index < views.length) selectMobileView(views[index]);
+  };
   useEffect(() => {
     const across = window.matchMedia(narrowViewport);
     const down = window.matchMedia(shortViewport);
@@ -624,7 +644,18 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     return <>{data ? taskBand(false) : <ConnectionState><Muted>Loading…</Muted></ConnectionState>}{logBand}</>;
   };
 
-  return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}>
+  return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}
+    onPointerDownCapture={event => {
+      const band = strip.current?.getBoundingClientRect();
+      turning.current = band && event.clientY <= band.bottom ? { from: event.clientX, turned: false } : null;
+    }}
+    onPointerMoveCapture={event => turnPage(event.clientX)}
+    onClickCapture={event => {
+      // The drag has already answered; the tap it ends with is not meant.
+      if (turning.current?.turned) { event.preventDefault(); event.stopPropagation(); }
+      turning.current = null;
+    }}
+    onPointerUpCapture={() => { if (!turning.current?.turned) turning.current = null; }}>
     <TimerChrome>
       <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(visibleElapsed)}</TimerTime>
       <TimerButton $running={timerRunning} type="button" disabled={!data} data-haptic="impact"
@@ -637,8 +668,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     {!cramped.across && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
     <Main data-focus-surface>
       {paged ? <>
-        <ShortHeader>
-          <MobileTabs role="tablist" aria-label="Mobile views">
+        <ShortHeader ref={strip} data-page-turn>
+          <MobileTabs role="tablist" aria-label="Mobile views" $aside={views.includes('tags')}>
             {views.map(view => <MobileTab key={view} id={`mobile-tab-${view}`} type="button" role="tab"
               aria-controls={`mobile-panel-${view}`} aria-selected={mobileView === view} $active={mobileView === view}
               onClick={() => selectMobileView(view)}>{view}</MobileTab>)}

@@ -171,6 +171,8 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
     { width: 260, height: 180, panes: ['tasks', 'log', 'tags'] }, { width: 1000, height: 400, panes: ['tasks', 'log'] },
   ]) {
     await page.setViewportSize(size);
+    // The rail answers a hover, so the pointer is parked clear of it first.
+    await page.mouse.move(size.width / 2, size.height - 8);
     const tabs = page.getByRole('tablist', { name: 'Mobile views' });
     await expect(tabs).toBeVisible();
     await expect(tabs.getByRole('tab')).toHaveText(size.panes);
@@ -181,9 +183,11 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
       page.getByRole('tab', { name: 'log', exact: true }).boundingBox(), timer.boundingBox(),
     ]);
     expect(activeDot!.y + activeDot!.height / 2).toBeCloseTo(timerBox!.y + timerBox!.height / 2, 0);
-    // The dots sit across the middle of the top, not over the sidebar rail.
+    // Centred while the sidebar keeps its side; where the tags have taken a
+    // tab there is no sidebar, and the dots take its place at the left.
     const dots = (await tabs.boundingBox())!;
-    expect(dots.x + dots.width / 2).toBeCloseTo(size.width / 2, 0);
+    if (size.panes.includes('tags')) expect(dots.x).toBeLessThan(size.width / 4);
+    else expect(dots.x + dots.width / 2).toBeCloseTo(size.width / 2, 0);
     const rails = page.getByRole('navigation', { name: 'Tags' });
     if (await rails.count()) {
       const rail = (await rails.boundingBox())!;
@@ -199,7 +203,11 @@ test('what has no room gets a tab of its own, and the timer stays visible', asyn
       .toEqual(size.panes.slice(1).map(() => 12));
     // The rail and the tags tab are the same thing; never both at once.
     await expect(page.getByRole('navigation', { name: 'Tags' })).toHaveCount(size.panes.includes('tags') ? 0 : 1);
-    await expect(page.getByRole('group', { name: 'Page controls' })).toBeHidden();
+    // Where a rail exists its controls stay tucked away until it is hovered.
+    // Where the tags have a tab instead, the controls live in that pane.
+    if (!size.panes.includes('tags')) {
+      await expect(page.getByRole('navigation', { name: 'Tags' }).getByRole('group', { name: 'Page controls' })).toBeHidden();
+    }
     const pager = page.getByTestId('mobile-pager');
     await expect(pager).toHaveCSS('scrollbar-width', 'none');
     await expect(pager).toHaveCSS('scroll-snap-type', 'x mandatory');
@@ -284,12 +292,11 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   const pager = page.getByTestId('mobile-pager');
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = 0; });
-  const box = (await pager.boundingBox())!;
-  const dateHeader = (await page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true }).boundingBox())!;
+  const strip = (await page.locator('[data-page-turn]').boundingBox())!;
   const swipe = async (from: number, to: number) => {
-    // Entry rows reserve horizontal gestures for indent/outdent; the open
-    // date header remains a page-navigation gesture surface.
-    const y = dateHeader.y + dateHeader.height / 2;
+    // The strip above the panes turns the page; a touch on the entries scrolls
+    // them instead, so neither gesture is ambiguous.
+    const y = strip.y + strip.height / 2;
     const point = (x: number) => ({ x, y, id: 0, radiusX: 1, radiusY: 1, force: 1 });
     await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(from)] });
     for (let step = 1; step <= 5; step++) {
@@ -299,12 +306,15 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   };
   // A tall narrow window keeps the task list with the log, so the panes are
   // the log and the tags, in that order.
-  await swipe(box.x + box.width * .82, box.x + box.width * .18);
+  // Straight across the dots and the timer: they answer taps, and a drag over
+  // them turns the page like anywhere else in the band.
+  await swipe(strip.x + strip.width * .95, strip.x + strip.width * .05);
   await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
-  await swipe(box.x + box.width * .18, box.x + box.width * .82);
+  // The turn is animated, so it is the settled position that matters.
+  await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
+  await swipe(strip.x + strip.width * .05, strip.x + strip.width * .95);
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
+  await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
 });
 
 test('swipe log loads earlier dates infinitely and preserves its active tag filter', async ({ page }) => {

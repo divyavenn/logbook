@@ -63,8 +63,9 @@ const DateHead = styled.button`
   @media ${compactViewport} { min-height: 36px; gap: 6px; margin-bottom: 0; }
 `;
 const DateLabel = styled.time`
-  display: inline-block; font-size: 15px; line-height: 24px; padding: 0 6px; margin-left: -6px;
-  border-radius: 9px; background: var(--date-bg); transform: translateY(1px);
+  /* An outline, not a fill: the date is named rather than highlighted. */
+  display: inline-block; font-size: 15px; line-height: 22px; padding: 0 5px; margin-left: -6px;
+  border-radius: 9px; border: 1px solid var(--date-bg); transform: translateY(1px);
   @media ${compactViewport} { margin-left: 0; }
 `;
 // Dark enough to clear AA contrast at 12px once the chrome opacity fades it.

@@ -16,8 +16,17 @@ type DraftContext = {
 
 export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled }: DraftContext) {
   const mounted = useRef(true);
-  const blank = (rows: OutlineItem[], active: boolean, parentId: number | null = null, afterId?: number | null, draftKind: EntryKind = defaultKind): Draft =>
-    ({ ...fresh(rows, active, draftKind, parentId, afterId), hiddenTags: activeTag ? [activeTag] : [] });
+  // A new entry written in a filtered view is filed under that view's tag, so
+  // the tag is there from the start rather than arriving on the first letter
+  // and displacing the caret. It counts as already saved, so an untouched
+  // composer is still untouched.
+  const blank = (rows: OutlineItem[], active: boolean, parentId: number | null = null, afterId?: number | null, draftKind: EntryKind = defaultKind): Draft => {
+    const empty = { ...fresh(rows, active, draftKind, parentId, afterId), hiddenTags: activeTag ? [activeTag] : [] };
+    if (!activeTag) return empty;
+    const document = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'journalTag', attrs: { name: activeTag } }] }] };
+    const content = `#${activeTag}`;
+    return { ...empty, document, content, saved: content, tags: [activeTag], savedTags: [activeTag] };
+  };
   const [draft, setDraft] = useState<Draft>(() => {
     try {
       const stored = readDraft(key, blank(items, composer), items);
