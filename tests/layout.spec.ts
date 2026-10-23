@@ -292,12 +292,11 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   const pager = page.getByTestId('mobile-pager');
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = 0; });
-  const box = (await pager.boundingBox())!;
-  const dateHeader = (await page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true }).boundingBox())!;
+  const strip = (await page.locator('[data-page-turn]').boundingBox())!;
   const swipe = async (from: number, to: number) => {
-    // Entry rows reserve horizontal gestures for indent/outdent; the open
-    // date header remains a page-navigation gesture surface.
-    const y = dateHeader.y + dateHeader.height / 2;
+    // The strip above the panes turns the page; a touch on the entries scrolls
+    // them instead, so neither gesture is ambiguous.
+    const y = strip.y + strip.height / 2;
     const point = (x: number) => ({ x, y, id: 0, radiusX: 1, radiusY: 1, force: 1 });
     await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(from)] });
     for (let step = 1; step <= 5; step++) {
@@ -307,12 +306,14 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   };
   // A tall narrow window keeps the task list with the log, so the panes are
   // the log and the tags, in that order.
-  await swipe(box.x + box.width * .82, box.x + box.width * .18);
+  // Clear of the dots at one end and the timer at the other.
+  await swipe(strip.x + strip.width * .6, strip.x + strip.width * .15);
   await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
-  await swipe(box.x + box.width * .18, box.x + box.width * .82);
+  // The turn is animated, so it is the settled position that matters.
+  await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
+  await swipe(strip.x + strip.width * .15, strip.x + strip.width * .6);
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
-  expect(await pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
+  await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
 });
 
 test('swipe log loads earlier dates infinitely and preserves its active tag filter', async ({ page }) => {

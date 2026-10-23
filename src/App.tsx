@@ -145,8 +145,11 @@ const TimerButton = styled.button<{ $running: boolean }>`
   &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
   &[aria-pressed='true']::before { border-color: var(--timer-running-ring); }
 `;
+// The strip above the panes is where a page turn comes from: it is the part of
+// the page that is not entries, and the entries keep the up-and-down of their
+// own list.
 const ShortHeader = styled.div`
-  height: 44px; flex-shrink: 0;
+  height: 44px; flex-shrink: 0; touch-action: pan-x;
 `;
 const MobileTabs = styled.div<{ $aside: boolean }>`
   /* Centred along the top while the sidebar keeps its own side. Once the tags
@@ -231,6 +234,9 @@ const LogViewport = styled.div`
   padding: 30px 12px 24px 8px; scrollbar-width: thin; scrollbar-color: var(--scrollbar) transparent;
   @media ${compactViewport} {
     min-height: 0; padding: 24px 2px 10px 0; scrollbar-width: none;
+    /* A touch that starts on the entries scrolls them and never turns the
+       page, so neither gesture has to be guessed at. */
+    touch-action: pan-y;
     &::-webkit-scrollbar { display: none; }
   }
 `;
@@ -321,6 +327,16 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const refreshResult = useRef<Promise<void> | null>(null);
   const loadedThrough = useRef<string | null>(null);
   const logViewport = useRef<HTMLDivElement>(null);
+  // A drag across the strip turns the page by one, as soon as it has gone far
+  // enough to mean it, and once per drag.
+  const turning = useRef<{ from: number; turned: boolean } | null>(null);
+  const turnPage = (at: number) => {
+    const start = turning.current;
+    if (!start || start.turned || Math.abs(at - start.from) < 32) return;
+    start.turned = true;
+    const index = views.indexOf(mobileView) + (at < start.from ? 1 : -1);
+    if (index >= 0 && index < views.length) selectMobileView(views[index]);
+  };
   useEffect(() => {
     const across = window.matchMedia(narrowViewport);
     const down = window.matchMedia(shortViewport);
@@ -638,7 +654,11 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     {!cramped.across && <TagTabs tags={data?.tags ?? []} active={activeTag} onSelect={tag => { void selectTag(tag); }} controls={sidebarControls} compactHover={hasHoverSidebar} />}
     <Main data-focus-surface>
       {paged ? <>
-        <ShortHeader>
+        <ShortHeader data-page-turn
+          onPointerDown={event => { turning.current = { from: event.clientX, turned: false }; }}
+          onPointerMove={event => turnPage(event.clientX)}
+          onPointerUp={() => { turning.current = null; }}
+          onPointerCancel={() => { turning.current = null; }}>
           <MobileTabs role="tablist" aria-label="Mobile views" $aside={views.includes('tags')}>
             {views.map(view => <MobileTab key={view} id={`mobile-tab-${view}`} type="button" role="tab"
               aria-controls={`mobile-panel-${view}`} aria-selected={mobileView === view} $active={mobileView === view}
