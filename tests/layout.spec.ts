@@ -306,12 +306,13 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   };
   // A tall narrow window keeps the task list with the log, so the panes are
   // the log and the tags, in that order.
-  // Clear of the dots at one end and the timer at the other.
-  await swipe(strip.x + strip.width * .6, strip.x + strip.width * .15);
+  // Straight across the dots and the timer: they answer taps, and a drag over
+  // them turns the page like anywhere else in the band.
+  await swipe(strip.x + strip.width * .95, strip.x + strip.width * .05);
   await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
   // The turn is animated, so it is the settled position that matters.
   await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
-  await swipe(strip.x + strip.width * .15, strip.x + strip.width * .6);
+  await swipe(strip.x + strip.width * .05, strip.x + strip.width * .95);
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
 });
