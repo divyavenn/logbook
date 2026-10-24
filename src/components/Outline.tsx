@@ -16,7 +16,7 @@ import { copySpannedDays, markdownBullet } from '../journalClipboard';
 import { useRangeEditing } from '../useRangeEditing';
 import { useTaskCompletion } from '../useTaskCompletion';
 import { useOutlineDraft } from '../useOutlineDraft';
-import type { Draft } from '../entryDrafts';
+import { hasDraftChanges, type Draft } from '../entryDrafts';
 import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
@@ -219,6 +219,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     const typed = snapshot.tags.filter(tag => !snapshot.hiddenTags.includes(tag));
     if (snapshot.id !== null || entryText(documentOf(snapshot)).trim() || typed.length) return false;
     persist(blank(records.current, false));
+    return true;
+  };
+  // A filtered view's own tag shows only while the entry is open, so an entry
+  // that has lost the caret closes rather than sitting open with the tag
+  // showing. Saved and unchanged, so closing it keeps nothing back.
+  const releaseOpenEntry = () => {
+    if (lock.current || !activeTag) return false;
+    const snapshot = current.current;
+    if (!snapshot.active || snapshot.mode !== 'edit' || snapshot.id === null || hasDraftChanges(snapshot)) return false;
+    persist(blank(records.current, composer));
     return true;
   };
 
@@ -862,7 +872,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         if (event?.relatedTarget instanceof Node && surface.current?.contains(event.relatedTarget)) { void save().catch(() => {}); return; }
         if (!lock.current && dismissEmptyDraft()) return;
         void save().then(() => {
-          if (!restoringFocus.current && current.current.clientId === blurredClientId && !surface.current?.contains(document.activeElement)) dismissEmptyDraft();
+          if (restoringFocus.current || current.current.clientId !== blurredClientId || surface.current?.contains(document.activeElement)) return;
+          if (!dismissEmptyDraft()) releaseOpenEntry();
         }).catch(() => {});
       }}
       onKeyDown={event => {

@@ -355,6 +355,70 @@ test('a filtered view withholds its tag until the entry is opened, and it keeps 
   await expect(full).toHaveText('before #anchored after more');
 });
 
+test('an entry that loses the caret withholds the filtered tag again', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'left open #closing', tags: ['closing'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#closing', exact: true }).click();
+  const row = page.getByRole('group', { name: /^left open/ });
+  await row.click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await expect(editor.locator('[data-tag="closing"]')).toBeVisible();
+  // Focus leaves the entry for the page itself: the entry closes, so its tag
+  // goes back to being withheld rather than staying on the line.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await expect(page.getByRole('group', { name: 'left open', exact: true })).toBeVisible();
+  await expect(page.locator('li[data-item-id]:not([data-item-id="draft"]) [data-tag="closing"]')).toHaveCount(0);
+});
+
+test('the composer in a filtered view opens in front of its tag', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Listed note #seeded', tags: ['seeded'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#seeded', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
+  await expect(composer).toBeFocused();
+  await expect(composer.locator('[data-tag="seeded"]')).toBeVisible();
+  // The caret waits in front of the seeded tag, so the first letter is written
+  // before it rather than behind it.
+  await page.keyboard.type('written first');
+  // The tag is a pill of its own, so the line reads as the text then the tag.
+  await expect(composer).toHaveText('written first#seeded');
+  await expect.poll(() => page.evaluate((date) => JSON.parse(localStorage.getItem(`still-draft-${date}`) ?? 'null')?.content, today))
+    .toBe('written first #seeded');
+});
+
+test('a press in the empty room of a seeded entry writes in front of the tag', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Listed note #pressed', tags: ['pressed'] } });
+  await request.post('/api/tasks', { data: { content: 'Listed task #pressed', tags: ['pressed'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#pressed', exact: true }).click();
+  const pressBehindTheTag = async (composer: ReturnType<typeof page.getByRole>) => {
+    const box = (await composer.boundingBox())!;
+    await page.mouse.click(box.x + box.width - 8, box.y + box.height / 2);
+  };
+  // Pressing past the end of a line holding nothing but its tag still writes
+  // in front of the tag, by mouse as much as by the caret that was waiting.
+  const note = page.getByRole('textbox', { name: 'New note', exact: true });
+  await pressBehindTheTag(note);
+  await page.keyboard.type('typed in the note');
+  await expect(note).toHaveText('typed in the note#pressed');
+  const task = page.getByRole('textbox', { name: 'New task', exact: true });
+  await pressBehindTheTag(task);
+  await page.keyboard.type('typed in the task');
+  await expect(task).toHaveText('typed in the task#pressed');
+  // A press on the tag itself still takes hold of it, so it can be removed.
+  await task.locator('[data-tag="pressed"]').click();
+  await expect(task.locator('[data-tag="pressed"]')).toHaveClass(/ProseMirror-selectednode/);
+});
+
 test('tag view lists matching entries only, with no events or focus time', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Matching note', tags: ['listed'] } });
