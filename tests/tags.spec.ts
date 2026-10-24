@@ -545,3 +545,25 @@ test('deleting the active tag in its own view takes the entry out of that view',
   await rail.hover(); await rail.getByRole('button', { name: 'logbook', exact: true }).click();
   await expect(page.getByRole('group', { name: 'filed here', exact: true })).toBeVisible();
 });
+
+test('a tag kept as text in a stored document still reads as a tag', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  // What an entry saved before its tag was committed looks like on disk.
+  const note = await (await request.post('/api/notes', { data: {
+    date: today, content: 'written then filed #loose', tags: ['loose'],
+    document: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'written then filed #loose' }] }] },
+  } })).json();
+  await page.goto('/');
+  const row = page.locator(`[data-item-id="${note.id}"]`);
+  // In the full logbook it is drawn as a tag, not left as a hash and a word.
+  await expect(row.locator('[data-tag="loose"]')).toBeVisible();
+
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#loose', exact: true }).click();
+  // In its own view it is withheld, rather than showing through as text.
+  const filtered = page.locator(`[data-item-id="${note.id}"]`);
+  await expect(filtered).toBeVisible();
+  await expect(filtered.locator('[data-tag="loose"]')).toHaveCount(0);
+  await expect(filtered).toHaveText(/^written then filed\s*$/);
+});
