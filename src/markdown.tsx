@@ -219,6 +219,32 @@ export function documentWithTags(content: string, tags: string[], hiddenTags: st
   return document;
 }
 
+// A tag is a node, never text. The editor leaves the one being typed as text
+// so the reader can keep typing it, so what gets stored, and what gets read
+// back, is put right here: in a stored document every tag is a node.
+export function withTagNodes(document: JSONContent): JSONContent {
+  const place = (node: JSONContent): JSONContent | JSONContent[] => {
+    if (node.type === 'codeBlock' || node.marks?.some(mark => mark.type === 'code' || mark.type === 'link')) return node;
+    if (node.text) {
+      const matches = tagMatches(node.text);
+      if (!matches.length) return node;
+      const parts: JSONContent[] = [];
+      let offset = 0;
+      for (const match of matches) {
+        if (match.from > offset) parts.push({ ...node, text: node.text.slice(offset, match.from) });
+        parts.push({ type: 'journalTag', attrs: { name: normalizeTag(match.name) } });
+        offset = match.to;
+      }
+      if (offset < node.text.length) parts.push({ ...node, text: node.text.slice(offset) });
+      return parts;
+    }
+    if (!node.content) return node;
+    return { ...node, content: node.content.flatMap(child => place(child)) };
+  };
+  const placed = place(document);
+  return Array.isArray(placed) ? document : placed;
+}
+
 // A tag the editor was never shown is still the entry's own. It joins the
 // document where the entry is written, once, rather than being re-derived from
 // a list of names on every read.
@@ -382,8 +408,11 @@ export const MarkdownContent = memo(function MarkdownContent({ document: stored,
     // A stored document needs no parsing. Rows written before documents were
     // kept still arrive as markdown, and are read the long way round.
     if (!stored) return documentWithTags(content, tags, hiddenTags);
+    // A document written before a tag was committed holds it as text. It reads
+    // as the tag it is either way.
+    const placed = withTagNodes(stored);
     const hidden = new Set(hiddenTags.map(normalizeTag));
-    return (hidden.size ? withoutTags(stored, hidden) : stored) ?? { type: 'doc' as const };
+    return (hidden.size ? withoutTags(placed, hidden) : placed) ?? { type: 'doc' as const };
   }, [stored, content, tags, hiddenTags]);
   // Explicit React elements only: raw HTML, scripts, images and unsafe links never execute.
   return <>{document.content?.map(renderNode)}</>;

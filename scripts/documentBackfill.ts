@@ -3,7 +3,7 @@
 // writes nothing else: the text stays exactly as it was written.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
-import { documentWithTags, serializeEntry } from '../src/markdown';
+import { documentWithTags, serializeEntry, withTagNodes } from '../src/markdown';
 import { normalizeTag } from '../src/tagSyntax';
 
 type Row = { id: number; content: string; tags: string; document: string | null };
@@ -84,14 +84,25 @@ if (!columns.length || !columns.some(column => column.name === 'document')) {
 }
 
 const rows = db.prepare('SELECT id, content, tags, document FROM entries').all() as unknown as Row[];
-let written = 0, already = 0, retagged = 0;
+let written = 0, already = 0, retagged = 0, repaired = 0;
 const dropped: { id: number; names: string[] }[] = [];
 const update = write
   ? db.prepare('UPDATE entries SET document = ?, tags = ? WHERE id = ?')
   : null;
 
 for (const row of rows) {
-  if (row.document) { already++; continue; }
+  if (row.document) {
+    // A document written before its tag was committed holds the tag as text.
+    // Reading it puts that right; so does this, once, on disk.
+    const stored = JSON.parse(row.document);
+    const placed = withTagNodes(stored);
+    if (JSON.stringify(placed) !== JSON.stringify(stored)) {
+      const tags = JSON.stringify([...new Set(serializeEntry(placed).tags.map(normalizeTag))]);
+      update?.run(JSON.stringify(placed), tags, row.id);
+      repaired++;
+    } else already++;
+    continue;
+  }
   const stored: string[] = JSON.parse(row.tags);
   const plan = planned({ content: row.content, tags: stored });
   if (plan.dropped.length) dropped.push({ id: row.id, names: plan.dropped });
@@ -107,6 +118,7 @@ for (const row of rows) {
 say(`entries            ${rows.length}`);
 say(`documents written  ${written}${write ? '' : ' (dry run)'}`);
 say(`already had one    ${already}`);
+say(`tags made nodes     ${repaired}`);
 say(`tag lists corrected ${retagged}`);
 for (const row of dropped) say(`  dropped from ${row.id}: ${row.names.map(name => '#' + name).join(' ')}`);
 if (!write) say('\nNothing was changed. Pass --write to apply.');

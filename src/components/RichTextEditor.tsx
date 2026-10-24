@@ -5,7 +5,7 @@ import { Markdown } from '@tiptap/markdown';
 import type { Mark, Node as DocumentNode } from '@tiptap/pm/model';
 import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state';
 import styled from 'styled-components';
-import { formattingExtensions, documentWithTags, serializeEntry, richTextStyles, safeHref } from '../markdown';
+import { formattingExtensions, documentWithTags, serializeEntry, withTagNodes, richTextStyles, safeHref } from '../markdown';
 import { Field, appear } from '../styles';
 import { Modal } from './Modal';
 import { useJournalContext } from '../JournalContext';
@@ -171,7 +171,8 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
     if (!doc.textContent.trim() && !tagged) return { content: '', tags: [] as string[], document: null };
     // The document the editor holds is the one that gets stored, hidden tags
     // included: the text and the tag names are both read back out of it.
-    const stored = doc.toJSON();
+    // The editor keeps a tag being typed as text; what it hands out does not.
+    const stored = withTagNodes(doc.toJSON());
     const entry = serializeEntry(stored);
     return { content: entry.content, tags: entry.tags, document: stored };
   };
