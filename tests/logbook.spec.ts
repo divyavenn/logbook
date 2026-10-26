@@ -332,13 +332,16 @@ test('loads older days automatically and saves edits to historical notes', async
   expect(timerBefore!.height).toBe(timerBefore!.width);
   await expect(timer).toHaveCSS('border-radius', '50%');
   await expect(page.getByRole('group', { name: 'History entry 1', exact: true })).toHaveCount(0);
-  expect(pageRequests.every(url => url.searchParams.get('limit') === '14')).toBe(true);
+  // Today is asked for on its own to open the page, and every ask after it is
+  // a whole page of days, never a page of some other size.
+  expect(pageRequests[0].searchParams.get('limit')).toBe('1');
+  expect(pageRequests.slice(1).every(url => url.searchParams.get('limit') === '14')).toBe(true);
   expect(pageRequests.some(url => url.searchParams.has('before'))).toBe(false);
   await page.getByRole('button', { name: 'Earlier days', exact: true }).scrollIntoViewIfNeeded();
   const oldNote = page.getByRole('group', { name: 'History entry 1', exact: true });
   await expect(oldNote).toBeAttached();
   expect(pageRequests.some(url => url.searchParams.has('before'))).toBe(true);
-  expect(pageRequests.every(url => url.searchParams.get('limit') === '14')).toBe(true);
+  expect(pageRequests.slice(1).every(url => url.searchParams.get('limit') === '14')).toBe(true);
   expect(await page.getByTestId('log-scroll').evaluate(el => el.scrollTop)).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(page.viewportSize()!.height);

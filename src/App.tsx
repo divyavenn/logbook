@@ -262,6 +262,10 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   // Paint the page we last saw on the first render, before anything is asked
   // of the network. A refresh replaces it as soon as one answers.
   const [data, setData] = useState<JournalData | null>(() => load ? cachedJournal(null) : null);
+  // What the page is showing, for a load that has to know whether it is
+  // changing the view or refreshing the one already on screen.
+  const shown = useRef<JournalData | null>(data);
+  shown.current = data;
   const [night, setNight] = useState(() => storage.getItem('still-theme') === 'night');
   useEffect(() => {
     document.documentElement.dataset.theme = night ? 'night' : 'day';
@@ -436,8 +440,25 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     refreshRequest.current = request;
     const current = () => sequence === generation.current && !request.signal.aborted;
     const tag = tagRef.current;
+    // A view the reader is waiting for opens on today alone, which is one
+    // day's worth of asking, and the earlier days arrive behind it. The page
+    // is whole from the first paint: the day being written is there, with the
+    // caret in it, while the rest of the logbook is still on its way. A
+    // refresh of the view already on screen is the one request it always was.
+    const changing = shown.current?.tag !== tag;
     let response: JournalData;
     try {
+      if (changing) {
+        const opening = await getJournal({ limit: 1, tag }, request.signal);
+        if (!current()) return;
+        const names = opening.tags ?? [];
+        if (opening.days[0]?.date === opening.today && (!tag || names.some(name => name.name === tag))) {
+          clockOffset.current = new Date(opening.server_time).getTime() - Date.now();
+          // No cursor yet: the earlier days are already being fetched, and the
+          // log must not ask for them a second time on its own.
+          setData({ ...opening, next_cursor: null });
+        }
+      }
       response = await getJournal({ limit: JOURNAL_PAGE_SIZE, tag }, request.signal);
       if (!current()) return;
       const recovered = await recoverEarlierDrafts(response.today);
