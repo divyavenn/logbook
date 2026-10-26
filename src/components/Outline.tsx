@@ -10,7 +10,7 @@ import { documentUndo, editDocument, historyShortcutDirection } from '../documen
 import { useEntryGestures, type EntrySelection } from '../useEntryGestures';
 import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
-import { entryLinkLabel, entryLinkUrl } from '../entryLinks';
+import { entryLinkUrl } from '../entryLinks';
 import { endEntryDrag, entryDragLeft, incomingEntryDrag, moveEntryToDay, startEntryDrag, takeEntryDrag, type DragPlacement, type EntryDrag } from '../entryDrag';
 import { domTextOffset } from '../textSelection';
 import { LOG_WASH_HEIGHT } from '../layout';
@@ -187,6 +187,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   }, [items, archived]);
   useLayoutEffect(() => {
     if (!target || kind !== 'mixed' && target.kind !== kind) return;
+    let settling = 0;
     const item = records.current.find(row => row.id === target.id);
     if (!item) return;
     const parents = ancestorIds(records.current, item.parent_id);
@@ -195,18 +196,39 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const row = document.querySelector<HTMLElement>(`[data-kind="${target.kind}"][data-item-id="${target.id}"] [role="group"]`);
       if (!row) return;
       // The entry led to leads: it comes to rest at the top of the view, just
-      // clear of the wash, and the page travels there rather than cutting to it.
-      const smooth = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+      // clear of the wash, and the page travels the last of the way there
+      // rather than cutting to it.
+      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const pane = scrollingParent(row);
-      if (pane) {
-        pane.scrollTo({
-          top: pane.scrollTop + row.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT,
-          behavior: smooth,
-        });
-      } else row.scrollIntoView({ block: 'start', behavior: smooth });
       row.focus({ preventScroll: true });
+      if (!pane) { row.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' }); return; }
+      // The page keeps growing underneath this: the day arrives, and the days
+      // around it load as the view passes them, so where the entry sits is not
+      // yet settled. The aim is taken again until it is, each correction a
+      // short one, so the arrival reads as a single movement.
+      let aimed = 0;
+      const aim = () => {
+        const offset = row.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT;
+        const rest = Math.max(0, Math.min(pane.scrollTop + offset, pane.scrollHeight - pane.clientHeight));
+        if (Math.abs(rest - pane.scrollTop) > 1) {
+          if (still) pane.scrollTop = rest;
+          else {
+            // Years of logbook is too far to travel over, so the page is put
+            // within a screen of the entry first and glides the rest: the
+            // reader always sees the same short arrival, from the side the
+            // entry is coming from.
+            const approach = pane.clientHeight * .85;
+            if (!aimed) pane.scrollTop = rest > pane.scrollTop
+              ? Math.max(pane.scrollTop, rest - approach)
+              : Math.min(pane.scrollTop, rest + approach);
+            pane.scrollTo({ top: rest, behavior: 'smooth' });
+          }
+        }
+        if (++aimed < 5) settling = window.setTimeout(aim, 420);
+      };
+      aim();
     }));
-    return () => cancelAnimationFrame(frame);
+    return () => { cancelAnimationFrame(frame); window.clearTimeout(settling); };
   }, [target, kind]);
   const mounted = useRef(true);
   const input = useRef<RichTextHandle>(null);
@@ -717,12 +739,13 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       return;
     }
     const url = entryLinkUrl({ kind: row.kind, id, signature });
-    // The glimpse is of what was written, not of how it was filed, so the tags
-    // on the entry are left out of it.
-    const label = entryLinkLabel(markdownText(row.content, row.tags ?? []));
+    // The address goes on the clipboard as itself, in both flavours. Pasted
+    // here it is a bare link, which is what reads as a glimpse of the entry —
+    // and a glimpse that is taken when it is read, so it follows the entry if
+    // the writing changes. A label is something the writer gives it instead.
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.textContent = label;
+    anchor.textContent = url;
     try {
       if (typeof ClipboardItem === 'function' && navigator.clipboard?.write) {
         await navigator.clipboard.write([new ClipboardItem({

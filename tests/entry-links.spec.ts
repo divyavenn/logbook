@@ -37,6 +37,30 @@ test('a held entry copies a link to itself, by shortcut and by glyph', async ({ 
   expect(Math.abs(after.x - before.x)).toBeLessThan(2);
 });
 
+test('a copied link pasted into an entry reads as a glimpse of it', async ({ page, context, request }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  // The tag leads the text, so a glimpse that kept tags would begin with it.
+  await request.post('/api/notes', { data: { date: today, content: '#filed Pointed at from a later note', tags: ['filed'] } });
+  await page.goto('/');
+  await hold(page, '#filed Pointed at from a later note');
+  await page.keyboard.press('Meta+Shift+k');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(LINK);
+
+  // Pasted into another entry it is a bare link, which is what reads as a
+  // glimpse: a few words of the entry in a pill, and no tag among them.
+  await page.keyboard.press('Escape');
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
+  await composer.click();
+  await composer.pressSequentially('as written in ');
+  await page.keyboard.press('Meta+v');
+  await composer.press('Enter');
+  const reference = page.getByRole('group', { name: /^as written in/ }).locator('a[data-entry-link]');
+  await expect(reference).toHaveText('Pointed at from a');
+  await expect(reference).toHaveCSS('border-radius', '999px');
+  await expect(reference.locator('span')).toHaveCSS('mask-image', /linear-gradient/);
+});
+
 test('the link glyph is offered only for a held entry', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Not held' } });
