@@ -277,15 +277,41 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (!selection || selection.isCollapsed || !selection.rangeCount) return true;
       return !(written(selection.anchorNode) && written(selection.focusNode));
     };
-    const onFocus = () => {
-      if (defaultKind === 'notes' && composer && !document.querySelector('dialog[open]') && document.activeElement === document.body && unselected()) input.current?.focus({ preventScroll: true });
+    const claim = () => {
+      if (!mounted.current || defaultKind !== 'notes' || !composer) return;
+      if (document.querySelector('dialog[open]') || !unselected()) return;
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      input.current?.focus({ preventScroll: true });
     };
+    const onFocus = () => claim();
+    // What holds the caret now, if it is anything the reader chose. A rebuilt
+    // view must not take it off an entry or a field: those keep it, and the
+    // composer goes without.
+    const chosen = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || active === document.body) return null;
+      return active.closest('[data-outline-key], [contenteditable], input, textarea, dialog') ? 'keeps' : active;
+    };
+    let waiting: HTMLElement | null = null;
+    let release: (() => void) | null = null;
+    let pending = 0;
     const frame = requestAnimationFrame(() => {
-      if (defaultKind === 'notes' && composer && unselected()) input.current?.focus({ preventScroll: true });
+      const holder = chosen();
+      if (holder === null) { claim(); return; }
+      if (holder === 'keeps') return;
+      // A page control still holds the caret, the tag rail that was just used
+      // among them. It is waited out rather than talked over: the panel closes,
+      // the control lets go, and the composer is ready without having taken
+      // anything from the reader.
+      waiting = holder;
+      release = () => { pending = requestAnimationFrame(claim); };
+      waiting.addEventListener('blur', release, { once: true });
     });
     window.addEventListener('focus', onFocus);
     return () => {
-      mounted.current = false; cancelAnimationFrame(frame);
+      mounted.current = false; cancelAnimationFrame(frame); cancelAnimationFrame(pending);
+      if (waiting && release) waiting.removeEventListener('blur', release);
       window.removeEventListener('focus', onFocus);
     };
   }, [composer, kind, save]);

@@ -358,6 +358,24 @@ test('a filtered view withholds its tag until the entry is opened, and it keeps 
   await expect(full).toHaveText('before #anchored after more');
 });
 
+test('an entry focused as a filtered view settles keeps the caret', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const note = await (await request.post('/api/notes', { data: { date: today, content: 'Holds the caret', tags: ['settling'] } })).json();
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#settling', exact: true }).click();
+  const row = page.locator(`[data-item-id="${note.id}"] > div > [role="group"]`);
+  await expect(row).toBeVisible();
+  await row.focus();
+  // The composer takes the caret only when it is free. The view is still
+  // settling behind this row, and rebuilding it must not pull the caret off
+  // the entry the reader just chose.
+  await expect(row).toBeFocused();
+  await page.waitForTimeout(500);
+  await expect(row).toBeFocused();
+});
+
 test('an entry that loses the caret withholds the filtered tag again', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'left open #closing', tags: ['closing'] } });
