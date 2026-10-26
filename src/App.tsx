@@ -6,7 +6,7 @@ import { recoverEarlierDrafts } from './entryDrafts';
 import { storage } from './storage';
 import { FocusSound } from './audio';
 import type { EntryKind, JournalData, JournalDay } from './types';
-import { Muted, TextButton, edgeWash, press } from './styles';
+import { Muted, TextButton, applyTheme, edgeWash, press } from './styles';
 import { Journal, Tasks } from './components/Journal';
 import { TagTabs } from './components/TagTabs';
 import { JournalContext, flushDrafts } from './JournalContext';
@@ -272,7 +272,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   shown.current = data;
   const [night, setNight] = useState(() => storage.getItem('still-theme') === 'night');
   useEffect(() => {
-    document.documentElement.dataset.theme = night ? 'night' : 'day';
+    applyTheme(night);
     storage.setItem('still-theme', night ? 'night' : 'day');
   }, [night]);
   const [activeTag, setActiveTag] = useState<string | null>(null);

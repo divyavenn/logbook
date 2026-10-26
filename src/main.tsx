@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import styled from 'styled-components';
 import App from './App';
-import { GlobalStyle } from './styles';
+import { GlobalStyle, applyTheme } from './styles';
 import { PasswordGate } from './components/PasswordGate';
 import { installTouchHaptics } from './haptics';
 import { getAuthStatus, getSharedEntry, login } from './api';
@@ -11,7 +11,7 @@ import { parseEntryLink } from './entryLinks';
 import { LockedEntryPreview } from './components/LockedEntryPreview';
 import type { SharedEntry } from './types';
 
-document.documentElement.dataset.theme = storage.getItem('still-theme') === 'night' ? 'night' : 'day';
+applyTheme(storage.getItem('still-theme') === 'night');
 
 const AppSurface = styled.div<{ $blurred: boolean; $blocked: boolean }>`
   min-height: 100dvh; filter: blur(${({ $blurred }) => $blurred ? '7px' : '0'});
