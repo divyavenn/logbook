@@ -2,7 +2,8 @@
 import json
 import re
 import unicodedata
-from .entry_kinds import EntryKind, stored_kind
+from .entry_kinds import API_KINDS, EntryKind, stored_kind
+from .sharing import entry_signature
 
 NAME = re.compile(r'[\w][\w-]{0,63}', re.UNICODE)
 
@@ -24,6 +25,12 @@ def entry_dict(row):
         result['tags'] = json.loads(result['tags'])
     if isinstance(result.get('document'), str):
         result['document'] = json.loads(result['document'])
+    # The signature travels with the entry so that copying a link to it is
+    # something the page can do on its own, with nothing to ask for first.
+    # Sessions come through here too, and have no kind to sign.
+    kind = API_KINDS.get(result.get('kind'), result.get('kind'))
+    if kind in API_KINDS.values() and isinstance(result.get('id'), int):
+        result['signature'] = entry_signature(kind, result['id'])
     return result
 
 

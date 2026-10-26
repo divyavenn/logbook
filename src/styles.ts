@@ -1,5 +1,15 @@
 import styled, { createGlobalStyle, css } from 'styled-components';
 
+// The paper at the very top of the page, which the status bar and the browser
+// chrome take their colour from. Day and night are the reader's choice here
+// rather than the system's, so the tag is kept in step by hand.
+export const PAPER = { day: '#f2f1ed', night: '#011627' } as const;
+export function applyTheme(night: boolean): void {
+  document.documentElement.dataset.theme = night ? 'night' : 'day';
+  const bar = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (bar) bar.content = night ? PAPER.night : PAPER.day;
+}
+
 export const GlobalStyle = createGlobalStyle`
   @property --task-progress { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-variable.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: swap; }
@@ -31,11 +41,24 @@ export const GlobalStyle = createGlobalStyle`
     --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5;
   }
   * { box-sizing: border-box; }
-  html { background: var(--paper); -webkit-font-smoothing: antialiased; }
+  html {
+    background: var(--paper); -webkit-font-smoothing: antialiased;
+    /* A touch is answered by the page's own press states, not by the grey
+       flash the browser paints over whatever was tapped. */
+    -webkit-tap-highlight-color: transparent;
+    /* Landscape must not inflate the writing. */
+    -webkit-text-size-adjust: 100%;
+  }
   body { margin: 0; color: var(--ink); background: var(--paper); font-family: 'Sohne', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 300; line-height: 1.4; transition: background-color 160ms ease-out, color 160ms ease-out; }
   body:has(dialog[open]) { overflow: hidden; }
   button, input, textarea, select { font: inherit; color: inherit; }
-  button { -webkit-tap-highlight-color: transparent; }
+  /* A control is not writing: a press is answered at once rather than after
+     the wait for a second tap, and a long press on one takes hold of nothing.
+     Entry text is writing, and stays selectable. */
+  button, a, [role="button"], summary {
+    touch-action: manipulation;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  }
   button:not(:disabled), summary { cursor: pointer; }
   button:disabled { cursor: wait; opacity: .5; }
   :focus, :focus-visible { outline: none; }
@@ -45,6 +68,11 @@ export const GlobalStyle = createGlobalStyle`
   p, li { text-wrap: pretty; }
   svg { flex-shrink: 0; stroke-width: 1.5; }
   a { color: inherit; }
+  /* Under 16px, a field zooms the page as it takes focus, and does not zoom
+     back. The fields keep their size where there is a pointer to read them. */
+  @media (pointer: coarse) {
+    input:not([type='range']), textarea, select { font-size: 16px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
   }

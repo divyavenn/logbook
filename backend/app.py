@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import date as CalendarDate, datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
 import hmac
+import re
 import json
 import os
 import sqlite3
@@ -23,11 +24,12 @@ from .history import snapshot, record, restore
 from .agent import AgentJournal, AgentQuery, DISCOVERY_LINKS, READ_HEADERS, markdown_journal, read_journal
 from .calendars import CalendarLoadError, calendar_content, calendar_host, calendar_name, drop_calendar, load_calendar
 from .calendar_store import events_from_subscriptions
-from .entries import required, check_revision, move_entry, create_entry, update_entry
+from .entries import required, check_revision, entry_with_date, move_entry, create_entry, update_entry
 from .task_service import finish_task, root_task, archive_task_tree, finish_ready_parents
-from .entry_kinds import api_kind
+from .entry_kinds import EntryKind, api_kind, stored_kind
+from .sharing import signature_valid
 from .documents import edit_document as apply_document_edits
-from .responses import (AuthStatusOutput, CompletionOutput, DailyStatsOutput, DocumentOutput, EntryOutput, ExportOutput, HealthOutput, JournalOutput, ReopenOutput, RestoredOutput, SearchOutput, SessionOutput, StatsOutput, TagOutput, TaskOutput, TimerOutput)
+from .responses import (AuthStatusOutput, CompletionOutput, DailyStatsOutput, DocumentOutput, EntryOutput, ExportOutput, HealthOutput, JournalOutput, ReopenOutput, RestoredOutput, SearchOutput, SessionOutput, SharedEntryOutput, StatsOutput, TagOutput, TaskOutput, TimerOutput)
 from .models import (PasswordLogin, Content, NewEntry, NewNote, EntryLocation, SessionEdit, StopTimer, CalendarSubscriptionInput, CalendarSubscriptionOutput, DocumentBatch, HistoryDirection, HistoryBatch, ReopenTask)
 
 
@@ -61,6 +63,10 @@ def auth_enabled():
 AUTH_COOKIE = 'still_session'
 AUTH_COOKIE_AGE = int(timedelta(days=30).total_seconds())
 PUBLIC_AUTH_PATHS = {'/api/health', '/api/auth/status', '/api/auth/login'}
+# A shared link reads one entry without the password. Everything it needs is in
+# the path, because this is decided before a route has been chosen and before
+# any body has been read. The signature is still checked by the route itself.
+SHARE_PATH = re.compile(r'^/api/share/(?:notes|tasks)/[0-9]+/[0-9a-f]{16}$')
 
 
 def auth_token(password):
@@ -79,7 +85,7 @@ def valid_auth(request, password):
 async def authenticate(request: Request, call_next):
     path = request.url.path
     protected = path.startswith('/api/') or path == '/journal.md'
-    if not auth_enabled() or not protected or path in PUBLIC_AUTH_PATHS:
+    if not auth_enabled() or not protected or path in PUBLIC_AUTH_PATHS or SHARE_PATH.fullmatch(path):
         return await call_next(request)
     password = os.environ.get('STILL_AUTH_PASSWORD', '')
     if not valid_auth(request, password):
@@ -335,6 +341,37 @@ def add_note(body: NewNote):
             return {**update_entry(db, entry_dict(existing), body, now), 'date': existing['date']}
         row = create_entry(db, 'notes', body, now, day=body.date, client_id=body.client_id, parent_id=body.parent_id, after_id=body.after_id)
         return {**row, 'date': str(body.date)}
+
+
+@app.get("/api/entries/{kind}/{item_id}", response_model=EntryOutput, response_model_exclude_unset=True)
+def read_entry(kind: EntryKind, item_id: int):
+    """One entry, and the day it is filed under. A link carries no date."""
+    with connection() as db:
+        row = entry_with_date(db, item_id)
+        if row['kind'] != stored_kind(kind):
+            raise HTTPException(404, "That item no longer exists.")
+        return row
+
+
+@app.get("/api/share/{kind}/{item_id}/{signature}", response_model=SharedEntryOutput)
+def shared_entry(kind: EntryKind, item_id: int, signature: str):
+    """An entry and what is written beneath it, to whoever holds the link.
+
+    Read without the password, so it gives up one entry and no more: nothing
+    of the day around it, the other tags, or the list of things to do. A
+    signature that does not answer is a miss rather than a refusal, so holding
+    the wrong one tells you nothing about what is there.
+    """
+    if not signature_valid(kind, item_id, signature):
+        raise HTTPException(404, "That item no longer exists.")
+    with connection() as db:
+        row = entry_with_date(db, item_id)
+        if row['kind'] != stored_kind(kind):
+            raise HTTPException(404, "That item no longer exists.")
+        shown = [entry for entry, _ in descendants(db, kind, item_id)]
+        shared = [{**entry_dict(entry), 'kind': kind} for entry in shown]
+        # The entry stands on its own here, whatever it hangs from at home.
+        return {'date': row['date'], 'entry': {**shared[0], 'parent_id': None}, 'children': shared[1:]}
 
 
 @app.patch("/api/notes/{note_id}", response_model=EntryOutput, response_model_exclude_unset=True)
@@ -701,6 +738,12 @@ if dist.is_dir():
                 choices.append((quality, -index, media))
         preferred = max(choices)[2] if choices else 'text/html'
         headers = {**READ_HEADERS, 'Vary': 'Accept'}
+        # Asked for as a document, this route is the logbook itself and is
+        # protected like the rest of it. Asked for as a page, it is the shell,
+        # which has to load unlocked or there is nothing to ask the password in.
+        if preferred in ('text/markdown', 'application/json') and auth_enabled() \
+                and not valid_auth(request, os.environ.get('STILL_AUTH_PASSWORD', '')):
+            return JSONResponse({'detail': 'Password required.'}, status_code=401, headers={'Vary': 'Accept'})
         if preferred == 'text/markdown':
             return MarkdownResponse(markdown_journal(agent_snapshot(query)), headers=headers)
         if preferred == 'application/json':

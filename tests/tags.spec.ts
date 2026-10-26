@@ -299,10 +299,14 @@ test('a selection delete in tag view leaves no blank tagged rows behind', async 
   const first = await post('Range first', ['ranged']);
   const second = await post('Range second', ['ranged', 'other']);
   await post('Range stays', ['ranged']);
+  await post('Range unmatched', []);
   await page.goto('/');
   const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
   await rail.hover();
   await rail.getByRole('button', { name: '#ranged', exact: true }).click();
+  // These entries are in both views; the unmatched one says when the filtered
+  // one has taken over, so the selection is made in the view under test.
+  await expect(page.getByRole('group', { name: 'Range unmatched', exact: true })).toHaveCount(0);
   const written = page.locator(`[data-item-id="${first.id}"] > div > [role="group"]`);
   await expect(written).toBeVisible();
   // The selection has to belong to the page, not to the open composer.
@@ -326,7 +330,8 @@ test('a selection delete in tag view leaves no blank tagged rows behind', async 
   }).not.toContain(first.id);
   const notes = (await (await request.get('/api/export')).json()).notes as Array<{ id: number; content: string }>;
   expect(notes.some(note => note.id === second.id)).toBe(false);
-  expect(notes.map(note => note.content)).toEqual(['Range stays']);
+  // The unmatched entry was never part of the selection, and stays as it was.
+  expect(notes.map(note => note.content).sort()).toEqual(['Range stays', 'Range unmatched']);
 });
 
 test('a filtered view withholds its tag until the entry is opened, and it keeps its place', async ({ page, request }) => {
@@ -361,10 +366,14 @@ test('a filtered view withholds its tag until the entry is opened, and it keeps 
 test('an entry focused as a filtered view settles keeps the caret', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   const note = await (await request.post('/api/notes', { data: { date: today, content: 'Holds the caret', tags: ['settling'] } })).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Only in the whole logbook' } });
   await page.goto('/');
   const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
   await rail.hover();
   await rail.getByRole('button', { name: '#settling', exact: true }).click();
+  // The entry is in both views, so the filtered one has to have arrived before
+  // this row is the row the reader chose: the unmatched entry says when.
+  await expect(page.getByRole('group', { name: 'Only in the whole logbook', exact: true })).toHaveCount(0);
   const row = page.locator(`[data-item-id="${note.id}"] > div > [role="group"]`);
   await expect(row).toBeVisible();
   await row.focus();

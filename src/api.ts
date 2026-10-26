@@ -1,8 +1,9 @@
 import * as decode from './apiDecoders';
-import { array, boolean, object, type Decoder } from './validation';
+import { array, boolean, nullable, object, text, type Decoder } from './validation';
+import type { EntryLink } from './entryLinks';
 import type { DocumentChange } from './entryChanges';
 import { readStored, storage } from './storage';
-import type { CalendarSubscription, CompletionResult, DocumentResult, JournalData, ReopenResult, SearchResults, Session, SessionInput, Stats } from './types';
+import type { CalendarSubscription, CompletionResult, DocumentResult, EntryKind, JournalData, ReopenResult, SearchHit, SearchResults, Session, SessionInput, SharedEntry, Stats } from './types';
 
 export { normalizeJournal } from './apiDecoders';
 
@@ -85,6 +86,14 @@ export async function restoreDocumentHistory(operations: readonly string[], redo
 }
 export function searchEntries(query: string, offset = 0, signal?: AbortSignal): Promise<SearchResults> {
   return decoded(`/search?${new URLSearchParams({ q: query, offset: String(offset) })}`, decode.search, 'GET', undefined, signal);
+}
+export function getEntry(kind: EntryKind, id: number, signal?: AbortSignal): Promise<SearchHit> {
+  return decoded(`/entries/${kind}/${id}`, value => ({ ...decode.entry(value), date: nullable(object(value).date, text) }), 'GET', undefined, signal);
+}
+// Read with the link's own signature, so it answers whether or not the reader
+// has the password. A link that does not sign is a miss, like a missing entry.
+export function getSharedEntry(link: EntryLink, signal?: AbortSignal): Promise<SharedEntry> {
+  return decoded(`/share/${link.kind}/${link.id}/${link.signature}`, decode.sharedEntry, 'GET', undefined, signal);
 }
 export function getStats(start: string, end: string, signal?: AbortSignal): Promise<Stats> {
   return decoded(`/stats?${new URLSearchParams({ start, end })}`, decode.stats, 'GET', undefined, signal);

@@ -159,6 +159,19 @@ export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done:
   }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
+// Offered only while an entry is held: copying a link to it is something you
+// ask for about one entry, and the rest of the time the line stays bare.
+export const LinkCopy = styled.button`
+  display: none; align-items: center; justify-content: center;
+  width: 40px; min-width: 40px; height: var(--entry-row-height);
+  padding: 0; border: 0; background: transparent; border-radius: 50%; color: var(--muted);
+  transition: color 140ms ease-out, transform 120ms ease-out;
+  &:active { transform: scale(.96); }
+  @media (hover: hover) { &:hover { color: var(--link); } }
+  svg { width: 14px; height: 14px; translate: 0 var(--entry-marker-offset); }
+  li[data-gesture-selected] > div > & { display: flex; }
+  @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }
+`;
 export const Text = styled.div<{ $done?: boolean; $action?: boolean }>`
   ${richTextStyles}; cursor: text;
   flex: ${({ $action }) => $action ? '0 1 auto' : '1'}; min-width: 0; min-height: var(--entry-row-height); padding: var(--entry-padding); border: 0; background: transparent; color: var(--ink);

@@ -29,6 +29,19 @@ def required(db, table, item_id):
     return entry_dict(row)
 
 
+def entry_with_date(db, item_id):
+    """An entry and the day it is filed under, by ID alone.
+
+    A link to an entry carries no date, and the date is what says which page of
+    the logbook to open. Left join: an unfinished task is filed under no day.
+    """
+    row = db.execute('SELECT entries.*, days.date FROM entries '
+                     'LEFT JOIN days ON entries.day_id = days.id WHERE entries.id = ?', (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "That item no longer exists.")
+    return entry_dict(row)
+
+
 def update_entry(db: sqlite3.Connection, row, value: EntryText, now: str):
     tags = value.tags if value.tags is not None else row['tags']
     # A write without a document leaves the stored one alone rather than

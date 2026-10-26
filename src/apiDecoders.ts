@@ -1,5 +1,5 @@
 import { ENTRY_KINDS, type CalendarEvent, type CalendarSubscription, type CompletionResult, type DayMetrics, type DocumentResult,
-  type EntryDocument, type EntryKind, type JournalData, type JournalDay, type OutlineItem, type ReopenResult, type SearchResults, type Session, type Stats, type Task } from './types';
+  type EntryDocument, type EntryKind, type JournalData, type JournalDay, type OutlineItem, type ReopenResult, type SearchResults, type Session, type SharedEntry, type Stats, type Task } from './types';
 import { array, boolean, integer, nonnegative, nullable, object, optional, positiveId, strings, text } from './validation';
 
 export function entryKind(value: unknown, fallback: EntryKind): EntryKind {
@@ -28,6 +28,9 @@ export function entry(value: unknown, fallback: EntryKind = 'notes'): OutlineIte
     client_id: nullable(row.client_id, text), completed_at: nullable(row.completed_at, text),
     child_count: row.child_count == null ? undefined : nonnegative(row.child_count),
     completed_child_count: row.completed_child_count == null ? undefined : nonnegative(row.completed_child_count),
+    // Signs a link to this entry. Absent on a row saved while offline, which
+    // has no link to copy until the server has seen it.
+    signature: optional(row.signature, text, ''),
   };
 }
 export function task(value: unknown): Task {
@@ -95,6 +98,10 @@ export function search(value: unknown): SearchResults {
   const row = object(value);
   return { results: array(row.results, value => ({ ...entry(value), date: nullable(object(value).date, text) })),
     next_offset: nullable(row.next_offset, integer) };
+}
+export function sharedEntry(value: unknown): SharedEntry {
+  const row = object(value);
+  return { date: nullable(row.date, text), entry: entry(row.entry), children: array(row.children, value => entry(value)) };
 }
 export function stats(value: unknown): Stats {
   const row = object(value);
