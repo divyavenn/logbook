@@ -14,6 +14,7 @@ import { TagDecorations, commitTypedTags, selectTypedTag } from '../tagEditor';
 import { documentUndo, historyShortcutDirection } from '../documentHistory';
 import { entryError } from '../entryFeedback';
 import { textPositions, type TextOffsets } from '../textSelection';
+import { ENTRY_LINK_EVENT, parseEntryLink } from '../entryLinks';
 import { Code2, IndentDecrease, IndentIncrease, Link2 } from 'lucide-react';
 import type { EntryFormat } from '../entryFormatting';
 
@@ -257,7 +258,11 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
           const href = anchor && safeHref(anchor.getAttribute('href') ?? '');
           if (!href) return false;
           event.preventDefault(); event.stopPropagation();
-          window.open(href, '_blank', 'noopener,noreferrer');
+          // A link to an entry names somewhere on this page, so it is followed
+          // here rather than opened as a second copy of the journal.
+          const entry = parseEntryLink(href);
+          if (entry) window.dispatchEvent(new CustomEvent(ENTRY_LINK_EVENT, { detail: { kind: entry.kind, id: entry.id } }));
+          else window.open(href, '_blank', 'noopener,noreferrer');
           return true;
         },
         input(view) {
@@ -439,7 +444,9 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
         if (mod && event.shiftKey && !event.altKey && event.key.toLowerCase() === 'c') {
           event.preventDefault(); editor?.commands.toggleCode(); return true;
         }
-        if (mod && event.key.toLowerCase() === 'k') {
+        // Shifted, this is the shortcut for copying a link to the entry, which
+        // the outline answers.
+        if (mod && !event.shiftKey && event.key.toLowerCase() === 'k') {
           event.preventDefault();
           openLink('shortcut');
           return true;

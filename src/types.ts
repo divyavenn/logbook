@@ -22,6 +22,9 @@ export type OutlineItem = {
   completed_at?: string | null;
   child_count?: number;
   completed_child_count?: number;
+  // Signs a link to this entry; see src/entryLinks.ts. Empty until the server
+  // has seen the entry, so an entry saved offline has no link to copy yet.
+  signature?: string;
 };
 
 export type JournalEntry = OutlineItem;
@@ -76,6 +79,13 @@ export type JournalData = {
 };
 
 export type SearchHit = OutlineItem & { date: string | null };
+// An entry as a link to it shows it, to a reader who has only the link: the
+// writing, what is written beneath it, and the day it was written on.
+export type SharedEntry = {
+  date: string | null;
+  entry: OutlineItem;
+  children: OutlineItem[];
+};
 export type SearchResults = { results: SearchHit[]; next_offset: number | null };
 export type SessionInput = { started_at: string; duration_seconds: number };
 export type CompletionResult = { task_ids: number[]; completed_at: string; items: Task[] };

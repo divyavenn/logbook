@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 module = importlib.import_module("backend.app")
+sharing = importlib.import_module("backend.sharing")
 calendar_module = importlib.import_module("backend.calendars")
 NOW = datetime(2026, 9, 16, 18, tzinfo=timezone.utc)
 
@@ -425,3 +426,67 @@ def test_markdown_roundtrips_through_sqlite_and_task_completion(client, content)
     completed = next(row for row in exported["tasks"] if row["id"] == task["id"])
     assert completed["content"] == content
     assert completed["completed_at"]
+
+
+def test_a_signed_link_reads_one_entry_without_the_password(client, monkeypatch):
+    parent = client.post('/api/notes', json={'date': '2026-09-16', 'content': 'The shared one', 'tags': ['shared']}).json()
+    client.post('/api/notes', json={'date': '2026-09-16', 'content': 'Beneath it', 'parent_id': parent['id']})
+    client.post('/api/notes', json={'date': '2026-09-16', 'content': 'A neighbour'})
+    # The signature travels with the entry, so copying a link asks for nothing.
+    signature = parent['signature']
+    assert len(signature) == 16 and all(c in '0123456789abcdef' for c in signature)
+    assert sharing.entry_signature('notes', parent['id']) == signature
+    assert sharing.entry_signature('tasks', parent['id']) != signature
+
+    monkeypatch.setenv('STILL_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('STILL_AUTH_PASSWORD', 'private-test-password')
+    # The password is the key, so a link signed before it was set is not one.
+    assert client.get(f'/api/share/notes/{parent["id"]}/{signature}').status_code == 404
+    signed = sharing.entry_signature('notes', parent['id'])
+    assert client.get('/api/journal?timezone=UTC').status_code == 401
+    assert client.get(f'/api/entries/notes/{parent["id"]}').status_code == 401
+
+    shared = client.get(f'/api/share/notes/{parent["id"]}/{signed}')
+    assert shared.status_code == 200
+    body = shared.json()
+    assert body['entry']['content'] == 'The shared one'
+    assert [child['content'] for child in body['children']] == ['Beneath it']
+    assert body['date'] == '2026-09-16'
+    # One entry, and nothing of what surrounds it.
+    assert 'A neighbour' not in shared.text
+    assert 'tasks' not in body and 'tags' not in body
+    assert 'day_id' not in body['entry']
+
+    # A signature that does not answer is a miss, so holding the wrong one says
+    # nothing about whether the entry is there.
+    forged = ('1' if signed[0] == '0' else '0') + signed[1:]
+    assert client.get(f'/api/share/notes/{parent["id"]}/{forged}').status_code == 404
+    assert 'The shared one' not in client.get(f'/api/share/notes/{parent["id"]}/{forged}').text
+    assert client.get(f'/api/share/notes/{parent["id"]}/{"f" * 16}').status_code == 404
+    assert client.get(f'/api/share/tasks/{parent["id"]}/{signed}').status_code == 404
+    # Changing the password takes back every link that was ever shared.
+    monkeypatch.setenv('STILL_AUTH_PASSWORD', 'a different password')
+    assert client.get(f'/api/share/notes/{parent["id"]}/{signed}').status_code == 404
+
+
+def test_an_entry_reads_with_the_day_it_is_filed_under(client):
+    note = client.post('/api/notes', json={'date': '2026-09-16', 'content': 'Filed today'}).json()
+    task = client.post('/api/tasks', json={'content': 'Not filed anywhere'}).json()
+    assert client.get(f'/api/entries/notes/{note["id"]}').json()['date'] == '2026-09-16'
+    # An unfinished task is filed under no day, and still reads.
+    assert client.get(f'/api/entries/tasks/{task["id"]}').json()['date'] is None
+    assert client.get(f'/api/entries/tasks/{note["id"]}').status_code == 404
+    assert client.get('/api/entries/notes/123456').status_code == 404
+
+
+def test_the_page_is_the_logbook_when_asked_for_as_a_document(client, monkeypatch):
+    client.post('/api/notes', json={'date': '2026-09-16', 'content': 'Private writing'})
+    monkeypatch.setenv('STILL_AUTH_ENABLED', 'true')
+    monkeypatch.setenv('STILL_AUTH_PASSWORD', 'private-test-password')
+    # Asked for as a document, the root is the journal and is protected like it.
+    for accept in ('application/json', 'text/markdown'):
+        response = client.get('/', headers={'accept': accept})
+        assert response.status_code == 401, accept
+        assert 'Private writing' not in response.text
+    client.post('/api/auth/login', json={'password': 'private-test-password'})
+    assert client.get('/', headers={'accept': 'application/json'}).status_code == 200

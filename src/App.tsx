@@ -1,11 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
-import { cacheJournal, cachedJournal, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
+import { cacheJournal, cachedJournal, getEntry, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
 import { recoverEarlierDrafts } from './entryDrafts';
 import { storage } from './storage';
 import { FocusSound } from './audio';
-import type { JournalData, JournalDay } from './types';
+import type { EntryKind, JournalData, JournalDay } from './types';
 import { Muted, TextButton, edgeWash, press } from './styles';
 import { Journal, Tasks } from './components/Journal';
 import { TagTabs } from './components/TagTabs';
@@ -17,6 +17,8 @@ import { compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
+import { ENTRY_LINK_EVENT, ENTRY_LINK_PATTERN, entryLinkLabel, parseEntryLink, type EntryLink } from './entryLinks';
+import { EntryLabelProvider, markdownText } from './markdown';
 
 const JOURNAL_PAGE_SIZE = 14;
 type View = 'tasks' | 'log' | 'tags';
@@ -262,6 +264,9 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   // Paint the page we last saw on the first render, before anything is asked
   // of the network. A refresh replaces it as soon as one answers.
   const [data, setData] = useState<JournalData | null>(() => load ? cachedJournal(null) : null);
+  // The opening words of entries that bare links point at, for links whose
+  // entry is not on an open day.
+  const [labelled, setLabelled] = useState<Record<string, string>>({});
   // What the page is showing, for a load that has to know whether it is
   // changing the view or refreshing the one already on screen.
   const shown = useRef<JournalData | null>(data);
@@ -644,6 +649,75 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     } catch (e) { entryError(e); }
   };
 
+  // Following a link to an entry: the same arrival as a search result, but the
+  // link carries no date, so the day it is filed under is looked up — among
+  // the days already open where possible, and from the server when not.
+  const jumpToEntry = useCallback(async (kind: EntryKind, id: number) => {
+    try {
+      const loaded = shown.current?.days.find(day => day.entries.some(entry => entry.id === id && entry.kind === kind));
+      const known = loaded?.date ?? (shown.current?.tasks.some(task => task.id === id) ? null : undefined);
+      await flushDrafts();
+      tagRef.current = null; loadedThrough.current = null; generation.current++;
+      setActiveTag(null); setTarget(null);
+      await refresh();
+      const date = known === undefined ? (await getEntry(kind, id)).date : known;
+      if (date) {
+        const result = await getJournal({ on: date });
+        setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
+      }
+      // The entry has to be among the rows before it can be arrived at: the
+      // outline reads the target once, when it is set.
+      setTarget({ kind, id });
+    } catch (e) { entryError(e); }
+  }, [refresh]);
+  // A link followed from inside an entry, and a link the page was opened with.
+  // The address is put back to the plain page afterwards, so a reload is a
+  // reload rather than the same arrival over again.
+  useEffect(() => {
+    const follow = (event: WindowEventMap[typeof ENTRY_LINK_EVENT]) => { void jumpToEntry(event.detail.kind, event.detail.id); };
+    const opened = () => {
+      const link = parseEntryLink(window.location.hash);
+      if (!link) return;
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      void jumpToEntry(link.kind, link.id);
+    };
+    window.addEventListener(ENTRY_LINK_EVENT, follow);
+    window.addEventListener('hashchange', opened);
+    if (load) opened();
+    return () => { window.removeEventListener(ENTRY_LINK_EVENT, follow); window.removeEventListener('hashchange', opened); };
+  }, [jumpToEntry, load]);
+  // The opening of an entry a bare link points at, for the link to read as.
+  // An entry already on the page answers for itself; one on a day that is not
+  // open is asked after once and remembered.
+  const entryLabels = useCallback((link: { kind: EntryKind; id: number }) => {
+    const rows = [...(shown.current?.days.flatMap(day => day.entries) ?? []), ...(shown.current?.tasks ?? [])];
+    const row = rows.find(entry => entry.id === link.id && entry.kind === link.kind);
+    if (row) return entryLinkLabel(markdownText(row.content));
+    return labelled[`${link.kind}/${link.id}`] ?? null;
+  }, [labelled]);
+  useEffect(() => {
+    if (!data) return;
+    const written = [...data.days.flatMap(day => day.entries), ...data.tasks];
+    const open = new Set(written.map(entry => `${entry.kind}/${entry.id}`));
+    const wanted = new Map<string, EntryLink>();
+    for (const entry of written) {
+      for (const match of entry.content.matchAll(ENTRY_LINK_PATTERN)) {
+        const link = parseEntryLink(match[0]);
+        const name = link && `${link.kind}/${link.id}`;
+        if (link && name && !open.has(name) && !(name in labelled)) wanted.set(name, link);
+      }
+    }
+    if (!wanted.size) return;
+    let cancelled = false;
+    void Promise.all([...wanted].map(async ([name, link]) => {
+      try { return [name, entryLinkLabel(markdownText((await getEntry(link.kind, link.id)).content))] as const; }
+      // An entry that has since gone reads as a plain reference, and is not
+      // asked after again.
+      catch { return [name, 'entry'] as const; }
+    })).then(found => { if (!cancelled) setLabelled(previous => ({ ...previous, ...Object.fromEntries(found) })); });
+    return () => { cancelled = true; };
+  }, [data, labelled]);
+
   const sidebarControls = <SidebarControls role="group" aria-label="Page controls" data-focus-chrome>
     {REPOSITORY_URL && <RepositoryLink href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub"><Github size={15} aria-hidden="true" /></RepositoryLink>}
     <CalendarToggle aria-label="Manage calendars" title="Calendars" onClick={() => setCalendarOpen(true)}><CalendarDays size={15} aria-hidden="true" /></CalendarToggle>
@@ -681,7 +755,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     return <>{data ? taskBand(false) : <ConnectionState><Muted>Loading…</Muted></ConnectionState>}{logBand}</>;
   };
 
-  return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}
+  return <JournalContext.Provider value={{ tags: data?.tags ?? [], activeTag: data?.tag ?? null, completed, onComplete, reopened, onReopen, target }}><EntryLabelProvider value={entryLabels}><Page $focusing={timerRunning} data-testid="page" data-focus-running={timerRunning ? 'true' : undefined}
     onPointerDownCapture={event => {
       const band = strip.current?.getBoundingClientRect();
       turning.current = band && event.clientY <= band.bottom ? { from: event.clientX, turned: false } : null;
@@ -742,6 +816,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         <ShortcutRow><Demo>indent entry</Demo><Keys>tab</Keys></ShortcutRow>
         <ShortcutRow><Demo>outdent entry</Demo><Keys>shift + tab</Keys></ShortcutRow>
         <ShortcutRow><Demo>select all entries</Demo><Keys>⌘ + a twice</Keys></ShortcutRow>
+        <ShortcutRow><Demo>copy a link to this entry</Demo><Keys>⌘ + shift + k</Keys></ShortcutRow>
         <ShortcutRow><Demo>make this <strong>bold</strong></Demo><Keys>⌘ + b</Keys></ShortcutRow>
         <ShortcutRow><Demo>make this <em>italic</em></Demo><Keys>⌘ + i</Keys></ShortcutRow>
         <ShortcutRow><Demo>make this <u>underlined</u></Demo><Keys>⌘ + u</Keys></ShortcutRow>
@@ -752,5 +827,5 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         <ShortcutRow><Demo>redo</Demo><Keys>⌘ + shift + z</Keys></ShortcutRow>
       </ShortcutRows>
     </ShortcutPanel></Modal>
-  </Page></JournalContext.Provider>;
+  </Page></EntryLabelProvider></JournalContext.Provider>;
 }

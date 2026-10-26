@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, type ReactNode } from 'react';
+import { Fragment, createContext, memo, useContext, useMemo, type MouseEvent, type ReactNode } from 'react';
 import { getSchema, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { MarkdownSerializer, defaultMarkdownSerializer } from 'prosemirror-markdown';
@@ -9,6 +9,7 @@ import { JournalTag } from './tagEditor';
 import { DOMParser as ProseMirrorDOMParser, Slice } from '@tiptap/pm/model';
 import { Transform } from '@tiptap/pm/transform';
 import { textPositions } from './textSelection';
+import { ENTRY_LINK_EVENT, parseEntryLink, type EntryLink } from './entryLinks';
 import type { EntryFormat } from './entryFormatting';
 
 export function safeHref(value: string): string | null {
@@ -359,8 +360,32 @@ export const richTextStyles = css`
   h4, h5, h6 { font-size: 1em; }
 `;
 
-function renderNode(node: JSONContent, key: number): ReactNode {
-  const content = node.content?.map(renderNode);
+// What a link to an entry reads as, when the writer left it bare. The opening
+// of the entry it points at is looked up among the entries already on the
+// page; one that is not there reads as a plain reference rather than waiting
+// on the network to say more.
+export type EntryLabels = (link: EntryLink) => string | null;
+const EntryLabelContext = createContext<EntryLabels | null>(null);
+export const EntryLabelProvider = EntryLabelContext.Provider;
+
+function entryAnchor(href: string, text: ReactNode, bare: boolean, labels: EntryLabels | null): ReactNode {
+  const link = parseEntryLink(href);
+  if (!link) return <a href={href} target="_blank" rel="noopener noreferrer">{text}</a>;
+  // It names somewhere on this page, so following it goes there rather than
+  // opening the journal a second time in another tab.
+  const follow = (event: MouseEvent) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    window.dispatchEvent(new CustomEvent(ENTRY_LINK_EVENT, { detail: { kind: link.kind, id: link.id } }));
+  };
+  // A bare address says nothing in the middle of a sentence; a label the
+  // writer chose says what they meant, and is left alone.
+  const label = bare ? `→ ${labels?.(link) ?? 'entry'}` : text;
+  return <a href={href} data-entry-link={`${link.kind}/${link.id}`} onClick={follow}>{label}</a>;
+}
+
+function renderNode(node: JSONContent, key: number, labels: EntryLabels | null = null): ReactNode {
+  const content = node.content?.map((child, index) => renderNode(child, index, labels));
   if (node.type === 'text') {
     let result: ReactNode = node.text;
     for (const mark of node.marks ?? []) {
@@ -371,8 +396,9 @@ function renderNode(node: JSONContent, key: number): ReactNode {
         case 'strike': result = <s>{result}</s>; break;
         case 'code': result = <code>{result}</code>; break;
         case 'link': {
-          const href = safeHref(String(mark.attrs?.href ?? ''));
-          if (href) result = <a href={href} target="_blank" rel="noopener noreferrer">{result}</a>;
+          const raw = String(mark.attrs?.href ?? '');
+          const href = safeHref(raw);
+          if (href) result = entryAnchor(href, result, (node.text ?? '').trim() === raw.trim(), labels);
           break;
         }
       }
@@ -414,6 +440,9 @@ export const MarkdownContent = memo(function MarkdownContent({ document: stored,
     const hidden = new Set(hiddenTags.map(normalizeTag));
     return (hidden.size ? withoutTags(placed, hidden) : placed) ?? { type: 'doc' as const };
   }, [stored, content, tags, hiddenTags]);
+  // The label resolver is read here and handed down, because renderNode is a
+  // plain function and a hook inside it would subscribe to nothing.
+  const labels = useContext(EntryLabelContext);
   // Explicit React elements only: raw HTML, scripts, images and unsafe links never execute.
-  return <>{document.content?.map(renderNode)}</>;
+  return <>{document.content?.map((node, index) => renderNode(node, index, labels))}</>;
 });

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Link2 } from 'lucide-react';
 import { flushSync } from 'react-dom';
 import { useJournalContext } from '../JournalContext';
 import type { EntryDocument, EntryKind, OutlineItem } from '../types';
@@ -9,6 +10,7 @@ import { documentUndo, editDocument, historyShortcutDirection } from '../documen
 import { useEntryGestures, type EntrySelection } from '../useEntryGestures';
 import { OutlineDocument } from '../outlineDocument';
 import { entryError } from '../entryFeedback';
+import { entryLinkLabel, entryLinkUrl } from '../entryLinks';
 import { endEntryDrag, entryDragLeft, incomingEntryDrag, moveEntryToDay, startEntryDrag, takeEntryDrag, type DragPlacement, type EntryDrag } from '../entryDrag';
 import { domTextOffset } from '../textSelection';
 import { selectedEntryRanges, spannedEntries } from '../entrySelection';
@@ -20,7 +22,7 @@ import { hasDraftChanges, type Draft } from '../entryDrafts';
 import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
-import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS } from './OutlineStyles';
+import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, LinkCopy, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS } from './OutlineStyles';
 
 type VerticalTarget = { x: number; direction: VerticalDirection };
 // The branch easing, cubic-bezier(.2, 0, 0, 1), so anything moving alongside a
@@ -284,7 +286,17 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       if (active && active !== document.body) return;
       input.current?.focus({ preventScroll: true });
     };
-    const onFocus = () => claim();
+    // The window coming back is not itself a free caret. The browser says so
+    // before it has given focus back to whatever was holding it, so what was
+    // holding it is remembered as it goes: the caret returns to the entry the
+    // reader left it in, and the composer claims nothing.
+    let held: Element | null = null;
+    const onBlur = () => { held = document.activeElement; };
+    const onFocus = () => {
+      const returning = held && held !== document.body && held.isConnected;
+      held = null;
+      if (!returning) claim();
+    };
     // What holds the caret now, if it is anything the reader chose. A rebuilt
     // view must not take it off an entry or a field: those keep it, and the
     // composer goes without.
@@ -309,8 +321,10 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       waiting.addEventListener('blur', release, { once: true });
     });
     window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
     return () => {
       mounted.current = false; cancelAnimationFrame(frame); cancelAnimationFrame(pending);
+      window.removeEventListener('blur', onBlur);
       if (waiting && release) waiting.removeEventListener('blur', release);
       window.removeEventListener('focus', onFocus);
     };
@@ -668,6 +682,35 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       : childrenOf(null);
     clipboard.setData('text/html', build(top, 0).outerHTML); clipboard.setData('text/plain', lines.join('\n'));
   };
+  // A link to one entry, to paste into another entry or to send to someone.
+  // Both flavours go on the clipboard: the address on its own, and the same
+  // address labelled with the opening of what it points at, so pasting it into
+  // an entry here reads as a reference rather than as a URL.
+  const copyEntryLink = async (id: number) => {
+    const row = records.current.find(item => item.id === id);
+    const signature = row?.signature;
+    const element = surface.current?.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+    if (!row || !signature) {
+      // An entry the server has not seen yet has nothing to sign a link with.
+      entryError('This entry hasn’t been saved yet, so it has no link to copy.', element);
+      return;
+    }
+    const url = entryLinkUrl({ kind: row.kind, id, signature });
+    const label = entryLinkLabel(markdownText(row.content, hiddenTagsFor(row.tags)));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.textContent = `→ ${label}`;
+    try {
+      if (typeof ClipboardItem === 'function' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain': new Blob([url], { type: 'text/plain' }),
+          'text/html': new Blob([anchor.outerHTML], { type: 'text/html' }),
+        })]);
+      } else {
+        await navigator.clipboard.writeText(url);
+      }
+    } catch { entryError('Couldn’t reach the clipboard.', element); }
+  };
   // The rows an action applies to: the entry selected in the editor, with its
   // branch. A plain text selection stays plain text.
   const actionRoots = (): number[] | null => {
@@ -928,7 +971,13 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
           flushSync(() => persist(blank(records.current, composer)));
           focus();
         }
-      }} /></Row>
+      }} />
+      {gestureSelected && draft.id !== null && <LinkCopy type="button" data-focus-chrome data-copy-link
+        aria-label={`Copy link to ${markdownText(draft.content, draftHiddenTags(draft)) || 'this entry'}`}
+        title="Copy link to this entry"
+        onPointerDown={event => event.stopPropagation()}
+        onClick={event => { event.stopPropagation(); void copyEntryLink(draft.id!); }}><Link2 size={14} aria-hidden="true" /></LinkCopy>}
+    </Row>
     {draft.id !== null && <Branch data-branch-for={draft.id} $open={isExpanded(draft.id)} $editing={draftInside(draft.id)} aria-hidden={!isExpanded(draft.id)}>{renderChildren(draft.id, depth + 1)}</Branch>}
   </DraftItem>;
   };
@@ -969,6 +1018,13 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         }}
         onKeyDown={event => { if ((archived || !item.completed_at) && event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); select(item); } }}
       ><MarkdownContent document={item.document} content={item.content} tags={activeTag ? item.tags?.filter(tag => tag !== activeTag) : item.tags} hiddenTags={hiddenTagsFor(item.tags)} /></Text>
+        {gestureSelected && <LinkCopy type="button" data-focus-chrome data-copy-link
+          aria-label={`Copy link to ${markdownText(item.content, hiddenTagsFor(item.tags)) || 'this entry'}`}
+          title="Copy link to this entry"
+          /* The row is the drag handle, so the press that works this button
+             must not also be read as the start of a drag. */
+          onPointerDown={event => event.stopPropagation()}
+          onClick={event => { event.stopPropagation(); void copyEntryLink(item.id); }}><Link2 size={14} aria-hidden="true" /></LinkCopy>}
       </Row>
       <Branch data-branch-for={item.id} $open={isExpanded(item.id)} $editing={draftInside(item.id)} aria-hidden={!isExpanded(item.id)}>{renderChildren(item.id, depth + 1)}</Branch>
     </Item>;
@@ -1080,6 +1136,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     deleteCurrentEntry();
   }}
   onPasteCapture={event => { if (selectionActive.current) { event.preventDefault(); event.stopPropagation(); replaceDocument(event.clipboardData.getData('text/plain'), event.clipboardData.getData('text/html')); } }} onKeyDownCapture={event => {
+    // A link to the entry being held, for pasting into another entry or for
+    // sending to someone.
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'k' && !event.defaultPrevented) {
+      const held = actionRoots();
+      if (held?.length) {
+        event.preventDefault(); event.stopPropagation();
+        void copyEntryLink(held[0]);
+        return;
+      }
+    }
     // A selection spanning entries takes the shortcut across all of them.
     const grouping = event.metaKey || event.ctrlKey ? formattingShortcut(event.key, event.shiftKey) : null;
     if ((event.key === 'Tab' || grouping) && !selectionActive.current && !event.defaultPrevented) {

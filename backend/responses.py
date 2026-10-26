@@ -24,10 +24,30 @@ class EntryOutput(BaseModel):
     date: str | None = None
     child_count: int | None = Field(default=None, ge=0)
     completed_child_count: int | None = Field(default=None, ge=0)
+    # Signs a link to this entry. See backend/sharing.py.
+    signature: str | None = None
 
 
 class JournalEntryOutput(EntryOutput):
     kind: EntryKind
+
+
+class SharedEntryItem(BaseModel):
+    """An entry as a link to it shows it: the writing, and nothing around it."""
+    id: int = Field(ge=1)
+    kind: EntryKind
+    parent_id: int | None
+    document: dict | None = None
+    content: str
+    tags: list[str] = Field(default_factory=list)
+    created_at: str
+    completed_at: str | None = None
+
+
+class SharedEntryOutput(BaseModel):
+    date: str | None
+    entry: SharedEntryItem
+    children: list[SharedEntryItem]
 
 
 class TaskOutput(EntryOutput):
