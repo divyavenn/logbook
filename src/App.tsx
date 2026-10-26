@@ -15,6 +15,7 @@ import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
 import { compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
+import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
 
 const JOURNAL_PAGE_SIZE = 14;
@@ -145,11 +146,12 @@ const TimerButton = styled.button<{ $running: boolean }>`
   &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
   &[aria-pressed='true']::before { border-color: var(--timer-running-ring); }
 `;
-// The strip above the panes is where a page turn comes from: it is the part of
-// the page that is not entries, and the entries keep the up-and-down of their
-// own list.
+// The strip above the panes is the plainest place a page turn comes from: it
+// is the part of the page that is not entries, and the entries keep the
+// up-and-down of their own list. It is deep enough to be found with a thumb,
+// and the room it leaves is the top margin of every pane.
 const ShortHeader = styled.div`
-  height: 44px; flex-shrink: 0; touch-action: pan-x;
+  height: 68px; flex-shrink: 0; touch-action: pan-x;
 `;
 const MobileTabs = styled.div<{ $aside: boolean }>`
   /* Centred along the top while the sidebar keeps its own side. Once the tags
@@ -177,6 +179,10 @@ const MobilePager = styled.div`
 const MobilePane = styled.section`
   flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto;
   display: flex; flex-direction: column; scrollbar-width: none;
+  /* Across is the page turning, down is the pane scrolling, and the turn is
+     carried by the drag the pane reads rather than by the browser, so a drag
+     that starts anywhere on a pane turns the page the same way. */
+  touch-action: pan-y;
   scroll-snap-align: start; scroll-snap-stop: always; contain: inline-size;
   padding: 0;
   &::-webkit-scrollbar { display: none; }
@@ -309,6 +315,13 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const [hasHoverSidebar, setHasHoverSidebar] = useState(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches);
   const viewportWidth = useRef(window.innerWidth);
   const { pagerRef: mobilePager, selectView: selectMobileView, trackScroll: trackMobileScroll, view: mobileView } = usePager(views, rememberedPane(), paged);
+  // The panes read a drag of their own, so the room between the entries turns
+  // the page as readily as the entries do.
+  const {
+    startEntryGesture: startPageSwipe, trackEntryGesture: trackPageSwipe,
+    finishEntryGesture: finishPageSwipe, cancelEntryGesture: cancelPageSwipe,
+    consumeClick: consumePageSwipeClick,
+  } = useEntryGestures();
   const [sessionsDate, setSessionsDate] = useState<string | null>(null);
   const [timerBusy, setTimerBusy] = useState(false);
   const [timerIntent, setTimerIntent] = useState<'start' | 'stop' | null>(null);
@@ -558,6 +571,9 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       tagRef.current = tag; loadedThrough.current = null; generation.current++;
       setSwitchedView(true); setActiveTag(tag);
       if (logViewport.current) logViewport.current.scrollTop = 0;
+      // Choosing a tag was a question about the log, so the page turns back to
+      // it and the answer arrives there, rising into place.
+      if (paged) selectMobileView('log');
     } catch (error) { entryError(error); }
   };
 
@@ -652,7 +668,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     onPointerMoveCapture={event => turnPage(event.clientX)}
     onClickCapture={event => {
       // The drag has already answered; the tap it ends with is not meant.
-      if (turning.current?.turned) { event.preventDefault(); event.stopPropagation(); }
+      if (turning.current?.turned || consumePageSwipeClick()) { event.preventDefault(); event.stopPropagation(); }
       turning.current = null;
     }}
     onPointerUpCapture={() => { if (!turning.current?.turned) turning.current = null; }}>
@@ -675,7 +691,14 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
               onClick={() => selectMobileView(view)}>{view}</MobileTab>)}
           </MobileTabs>
         </ShortHeader>
-        <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}>
+        <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}
+          onPointerDown={event => {
+            // A drag anywhere on a pane turns the page. An entry carries the
+            // same gesture itself, so a drag that starts on one is left to it.
+            if (event.target instanceof Element && event.target.closest('[data-entry-gesture-key]')) return;
+            startPageSwipe(event, event.currentTarget);
+          }}
+          onPointerMove={trackPageSwipe} onPointerUp={finishPageSwipe} onPointerCancel={cancelPageSwipe}>
           {views.map(view => <MobilePane key={view} id={`mobile-panel-${view}`} role="tabpanel"
             aria-labelledby={`mobile-tab-${view}`} aria-hidden={mobileView !== view} inert={mobileView !== view}>{pane(view)}</MobilePane>)}
         </MobilePager>

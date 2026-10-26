@@ -158,22 +158,25 @@ test('swipe tags page highlights the selected tag and filters tasks and log entr
   await tabs.getByRole('tab', { name: 'tags', exact: true }).click();
   const mobile = page.getByRole('button', { name: '#mobile', exact: true });
   await expect(mobile.locator('span')).toHaveCSS('translate', '0px -1px');
-  await mobile.click();
-  await expect(mobile).toHaveAttribute('aria-pressed', 'true');
   await expect(mobile).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(mobile).toHaveCSS('border-color', 'rgb(24, 113, 186)');
-  await expect(mobile).toHaveCSS('color', 'rgb(24, 113, 186)');
+  await mobile.click();
+  // Choosing a tag was a question about the log, so the page turns back to it
+  // with the answer.
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('group', { name: 'Mobile focused note', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toHaveCount(0);
 
   await tabs.getByRole('tab', { name: 'tasks', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Mobile focused task', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Other mobile task', exact: true })).toHaveCount(0);
-  await tabs.getByRole('tab', { name: 'log', exact: true }).click();
-  await expect(page.getByRole('group', { name: 'Mobile focused note', exact: true })).toBeVisible();
-  await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toHaveCount(0);
 
   await tabs.getByRole('tab', { name: 'tags', exact: true }).click();
+  // The chosen tag is the one marked, so the pane says what the log is showing.
+  await expect(mobile).toHaveAttribute('aria-pressed', 'true');
+  await expect(mobile).toHaveCSS('border-color', 'rgb(24, 113, 186)');
+  await expect(mobile).toHaveCSS('color', 'rgb(24, 113, 186)');
   await page.getByRole('button', { name: 'all', exact: true }).click();
-  await tabs.getByRole('tab', { name: 'log', exact: true }).click();
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toBeVisible();
 });
 
