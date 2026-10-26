@@ -28,14 +28,14 @@ export function entryLinkUrl(link: EntryLink): string {
   return new URL(entryLinkPath(link), window.location.origin).href;
 }
 
-// What a bare link reads as: the opening of the entry it points at, so a
-// reference in the middle of a sentence is something a reader can follow.
-const LABEL_WORDS = 6;
+// What a bare link reads as: a glimpse of the entry it points at. A few words
+// only, and the pill they sit in fades their tail, which says there is more
+// there without spelling out that it has been cut.
+const LABEL_WORDS = 4;
 export function entryLinkLabel(content: string): string {
   const words = content.trim().split(/\s+/u).filter(Boolean);
   if (!words.length) return 'entry';
-  const opening = words.slice(0, LABEL_WORDS).join(' ');
-  return words.length > LABEL_WORDS ? `${opening}…` : opening;
+  return words.slice(0, LABEL_WORDS).join(' ');
 }
 
 declare global {

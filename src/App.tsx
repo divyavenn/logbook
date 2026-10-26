@@ -13,7 +13,7 @@ import { JournalContext, flushDrafts } from './JournalContext';
 import { Modal } from './components/Modal';
 import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
-import { compactViewport, narrowViewport, shortViewport } from './layout';
+import { LOG_WASH_HEIGHT, compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
@@ -232,7 +232,6 @@ const Main = styled.main`
 `;
 // The log fades its content out over this much at each edge, and its first
 // date rests just clear of it.
-const LOG_WASH_HEIGHT = 30;
 const LogFrame = styled.div`
   position: relative; flex: 1; min-height: min(240px, max(64px, calc(100dvh - 160px))); display: flex;
   @media ${compactViewport} { min-height: 0; padding: 0 0 max(12px, env(safe-area-inset-bottom)); overflow-x: clip; }
@@ -692,7 +691,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const entryLabels = useCallback((link: { kind: EntryKind; id: number }) => {
     const rows = [...(shown.current?.days.flatMap(day => day.entries) ?? []), ...(shown.current?.tasks ?? [])];
     const row = rows.find(entry => entry.id === link.id && entry.kind === link.kind);
-    if (row) return entryLinkLabel(markdownText(row.content));
+    // What was written, not how it was filed: the tags stay out of a glimpse.
+    if (row) return entryLinkLabel(markdownText(row.content, row.tags ?? []));
     return labelled[`${link.kind}/${link.id}`] ?? null;
   }, [labelled]);
   useEffect(() => {
@@ -710,7 +710,10 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     if (!wanted.size) return;
     let cancelled = false;
     void Promise.all([...wanted].map(async ([name, link]) => {
-      try { return [name, entryLinkLabel(markdownText((await getEntry(link.kind, link.id)).content))] as const; }
+      try {
+        const entry = await getEntry(link.kind, link.id);
+        return [name, entryLinkLabel(markdownText(entry.content, entry.tags ?? []))] as const;
+      }
       // An entry that has since gone reads as a plain reference, and is not
       // asked after again.
       catch { return [name, 'entry'] as const; }

@@ -337,6 +337,21 @@ const inlineTagStyles = css`
   }
 `;
 const TagBubble = styled.span`${inlineTagStyles}`;
+// A reference to another entry: a hollow pill holding a glimpse of what it
+// points at, the tail of it dissolving rather than ending.
+const EntryReference = styled.a`
+  display: inline-block; max-width: 18ch; vertical-align: baseline;
+  padding: 0 9px 0 8px; border: 1px solid var(--line); border-radius: 999px;
+  color: var(--link); text-decoration: none; font-size: calc(1em - .5px);
+  white-space: nowrap; overflow: hidden;
+  transition: border-color 140ms ease-out;
+  &:hover { border-color: var(--link); }
+  > span {
+    display: inline-block; max-width: 100%;
+    -webkit-mask-image: linear-gradient(to right, #000 52%, transparent 100%);
+    mask-image: linear-gradient(to right, #000 52%, transparent 100%);
+  }
+`;
 
 export const richTextStyles = css`
   font-size: var(--entry-size, 18px); line-height: var(--entry-line-height, 1.4); overflow-wrap: anywhere; white-space: pre-wrap;
@@ -378,10 +393,13 @@ function entryAnchor(href: string, text: ReactNode, bare: boolean, labels: Entry
     event.preventDefault();
     window.dispatchEvent(new CustomEvent(ENTRY_LINK_EVENT, { detail: { kind: link.kind, id: link.id } }));
   };
-  // A bare address says nothing in the middle of a sentence; a label the
-  // writer chose says what they meant, and is left alone.
-  const label = bare ? `→ ${labels?.(link) ?? 'entry'}` : text;
-  return <a href={href} data-entry-link={`${link.kind}/${link.id}`} onClick={follow}>{label}</a>;
+  // A bare address says nothing in the middle of a sentence, so it reads as a
+  // glimpse of the entry instead. A label the writer chose says what they
+  // meant, and is left as it is written.
+  if (!bare) return <a href={href} data-entry-link={`${link.kind}/${link.id}`} onClick={follow}>{text}</a>;
+  return <EntryReference href={href} data-entry-link={`${link.kind}/${link.id}`} onClick={follow}>
+    <span>{labels?.(link) ?? 'entry'}</span>
+  </EntryReference>;
 }
 
 function renderNode(node: JSONContent, key: number, labels: EntryLabels | null = null): ReactNode {

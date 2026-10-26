@@ -13,6 +13,7 @@ import { entryError } from '../entryFeedback';
 import { entryLinkLabel, entryLinkUrl } from '../entryLinks';
 import { endEntryDrag, entryDragLeft, incomingEntryDrag, moveEntryToDay, startEntryDrag, takeEntryDrag, type DragPlacement, type EntryDrag } from '../entryDrag';
 import { domTextOffset } from '../textSelection';
+import { LOG_WASH_HEIGHT } from '../layout';
 import { selectedEntryRanges, spannedEntries } from '../entrySelection';
 import { copySpannedDays, markdownBullet } from '../journalClipboard';
 import { useRangeEditing } from '../useRangeEditing';
@@ -60,6 +61,15 @@ function selectedTextOffsets(element?: HTMLElement, link?: HTMLElement): TextOff
     anchor: domTextOffset(element, selection.anchorNode, selection.anchorOffset),
     head: domTextOffset(element, selection.focusNode, selection.focusOffset),
   };
+}
+
+// The pane an entry scrolls within: the log, the task list, or a pane of the
+// mobile pager, whichever is carrying it.
+function scrollingParent(element: HTMLElement): HTMLElement | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) return node;
+  }
+  return null;
 }
 
 export function Outline({ kind, items: serverItems, day, composer = false, archived = false, scope, refresh }: Props) {
@@ -183,7 +193,18 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     setExpanded(previous => new Set([...previous, ...parents]));
     const frame = requestAnimationFrame(() => requestAnimationFrame(() => {
       const row = document.querySelector<HTMLElement>(`[data-kind="${target.kind}"][data-item-id="${target.id}"] [role="group"]`);
-      row?.scrollIntoView({ block: 'center' }); row?.focus({ preventScroll: true });
+      if (!row) return;
+      // The entry led to leads: it comes to rest at the top of the view, just
+      // clear of the wash, and the page travels there rather than cutting to it.
+      const smooth = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+      const pane = scrollingParent(row);
+      if (pane) {
+        pane.scrollTo({
+          top: pane.scrollTop + row.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT,
+          behavior: smooth,
+        });
+      } else row.scrollIntoView({ block: 'start', behavior: smooth });
+      row.focus({ preventScroll: true });
     }));
     return () => cancelAnimationFrame(frame);
   }, [target, kind]);
@@ -696,10 +717,12 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       return;
     }
     const url = entryLinkUrl({ kind: row.kind, id, signature });
-    const label = entryLinkLabel(markdownText(row.content, hiddenTagsFor(row.tags)));
+    // The glimpse is of what was written, not of how it was filed, so the tags
+    // on the entry are left out of it.
+    const label = entryLinkLabel(markdownText(row.content, row.tags ?? []));
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.textContent = `→ ${label}`;
+    anchor.textContent = label;
     try {
       if (typeof ClipboardItem === 'function' && navigator.clipboard?.write) {
         await navigator.clipboard.write([new ClipboardItem({

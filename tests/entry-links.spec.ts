@@ -65,8 +65,13 @@ test('a link in an entry opens the day it names and lands on it', async ({ page,
   await composer.click();
   await composer.pressSequentially(`see ${new URL(url, page.url()).href} `);
   await composer.press('Enter');
+  // A glimpse of what it points at, in a pill of its own: a few words, with no
+  // tags among them.
   const reference = page.getByRole('group', { name: /^see/ }).locator('a[data-entry-link]');
-  await expect(reference).toHaveText('→ Written long ago and far away');
+  await expect(reference).toHaveText('Written long ago and');
+  await expect(reference).toHaveCSS('border-radius', '999px');
+  await expect(reference).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(reference.locator('span')).toHaveCSS('mask-image', /linear-gradient/);
 
   // Following it loads the day it is filed under, which was never on screen.
   await expect(page.getByRole('group', { name: 'Written long ago and far away', exact: true })).toHaveCount(0);
@@ -80,13 +85,36 @@ test('a link in an entry opens the day it names and lands on it', async ({ page,
 
 test('a link opened as an address lands on its entry and leaves the address clean', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
-  const note = await (await request.post('/api/notes', { data: { date: '2011-02-03', content: 'Arrived by address' } })).json();
+  const note = await (await request.post('/api/notes', { data: { date: '2011-02-10', content: 'Arrived by address' } })).json();
+  // A logbook long enough to scroll, with page above the entry and page below
+  // it, so coming to rest at the top is something it can actually do.
+  for (let day = 1; day <= 12; day++) {
+    const date = `2011-02-${String(day).padStart(2, '0')}`;
+    for (let line = 0; line < 3; line++) await request.post('/api/notes', { data: { date, content: `Written on ${date}, line ${line}` } });
+  }
   await request.post('/api/notes', { data: { date: today, content: 'Today as usual' } });
   const signature = (await (await request.get(`/api/entries/notes/${note.id}`)).json()).signature;
   await page.goto(`/#e/notes/${note.id}/${signature}`);
   const arrived = page.getByRole('group', { name: 'Arrived by address', exact: true });
   await expect(arrived).toBeVisible();
+  // The page travels there rather than cutting to it, so the log is caught
+  // somewhere between where it was and where it is going.
+  const sampled: number[] = [];
+  for (let sample = 0; sample < 24; sample++) {
+    sampled.push(await page.getByTestId('log-scroll').evaluate(pane => pane.scrollTop));
+    await page.waitForTimeout(40);
+  }
+  const settled = sampled.at(-1)!;
+  expect(settled).toBeGreaterThan(0);
+  expect(sampled.some(top => top > 0 && top < settled)).toBe(true);
+  // The entry led to leads: it comes to rest at the top of the log, just clear
+  // of the wash, rather than in the middle of it.
   await expect(arrived).toBeInViewport();
+  await expect.poll(async () => {
+    const row = (await arrived.boundingBox())!;
+    const pane = (await page.getByTestId('log-scroll').boundingBox())!;
+    return Math.round(row.y - pane.y);
+  }).toBeLessThan(44);
   // The arrival has happened, so a reload is a reload and not the same trip.
   await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('');
 });
