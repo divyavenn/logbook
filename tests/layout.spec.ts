@@ -317,6 +317,36 @@ test('a touch swipe always advances the narrow pager by one tab', async ({ page 
   await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
 });
 
+test('a touch swipe turns the page from the room between the entries', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'A note to swipe past' } });
+  await page.setViewportSize({ width: 440, height: 700 });
+  const session = await page.context().newCDPSession(page);
+  await session.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await page.goto('/');
+  const tabs = page.getByRole('tablist', { name: 'Mobile views' });
+  const pager = page.getByTestId('mobile-pager');
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  // Low on the pane, below the last entry: the part of the log that is not the
+  // entries and not the strip above them.
+  const pane = (await pager.boundingBox())!;
+  const y = pane.y + pane.height * .85;
+  const swipe = async (from: number, to: number) => {
+    const point = (x: number) => ({ x, y, id: 0, radiusX: 1, radiusY: 1, force: 1 });
+    await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(from)] });
+    for (let step = 1; step <= 5; step++) {
+      await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(from + (to - from) * step / 5)] });
+    }
+    await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  await swipe(pane.x + pane.width * .95, pane.x + pane.width * .05);
+  await expect(tabs.getByRole('tab', { name: 'tags', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(1, 1);
+  await swipe(pane.x + pane.width * .05, pane.x + pane.width * .95);
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => pager.evaluate(element => element.scrollLeft / element.clientWidth)).toBeCloseTo(0, 1);
+});
+
 test('swipe log loads earlier dates infinitely and preserves its active tag filter', async ({ page }) => {
   await page.unroute('**/api/journal?*');
   const requests: URL[] = [];
@@ -337,8 +367,8 @@ test('swipe log loads earlier dates infinitely and preserves its active tag filt
   await page.goto('/');
   await page.getByRole('tab', { name: 'tags', exact: true }).click();
   await page.getByRole('button', { name: '#work', exact: true }).click();
-  await expect(page.getByRole('button', { name: '#work', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('tab', { name: 'log', exact: true }).click();
+  // Choosing the tag turns the page back to the log on its own.
+  await expect(page.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await page.getByTestId('log-scroll').evaluate(element => { element.scrollTop = element.scrollHeight; });
   await expect(page.getByRole('group', { name: 'Infinitely older work note', exact: true })).toBeVisible();
   expect(requests.some(url => url.searchParams.has('before') && url.searchParams.get('tag') === 'work')).toBe(true);

@@ -244,6 +244,15 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
           }
           entrySelected.current = false;
           reportEntrySelection(false);
+          // An entry holding nothing but its tags is written in front of them,
+          // so a press in the empty room on that line puts the caret there
+          // rather than behind the tag. A press on the tag still takes hold of it.
+          if (!view.state.doc.textContent.trim() && view.dom.querySelector('[data-tag]') && !event.target.closest('[data-tag]')) {
+            event.preventDefault();
+            view.dispatch(view.state.tr.setSelection(Selection.atStart(view.state.doc)));
+            view.focus();
+            return true;
+          }
           const anchor = event.target.closest<HTMLAnchorElement>('a');
           const href = anchor && safeHref(anchor.getAttribute('href') ?? '');
           if (!href) return false;

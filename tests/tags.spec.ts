@@ -158,22 +158,25 @@ test('swipe tags page highlights the selected tag and filters tasks and log entr
   await tabs.getByRole('tab', { name: 'tags', exact: true }).click();
   const mobile = page.getByRole('button', { name: '#mobile', exact: true });
   await expect(mobile.locator('span')).toHaveCSS('translate', '0px -1px');
-  await mobile.click();
-  await expect(mobile).toHaveAttribute('aria-pressed', 'true');
   await expect(mobile).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(mobile).toHaveCSS('border-color', 'rgb(24, 113, 186)');
-  await expect(mobile).toHaveCSS('color', 'rgb(24, 113, 186)');
+  await mobile.click();
+  // Choosing a tag was a question about the log, so the page turns back to it
+  // with the answer.
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('group', { name: 'Mobile focused note', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toHaveCount(0);
 
   await tabs.getByRole('tab', { name: 'tasks', exact: true }).click();
   await expect(page.getByRole('group', { name: 'Mobile focused task', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Other mobile task', exact: true })).toHaveCount(0);
-  await tabs.getByRole('tab', { name: 'log', exact: true }).click();
-  await expect(page.getByRole('group', { name: 'Mobile focused note', exact: true })).toBeVisible();
-  await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toHaveCount(0);
 
   await tabs.getByRole('tab', { name: 'tags', exact: true }).click();
+  // The chosen tag is the one marked, so the pane says what the log is showing.
+  await expect(mobile).toHaveAttribute('aria-pressed', 'true');
+  await expect(mobile).toHaveCSS('border-color', 'rgb(24, 113, 186)');
+  await expect(mobile).toHaveCSS('color', 'rgb(24, 113, 186)');
   await page.getByRole('button', { name: 'all', exact: true }).click();
-  await tabs.getByRole('tab', { name: 'log', exact: true }).click();
+  await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toBeVisible();
 });
 
@@ -353,6 +356,88 @@ test('a filtered view withholds its tag until the entry is opened, and it keeps 
   const full = page.getByRole('group', { name: /^before/ });
   await expect(full.locator('[data-tag="anchored"]')).toBeVisible();
   await expect(full).toHaveText('before #anchored after more');
+});
+
+test('an entry focused as a filtered view settles keeps the caret', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  const note = await (await request.post('/api/notes', { data: { date: today, content: 'Holds the caret', tags: ['settling'] } })).json();
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#settling', exact: true }).click();
+  const row = page.locator(`[data-item-id="${note.id}"] > div > [role="group"]`);
+  await expect(row).toBeVisible();
+  await row.focus();
+  // The composer takes the caret only when it is free. The view is still
+  // settling behind this row, and rebuilding it must not pull the caret off
+  // the entry the reader just chose.
+  await expect(row).toBeFocused();
+  await page.waitForTimeout(500);
+  await expect(row).toBeFocused();
+});
+
+test('an entry that loses the caret withholds the filtered tag again', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'left open #closing', tags: ['closing'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#closing', exact: true }).click();
+  const row = page.getByRole('group', { name: /^left open/ });
+  await row.click();
+  const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
+  await expect(editor.locator('[data-tag="closing"]')).toBeVisible();
+  // Focus leaves the entry for the page itself: the entry closes, so its tag
+  // goes back to being withheld rather than staying on the line.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await expect(page.getByRole('group', { name: 'left open', exact: true })).toBeVisible();
+  await expect(page.locator('li[data-item-id]:not([data-item-id="draft"]) [data-tag="closing"]')).toHaveCount(0);
+});
+
+test('the composer in a filtered view opens in front of its tag', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Listed note #seeded', tags: ['seeded'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#seeded', exact: true }).click();
+  const composer = page.getByRole('textbox', { name: 'New note', exact: true });
+  await expect(composer).toBeFocused();
+  await expect(composer.locator('[data-tag="seeded"]')).toBeVisible();
+  // The caret waits in front of the seeded tag, so the first letter is written
+  // before it rather than behind it.
+  await page.keyboard.type('written first');
+  // The tag is a pill of its own, so the line reads as the text then the tag.
+  await expect(composer).toHaveText('written first#seeded');
+  await expect.poll(() => page.evaluate((date) => JSON.parse(localStorage.getItem(`still-draft-${date}`) ?? 'null')?.content, today))
+    .toBe('written first #seeded');
+});
+
+test('a press in the empty room of a seeded entry writes in front of the tag', async ({ page, request }) => {
+  const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
+  await request.post('/api/notes', { data: { date: today, content: 'Listed note #pressed', tags: ['pressed'] } });
+  await request.post('/api/tasks', { data: { content: 'Listed task #pressed', tags: ['pressed'] } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#pressed', exact: true }).click();
+  const pressBehindTheTag = async (composer: ReturnType<typeof page.getByRole>) => {
+    const box = (await composer.boundingBox())!;
+    await page.mouse.click(box.x + box.width - 8, box.y + box.height / 2);
+  };
+  // Pressing past the end of a line holding nothing but its tag still writes
+  // in front of the tag, by mouse as much as by the caret that was waiting.
+  const note = page.getByRole('textbox', { name: 'New note', exact: true });
+  await pressBehindTheTag(note);
+  await page.keyboard.type('typed in the note');
+  await expect(note).toHaveText('typed in the note#pressed');
+  const task = page.getByRole('textbox', { name: 'New task', exact: true });
+  await pressBehindTheTag(task);
+  await page.keyboard.type('typed in the task');
+  await expect(task).toHaveText('typed in the task#pressed');
+  // A press on the tag itself still takes hold of it, so it can be removed.
+  await task.locator('[data-tag="pressed"]').click();
+  await expect(task.locator('[data-tag="pressed"]')).toHaveClass(/ProseMirror-selectednode/);
 });
 
 test('tag view lists matching entries only, with no events or focus time', async ({ page, request }) => {
