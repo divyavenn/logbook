@@ -173,8 +173,8 @@ test('swipe tags page highlights the selected tag and filters tasks and log entr
   await tabs.getByRole('tab', { name: 'tags', exact: true }).click();
   // The chosen tag is the one marked, so the pane says what the log is showing.
   await expect(mobile).toHaveAttribute('aria-pressed', 'true');
-  await expect(mobile).toHaveCSS('border-color', 'rgb(24, 113, 186)');
-  await expect(mobile).toHaveCSS('color', 'rgb(24, 113, 186)');
+  await expect(mobile).toHaveCSS('border-color', 'rgb(40, 105, 131)');
+  await expect(mobile).toHaveCSS('color', 'rgb(40, 105, 131)');
   await page.getByRole('button', { name: 'all', exact: true }).click();
   await expect(tabs.getByRole('tab', { name: 'log', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('group', { name: 'Other mobile note', exact: true })).toBeVisible();
@@ -660,4 +660,22 @@ test('a tag kept as text in a stored document still reads as a tag', async ({ pa
   await expect(filtered).toBeVisible();
   await expect(filtered.locator('[data-tag="loose"]')).toHaveCount(0);
   await expect(filtered).toHaveText(/^written then filed\s*$/);
+});
+
+test('a task given its first tag waits after it is left, then fades from the untagged list', async ({ page }) => {
+  await page.goto('/');
+  const add = page.getByRole('button', { name: 'Add task', exact: true });
+  await expect(add).toBeVisible();
+  await add.click();
+  const composer = page.getByRole('textbox', { name: 'New task', exact: true });
+  await composer.pressSequentially('Filed later #errands');
+  await composer.press('Enter');
+  await expect(composer).toHaveText('');
+  const filed = page.getByRole('group', { name: /^Filed later/ });
+  // Saved and filed by now, but the reader has only just left it.
+  await page.waitForTimeout(600);
+  await expect(filed).toBeVisible();
+  const row = filed.locator('xpath=ancestor::li[1]');
+  await expect.poll(async () => Number(await row.evaluate(element => getComputedStyle(element).opacity))).toBeLessThan(1);
+  await expect(filed).toHaveCount(0);
 });

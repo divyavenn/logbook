@@ -25,6 +25,10 @@ export const Row = styled.div`position: relative; display: flex; align-items: fl
 // An entry leaving a filtered view fades as it goes, but briefly: it is
 // answering an edit the reader just made and should not hold them up.
 export const DEPART_MS = 180;
+// A task filed away from the untagged list was not deleted, and the reader
+// has already moved on from it, so it can take its time.
+export const FILE_PAUSE_MS = 1000;
+export const FILE_FADE_MS = 900;
 export const Item = styled.li<{ $leaving?: boolean; $departing?: boolean; $arriving?: boolean; $gestureSelected?: boolean; $dragX?: number }>`
   min-width: 0; transform-origin: left center; translate: ${({ $dragX = 0 }) => $dragX ? `${$dragX}px 0` : 'none'};
   opacity: ${({ $leaving, $departing }) => $leaving || $departing ? 0 : 1};

@@ -20,10 +20,10 @@ import { useRangeEditing } from '../useRangeEditing';
 import { useTaskCompletion } from '../useTaskCompletion';
 import { useOutlineDraft } from '../useOutlineDraft';
 import { hasDraftChanges, type Draft } from '../entryDrafts';
-import { ancestorIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
+import { ancestorIds, branchIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
-import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, LinkCopy, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS } from './OutlineStyles';
+import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, LinkCopy, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS, FILE_FADE_MS, FILE_PAUSE_MS } from './OutlineStyles';
 
 type VerticalTarget = { x: number; direction: VerticalDirection };
 // The branch easing, cubic-bezier(.2, 0, 0, 1), so anything moving alongside a
@@ -77,8 +77,24 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const key = scope ? `still-outline-${kind}-${scope}` : kind === 'tasks' ? 'still-outline-tasks' : `still-draft-${day}`;
   const [documentStore] = useState(() => new OutlineDocument(key));
   const [, renderDocument] = useState(0);
-  const items = documentStore.rebase(serverItems);
   const { activeTag, completed, onComplete, reopened, onReopen, target } = useJournalContext();
+  // A task given its first tag is filed under it, and the list of untagged
+  // tasks no longer carries it once the save comes back. It keeps its place
+  // while the reader is still with it, and goes only once they have moved on.
+  const files = kind === 'tasks' && !archived && !activeTag;
+  const filed = useRef(new Map<number, OutlineItem[]>());
+  const live = documentStore.rebase(serverItems);
+  for (const [id, branch] of filed.current) {
+    const resolved = documentStore.resolve(id)!;
+    if (live.some(row => row.id === resolved)) {
+      const ids = branchIds(live, resolved);
+      filed.current.set(id, live.filter(row => ids.has(row.id)));
+    } else if (!branch.length) filed.current.delete(id);
+  }
+  const lingering = [...filed.current.values()].flat().filter(row => !live.some(item => item.id === row.id));
+  const items = lingering.length ? [...live, ...lingering] : live;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   // A filtered view hides the tag it filters by, in the text and as a bubble:
   // an entry leaves that view by being deleted from it, not by losing the tag
   // inline. Every other tag stays visible and editable.
@@ -95,9 +111,55 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       setDeparting(rows => { const next = new Set(rows); next.delete(id); return next; });
     }, DEPART_MS);
   }, []);
+  const [, refile] = useState(0);
+  const fileTimers = useRef(new Map<number, number>());
+  const file = useCallback((id: number) => {
+    if (!files || filed.current.has(id)) return;
+    filed.current.set(id, []);
+    refile(count => count + 1);
+  }, [files]);
   const { blank, draft, current, records, persist, stageDraft, save, saving } = useOutlineDraft({
-    key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled: depart,
+    key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled: depart, onFiled: file,
   });
+  // Once the reader has left the task, it rests a moment, fades, and then the
+  // rows beneath close over the space it held.
+  const fileAway = useCallback((id: number) => {
+    fileTimers.current.delete(id);
+    const resolved = documentStore.resolve(id)!;
+    const finish = () => {
+      filed.current.delete(id);
+      setRemoved(rows => new Set([...rows, resolved]));
+    };
+    // The tag was taken back off before it went, so the task stays.
+    if (!itemsRef.current.find(row => row.id === resolved)?.tags?.length) {
+      filed.current.delete(id); refile(count => count + 1); return;
+    }
+    const row = surface.current?.querySelector<HTMLElement>(`li[data-item-id="${resolved}"]`);
+    if (!row) { finish(); return; }
+    const height = `${row.offsetHeight}px`;
+    row.style.overflow = 'hidden';
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    row.animate([
+      { opacity: 1, height },
+      { opacity: 0, height, offset: .6 },
+      { opacity: 0, height: '0px' },
+    ], { duration: still ? 1 : FILE_FADE_MS, easing: 'cubic-bezier(.4, 0, .2, 1)', fill: 'forwards' }).finished.then(finish, finish);
+  }, [documentStore]);
+  useEffect(() => {
+    for (const id of filed.current.keys()) {
+      const branch = filed.current.get(id)!;
+      const resolved = documentStore.resolve(id);
+      const editing = draft.active && [draft.id, draft.parentId].some(entry => {
+        const at = documentStore.resolve(entry);
+        return at !== null && (at === resolved || branch.some(row => row.id === at));
+      });
+      const timer = fileTimers.current.get(id);
+      if (editing) {
+        if (timer !== undefined) { clearTimeout(timer); fileTimers.current.delete(id); }
+      } else if (timer === undefined) fileTimers.current.set(id, window.setTimeout(() => fileAway(id), FILE_PAUSE_MS));
+    }
+  });
+  useEffect(() => () => { for (const timer of fileTimers.current.values()) clearTimeout(timer); }, []);
   const draftHiddenTags = (value: Draft) =>
     value.hiddenTags.length || !activeTag || !value.savedTags.includes(activeTag) ? value.hiddenTags : [activeTag];
   const [expanded, setExpanded] = useState(new Set<number>());

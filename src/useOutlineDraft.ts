@@ -11,10 +11,12 @@ type DraftContext = {
   key: string; documentStore: OutlineDocument; items: OutlineItem[]; defaultKind: EntryKind;
   // Called when a saved edit drops the tag this view filters by.
   onUnfiled?: (id: number) => void;
+  // Called when a saved edit gives an entry its first tag in the unfiltered view.
+  onFiled?: (id: number) => void;
   composer: boolean; day?: string; activeTag: string | null;
 };
 
-export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled }: DraftContext) {
+export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled, onFiled }: DraftContext) {
   const mounted = useRef(true);
   // A new entry written in a filtered view is filed under that view's tag, so
   // the tag is there from the start rather than arriving on the first letter
@@ -88,9 +90,10 @@ export function useOutlineDraft({ key, documentStore, items, defaultKind, compos
     // The tag that filed this entry here has been taken off it, so the entry
     // takes its leave of this view.
     if (activeTag && value.savedTags.includes(activeTag) && !value.tags.includes(activeTag)) onUnfiled?.(id);
+    if (!activeTag && value.tags.length && !value.savedTags.length) onFiled?.(id);
     persist({ ...value, id, saved: value.content, savedTags: value.tags });
     return id;
-  }, [activeTag, day, documentStore, onUnfiled, persist]);
+  }, [activeTag, day, documentStore, onUnfiled, onFiled, persist]);
   const save = useCallback(() => {
     const id = stageDraft();
     if (mounted.current) setSaving(true);
