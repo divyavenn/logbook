@@ -344,7 +344,7 @@ const EntryReference = styled.a`
   padding: 0 9px 0 8px; border: 1px solid var(--line); border-radius: 999px;
   color: var(--link); text-decoration: none; font-size: calc(1em - .5px);
   white-space: nowrap; overflow: hidden;
-  transition: border-color 140ms ease-out;
+  transition: border-color 140ms ease;
   &:hover { border-color: var(--link); }
   > span {
     display: inline-block; max-width: 100%;

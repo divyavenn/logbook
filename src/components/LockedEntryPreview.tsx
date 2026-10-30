@@ -18,7 +18,7 @@ const Sheet = styled.div`
   box-shadow: 0 1px 2px rgb(0 0 0 / .06), 0 12px 32px rgb(0 0 0 / .12);
   @starting-style { opacity: 0; transform: translateY(6px); }
   transition-property: opacity, transform; transition-duration: 320ms, 420ms;
-  transition-timing-function: ease-out, cubic-bezier(.2, 0, 0, 1);
+  transition-timing-function: ease-out, var(--ease-out);
   @media (prefers-reduced-motion: reduce) { transition: none; }
 `;
 const Day = styled.p`margin: 0 0 10px; font-size: 13px; color: var(--muted);`;

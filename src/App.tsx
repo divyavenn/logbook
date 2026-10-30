@@ -16,6 +16,7 @@ import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
 import { LOG_WASH_HEIGHT, compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
+import { glide, reducedMotion } from './motion';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
 import { ENTRY_LINK_EVENT, ENTRY_LINK_PATTERN, entryLinkLabel, parseEntryLink, type EntryLink } from './entryLinks';
@@ -124,7 +125,8 @@ const ThemeGlyph = styled.span<{ $shown: boolean }>`
   position: absolute; display: grid; place-items: center; pointer-events: none;
   opacity: ${({ $shown }) => $shown ? 1 : 0}; scale: ${({ $shown }) => $shown ? 1 : .25};
   filter: blur(${({ $shown }) => $shown ? 0 : 4}px);
-  transition: opacity 150ms cubic-bezier(.2,0,0,1), scale 150ms cubic-bezier(.2,0,0,1), filter 150ms cubic-bezier(.2,0,0,1);
+  transition: opacity 150ms var(--ease-out), scale 150ms var(--ease-out), filter 150ms var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 const StatsToggle = styled.button`${pageControl}`;
 const CalendarToggle = styled.button`${pageControl}`;
@@ -140,10 +142,11 @@ const TimerTime = styled.span`
 const TimerButton = styled.button<{ $running: boolean }>`
   ${press}; position: relative; width: 44px; height: 44px; display: grid; place-items: center; flex-shrink: 0;
   padding: 0; border: 0; border-radius: 50%; background: var(--timer); color: var(--timer-ink);
-  &::before { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-ring); border-radius: 50%; pointer-events: none; transition: border-color 160ms ease-out; }
+  &::before { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-ring); border-radius: 50%; pointer-events: none; transition: border-color 160ms ease; }
   &::after { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-running-ring); border-radius: 50%; pointer-events: none;
     opacity: ${({ $running }) => $running ? .3 : 0}; transform: scale(${({ $running }) => $running ? 1.14 : 1});
-    transition: opacity 240ms ease-out, transform 240ms ease-out; }
+    transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out);
+    @media (prefers-reduced-motion: reduce) { transition-property: opacity; } }
   &:hover { background: var(--timer-hover); }
   &[aria-pressed='true'] { background: var(--timer-running); scale: 1.03; }
   &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
@@ -171,7 +174,7 @@ const MobileTab = styled.button<{ $active: boolean }>`
   font-size: 0;
   &::before { content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
     border-radius: 50%; background: currentColor; opacity: ${({ $active }) => $active ? 1 : .48}; translate: -50% -50%;
-    transition: color 120ms ease-out, opacity 120ms ease-out; }
+    transition: color 120ms ease, opacity 120ms ease-out; }
 `;
 const MobilePager = styled.div`
   display: flex; flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden;
@@ -202,7 +205,7 @@ const MobileTagPill = styled.button<{ $selected: boolean }>`
   border: 1px solid ${({ $selected }) => $selected ? 'var(--tag-selected)' : 'var(--line)'}; border-radius: 999px; overflow-wrap: anywhere;
   background: transparent; color: ${({ $selected }) => $selected ? 'var(--tag-selected)' : 'var(--tag-ink)'};
   font-size: 14px; line-height: 20px;
-  transition: border-color 140ms ease-out, color 140ms ease-out, scale 150ms ease-out;
+  transition: border-color 140ms ease, color 140ms ease, scale 150ms ease-out;
 `;
 const MobileTagControls = styled.div`
   margin-top: 10px;
@@ -636,11 +639,16 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       // wash at the top of the log.
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const pane = logViewport.current, day = document.querySelector(`[data-day="${date}"]`);
-        if (!pane || !day) return;
-        pane.scrollTo({
-          top: pane.scrollTop + day.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT,
-          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-        });
+        if (!pane || !(day instanceof HTMLElement)) return;
+        // A day that has just arrived is still settling in, a few pixels low.
+        const settling = new DOMMatrix(getComputedStyle(day).transform).m42;
+        const rest = pane.scrollTop + day.getBoundingClientRect().top - settling - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT;
+        // Years of logbook are too far to travel over: the page is put within
+        // a screen of the date, on the side it is coming from, and glides the
+        // rest, so every arrival is the same short movement.
+        const approach = pane.clientHeight * .85;
+        if (!reducedMotion()) pane.scrollTop = rest > pane.scrollTop ? Math.max(pane.scrollTop, rest - approach) : Math.min(pane.scrollTop, rest + approach);
+        glide(pane, rest);
       }));
     } catch (e) { entryError(e); }
   };

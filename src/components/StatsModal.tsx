@@ -14,12 +14,12 @@ const Period = styled.div`display: flex; align-items: center; gap: 2px;`;
 const Range = styled.button<{ $selected: boolean }>`
   min-height: 40px; padding: 0 7px; border: 0; background: transparent; font-size: 12px;
   color: ${({ $selected }) => $selected ? 'var(--ink)' : 'var(--muted)'};
-  transition: color 120ms ease-out;
+  transition: color 120ms ease;
   &:hover { color: var(--link); }
 `;
 const DownloadLink = styled.a`
   width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; color: var(--muted);
-  transition: color 120ms ease-out, scale 120ms ease-out;
+  transition: color 120ms ease, scale 120ms ease-out;
   &:hover { color: var(--link); scale: 1.06; }
   &:active { scale: .96; }
 `;
@@ -50,7 +50,7 @@ const Graph = styled.div<{ $count: number }>`
 const Bar = styled.div<{ $height: number; $today: boolean }>`
   height: ${({ $height }) => $height}%; width: min(100%, 30px); margin: 0 auto;
   border-radius: 4px 4px 0 0; background: ${({ $today }) => $today ? 'var(--chart-today)' : 'var(--chart)'};
-  transition: background-color 120ms ease-out;
+  transition: background-color 120ms ease;
   &:hover { background: var(--chart-hover); }
 `;
 const Axis = styled.div<{ $count: number }>`
@@ -73,7 +73,7 @@ const DayBranch = styled.div<{ $open: boolean }>`
   opacity: ${({ $open }) => $open ? 1 : 0}; transform: translateY(${({ $open }) => $open ? '0' : '-3px'});
   visibility: ${({ $open }) => $open ? 'visible' : 'hidden'}; pointer-events: ${({ $open }) => $open ? 'auto' : 'none'};
   transition-property: grid-template-rows, opacity, transform, visibility;
-  transition-duration: 320ms, 240ms, 320ms, 0s; transition-timing-function: cubic-bezier(.2, 0, 0, 1);
+  transition-duration: 320ms, 240ms, 320ms, 0s; transition-timing-function: var(--ease-out);
   transition-delay: ${({ $open }) => $open ? '0s' : '0s, 60ms, 0s, 320ms'};
   > div { min-height: 0; overflow: hidden; }
 `;

@@ -49,8 +49,17 @@ const TaskEdgeWash = styled.div<{ $edge?: 'top' | 'bottom' }>`
   left: 0; right: 12px; height: 20px;
   ${({ $edge = 'top' }) => $edge === 'top' && 'top: 0;'}
 `;
-const DayBlock = styled.section<{ $today: boolean; $showHistory: boolean }>`
+// A day that arrives after the logbook is open, behind today or from further
+// back, settles in after the one before it rather than appearing all at once.
+const DAY_STAGGER_MS = 40;
+const DayBlock = styled.section<{ $today: boolean; $showHistory: boolean; $arrival?: number }>`
   margin-bottom: 20px;
+  ${({ $arrival }) => $arrival !== undefined && css`
+    opacity: 1; transform: none;
+    @starting-style { opacity: 0; transform: translateY(4px); }
+    transition: opacity 180ms var(--ease-out) ${$arrival * DAY_STAGGER_MS}ms, transform 240ms var(--ease-out) ${$arrival * DAY_STAGGER_MS}ms;
+    @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
+  `}
   @media(pointer: coarse) { margin-bottom: 44px; }
   @media ${compactViewport} { display: ${({ $today, $showHistory }) => $today || $showHistory ? 'block' : 'none'}; margin-bottom: 10px; }
 `;
@@ -208,6 +217,16 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
     return () => observer.disconnect();
   }, [hasMore, historyError, loadEarlier, scrollRoot, showHistory]);
   const yesterday = dateObject(today); yesterday.setDate(yesterday.getDate() - 1);
+  // The days of the first paint arrive with the view. Each later one keeps the
+  // place it was given in its batch, so a render while it settles cannot
+  // change its timing.
+  const firstPaint = useRef<Set<string> | null>(null);
+  firstPaint.current ??= new Set(days.map(day => day.date));
+  const arrivals = useRef(new Map<string, number>());
+  let batch = 0;
+  for (const day of days) {
+    if (!firstPaint.current.has(day.date) && !arrivals.current.has(day.date)) arrivals.current.set(day.date, Math.min(batch++, 6));
+  }
   return <Logbook aria-label="Logbook" $entering={entering}>
     {days.map(day => {
       const isToday = day.date === today;
@@ -216,7 +235,7 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
       const title = isToday ? 'Today' : date.toDateString() === yesterday.toDateString() ? 'Yesterday' : date.toLocaleDateString(undefined, { weekday: 'long' });
       const entries = day.entries;
       const targeted = target && entries.some(entry => entry.kind === target.kind && entry.id === target.id);
-      return <DayBlock key={day.date} data-day={day.date} $today={isToday || !!targeted} $showHistory={showHistory} aria-label={`${title}, ${day.date}`}
+      return <DayBlock key={day.date} data-day={day.date} $today={isToday || !!targeted} $showHistory={showHistory} $arrival={arrivals.current.get(day.date)} aria-label={`${title}, ${day.date}`}
         onClick={event => {
           if ((event.target as Element).closest('button, a, input, [contenteditable], [role="group"], [data-calendar-event]') || window.getSelection()?.toString()) return;
           window.dispatchEvent(new CustomEvent('still-new-entry', { detail: `still-draft-${day.date}` }));

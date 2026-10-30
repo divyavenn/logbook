@@ -342,3 +342,30 @@ test('zero days have no bars and statistics expose the averaging period', async 
   await modal.getByRole('link', { name: 'Download SQLite backup', exact: true }).click();
   expect((await downloadPromise).suggestedFilename()).toMatch(/^still-logbook-\d{4}-\d{2}-\d{2}\.sqlite3$/);
 });
+
+test('a finished task closes the space it held, so the task below slides up rather than jumping', async ({ page, request }) => {
+  for (const content of ['Slide above', 'Slide finished', 'Slide below']) await request.post('/api/tasks', { data: { content } });
+  await page.goto('/');
+  const list = page.locator('[data-task-body]');
+  const below = list.getByRole('group', { name: 'Slide below', exact: true });
+  await expect(below).toBeVisible();
+  const start = (await below.boundingBox())!.y;
+  await page.getByRole('button', { name: 'Complete Slide finished', exact: true }).click();
+  // Sample the task below while the finished one leaves: it passes through
+  // places between where it was and where it rests.
+  const seen = await below.evaluate(element => new Promise<number[]>(resolve => {
+    const ys: number[] = [];
+    const began = performance.now();
+    const sample = () => {
+      ys.push(element.getBoundingClientRect().y);
+      if (performance.now() - began < 900) requestAnimationFrame(sample); else resolve(ys);
+    };
+    requestAnimationFrame(sample);
+  }));
+  await expect(list.getByRole('group', { name: 'Slide finished', exact: true })).toHaveCount(0);
+  const end = (await below.boundingBox())!.y;
+  expect(end).toBeLessThan(start - 10);
+  const between = seen.filter(y => y < start - 2 && y > end + 2);
+  expect(between.length).toBeGreaterThan(2);
+  expect(Math.abs(seen.at(-1)! - end)).toBeLessThan(1);
+});

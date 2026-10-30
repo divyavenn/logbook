@@ -14,7 +14,7 @@ const Input = styled.input`
   outline: none; box-shadow: none; background: transparent; color: var(--ink); font: inherit;
   &:focus, &:focus-visible { outline: none; box-shadow: none; background: transparent; }
 `;
-const SymbolButton = styled.button`display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; background: transparent; color: var(--muted); border-radius: 50%; span { display: block; font-size: 20px; font-weight: 300; transition: transform 140ms ease-out, color 140ms ease-out; } &:hover span { transform: rotate(90deg); color: var(--ink); }`;
+const SymbolButton = styled.button`display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; background: transparent; color: var(--muted); border-radius: 50%; span { display: block; font-size: 20px; font-weight: 300; transition: transform 140ms ease-out, color 140ms ease; } &:hover span { transform: rotate(90deg); color: var(--ink); }`;
 const Add = styled(SymbolButton)`margin: 12px 0 0; &:hover span { transform: scale(1.12); }`;
 
 function inputTime(value: string) {

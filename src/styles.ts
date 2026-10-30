@@ -14,6 +14,9 @@ export const GlobalStyle = createGlobalStyle`
   @property --task-progress { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-variable.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: swap; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-italic.woff2') format('woff2'); font-weight: 400; font-style: italic; font-display: swap; }
+  /* The curves everything moves on, in either theme: a strong ease-out for
+     what arrives, leaves or settles, and an ease-in-out for what travels. */
+  :root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); }
   :root {
     color-scheme: light;
     /* Rosé Pine Dawn. Its subtle, iris and love sit just under AA as text on
@@ -51,7 +54,7 @@ export const GlobalStyle = createGlobalStyle`
     /* Landscape must not inflate the writing. */
     -webkit-text-size-adjust: 100%;
   }
-  body { margin: 0; color: var(--ink); background: var(--paper); font-family: 'Sohne', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 300; line-height: 1.4; transition: background-color 160ms ease-out, color 160ms ease-out; }
+  body { margin: 0; color: var(--ink); background: var(--paper); font-family: 'Sohne', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 300; line-height: 1.4; transition: background-color 160ms ease, color 160ms ease; }
   body:has(dialog[open]) { overflow: hidden; }
   button, input, textarea, select { font: inherit; color: inherit; }
   /* A control is not writing: a press is answered at once rather than after
@@ -75,8 +78,10 @@ export const GlobalStyle = createGlobalStyle`
   @media (pointer: coarse) {
     input:not([type='range']), textarea, select { font-size: 16px; }
   }
+  /* Reduced motion takes the movement out, not the feedback: each moving
+     piece keeps its fade and drops its travel where it is defined. */
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    *, *::before, *::after { scroll-behavior: auto !important; }
   }
 `;
 
@@ -86,11 +91,11 @@ export const GlobalStyle = createGlobalStyle`
 // anything measuring it, so callers opt in once a view has actually changed.
 export const viewEnter = (enabled: boolean) => enabled && css`
   opacity: 1; transform: none;
-  @starting-style { opacity: 0; transform: translateY(6px); }
+  @starting-style { opacity: 0; transform: translateY(4px); }
   transition-property: opacity, transform;
-  transition-duration: 320ms, 420ms;
-  transition-timing-function: ease-out, cubic-bezier(.2, 0, 0, 1);
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  transition-duration: 220ms, 260ms;
+  transition-timing-function: var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 
 // The ink wash that fades scrolled content into the page at a viewport edge.
@@ -117,12 +122,12 @@ export const edgeWash = (edge: 'top' | 'bottom') => css`
 export const appear = (rise = '4px', ms = 180) => css`
   opacity: 1; transform: none;
   @starting-style { opacity: 0; transform: translateY(${rise}); }
-  transition: opacity ${ms}ms ease-out, transform ${ms}ms cubic-bezier(.2, 0, 0, 1);
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  transition: opacity ${ms}ms var(--ease-out), transform ${ms}ms var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 
 export const press = css`
-  transition: background-color 120ms ease-out, color 120ms ease-out, scale 150ms ease-out;
+  transition: background-color 120ms ease, color 120ms ease, scale 150ms ease-out;
   &:active:not(:disabled) { scale: .96; }
 `;
 export const IconButton = styled.button`

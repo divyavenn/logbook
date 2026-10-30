@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { completeTask, reopenTask } from './api';
 import { recordEdit } from './documentHistory';
 import { completionPreview, TASK_PROGRESS_MS, waitForMotion } from './taskCompletion';
+import { ROW_COLLAPSE_MS, ROW_FADE_MS } from './motion';
 import type { OutlineDocument } from './outlineDocument';
 import type { OutlineItem } from './types';
 
@@ -97,7 +98,8 @@ export function useTaskCompletion(context: CompletionContext) {
           const rows = current.current.rows();
           const exits = new Set(rows.filter(row => row.parent_id === null && !row.completed_at && states.get(row.id)?.completed_at).map(row => row.id));
           if (mounted.current) setCompleting(exits);
-          if (exits.size && !await waitForMotion(180, wait.signal)) continue;
+          // The row fades and closes its space before the list lets it go.
+          if (exits.size && !await waitForMotion(ROW_FADE_MS + ROW_COLLAPSE_MS, wait.signal)) continue;
           const activeId = current.current.activeId();
           if (activeId !== null && states.get(activeId)?.completed_at && completionPreview(rows, intents).get(activeId) === true) current.current.clearActive();
           await current.current.refresh();

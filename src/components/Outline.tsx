@@ -23,25 +23,10 @@ import { hasDraftChanges, type Draft } from '../entryDrafts';
 import { ancestorIds, branchIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
-import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, LinkCopy, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS, FILE_FADE_MS, FILE_PAUSE_MS } from './OutlineStyles';
+import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, LinkCopy, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS, FILE_COLLAPSE_MS, FILE_FADE_MS, FILE_PAUSE_MS } from './OutlineStyles';
+import { ROW_COLLAPSE_MS, ROW_FADE_MS, collapseRow, easeInOut, easeOut, glide, reducedMotion, restoreRow } from '../motion';
 
 type VerticalTarget = { x: number; direction: VerticalDirection };
-// The branch easing, cubic-bezier(.2, 0, 0, 1), so anything moving alongside a
-// branch as it grows travels on the same curve instead of its own.
-function branchEasing(elapsed: number): number {
-  const curve = (first: number, second: number, step: number) => {
-    const rest = 1 - step;
-    return 3 * rest * rest * step * first + 3 * rest * step * step * second + step * step * step;
-  };
-  let low = 0, high = 1, step = elapsed;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    const position = curve(.2, 0, step);
-    if (Math.abs(position - elapsed) < .0005) break;
-    if (position < elapsed) low = step; else high = step;
-    step = (low + high) / 2;
-  }
-  return curve(0, 1, step);
-}
 type Props = {
   kind: EntryKind | 'mixed'; items: OutlineItem[]; day?: string; composer?: boolean;
   archived?: boolean; scope?: string;
@@ -109,7 +94,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     window.setTimeout(() => {
       setRemoved(rows => new Set([...rows, id]));
       setDeparting(rows => { const next = new Set(rows); next.delete(id); return next; });
-    }, DEPART_MS);
+    }, DEPART_MS + ROW_COLLAPSE_MS);
   }, []);
   const [, refile] = useState(0);
   const fileTimers = useRef(new Map<number, number>());
@@ -136,14 +121,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     }
     const row = surface.current?.querySelector<HTMLElement>(`li[data-item-id="${resolved}"]`);
     if (!row) { finish(); return; }
-    const height = `${row.offsetHeight}px`;
-    row.style.overflow = 'hidden';
-    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    row.animate([
-      { opacity: 1, height },
-      { opacity: 0, height, offset: .6 },
-      { opacity: 0, height: '0px' },
-    ], { duration: still ? 1 : FILE_FADE_MS, easing: 'cubic-bezier(.4, 0, .2, 1)', fill: 'forwards' }).finished.then(finish, finish);
+    collapseRow(row, { fade: FILE_FADE_MS, collapse: FILE_COLLAPSE_MS }).finished.then(finish, finish);
   }, [documentStore]);
   useEffect(() => {
     for (const id of filed.current.keys()) {
@@ -260,7 +238,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       // The entry led to leads: it comes to rest at the top of the view, just
       // clear of the wash, and the page travels the last of the way there
       // rather than cutting to it.
-      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const still = reducedMotion();
       const pane = scrollingParent(row);
       row.focus({ preventScroll: true });
       if (!pane) { row.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' }); return; }
@@ -283,7 +261,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
             if (!aimed) pane.scrollTop = rest > pane.scrollTop
               ? Math.max(pane.scrollTop, rest - approach)
               : Math.min(pane.scrollTop, rest + approach);
-            pane.scrollTo({ top: rest, behavior: 'smooth' });
+            // The first aim sets out from rest; a correction is already moving.
+            glide(pane, rest, { easing: aimed ? easeOut : easeInOut });
           }
         }
         if (++aimed < 5) settling = window.setTimeout(aim, 420);
@@ -363,6 +342,27 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     onComplete, onReopen,
     onError: (error, id) => entryError(error, surface.current?.querySelector(`[data-item-id="${id}"]`)),
   });
+  // A row on its way out fades first, then closes the space it held, so the
+  // rows below have already moved up when it is dropped. Only the task list
+  // loses a finished task; the logbook keeps it. A leave called off opens the
+  // row back up from wherever it had got to.
+  const exits = useRef(new Map<number, { row: HTMLElement; animation: Animation }>());
+  useEffect(() => {
+    const leaving = new Map<number, number>([
+      ...(kind === 'tasks' ? [...completing].map(id => [id, ROW_FADE_MS] as const) : []),
+      ...[...departing].map(id => [id, DEPART_MS] as const),
+    ]);
+    for (const [id, after] of leaving) {
+      if (exits.current.has(id)) continue;
+      const row = surface.current?.querySelector<HTMLElement>(`li[data-item-id="${id}"]`);
+      if (row) exits.current.set(id, { row, animation: collapseRow(row, { after }) });
+    }
+    for (const [id, exit] of exits.current) {
+      if (leaving.has(id)) continue;
+      exits.current.delete(id);
+      if (exit.row.isConnected) restoreRow(exit.row, exit.animation);
+    }
+  }, [kind, completing, departing]);
   useEffect(() => {
     const applied = () => {
       selectionActive.current = false; setSelectedAll(false); setRemoved(new Set()); setDeparting(new Set()); persist(blank([], composer));
@@ -859,22 +859,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       const room = bounds.top - visible.top;
       const lift = Math.min(hidden, room);
       if (lift <= 1) return;
-      // A browser smooth scroll runs on its own curve and duration, which reads
-      // as a second movement beside the branch. Drive it on the branch's.
-      const start = scroller.scrollTop;
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { scroller.scrollTop = start + lift; return; }
-      const begun = performance.now();
-      let placed = start;
-      const pane = scroller;
-      const step = () => {
-        // A scroll of their own hands the pane back to the reader.
-        if (Math.abs(pane.scrollTop - placed) > 1) return;
-        const elapsed = Math.min(1, (performance.now() - begun) / BRANCH_OPEN_MS);
-        pane.scrollTop = start + lift * branchEasing(elapsed);
-        placed = pane.scrollTop;
-        if (elapsed < 1) requestAnimationFrame(step);
-      };
-      requestAnimationFrame(step);
+      // It travels with the branch, on the branch's own curve and time.
+      glide(scroller, scroller.scrollTop + lift, { duration: BRANCH_OPEN_MS, easing: easeOut });
     });
   };
   const isExpanded = (id: number) => {

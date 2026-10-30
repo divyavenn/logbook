@@ -26,7 +26,7 @@ const Surface = styled.div`
 const LinkForm = styled.form`display: grid; gap: 8px; margin: 0;`;
 const LinkField = styled(Field)<{ $url?: boolean }>`
   color: ${({ $url }) => $url ? "var(--url)" : "var(--link)"};
-  transition: color 140ms ease-out;
+  transition: color 140ms ease;
   border: 0; outline: none; box-shadow: none; background: transparent;
   &:focus-visible { outline: none; background: var(--field); }
 `;
@@ -36,8 +36,8 @@ const TagCompletion = styled.div<{ $left: number; $top: number }>`
   width: min(230px, calc(100vw - 24px)); pointer-events: none;
   ${appear('3px', 140)};
   /* Once shown it slides to follow the caret instead of hopping after it. */
-  transition: opacity 140ms ease-out, transform 140ms cubic-bezier(.2, 0, 0, 1), left 140ms ease-out, top 140ms ease-out;
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  transition: opacity 140ms ease-out, transform 140ms var(--ease-out), left 140ms ease-out, top 140ms ease-out;
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 const TagAlternatives = styled.div`
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding-top: 31px;
@@ -46,7 +46,7 @@ const TagAlternatives = styled.div`
 const TagOption = styled.button<{ $selected: boolean }>`
   max-width: 100%; min-height: 28px; border: 0; border-radius: 999px; padding: 4px 9px;
   background: var(--tag-bg); color: ${({ $selected }) => $selected ? 'var(--link)' : 'var(--tag-ink)'}; font-size: 13px; line-height: 20px;
-  transition: color 120ms ease-out;
+  transition: color 120ms ease;
   text-align: left; overflow-wrap: anywhere;
   &:hover { color: var(--ink); }
 `;
@@ -60,15 +60,15 @@ const MobileFormatBar = styled.div<{ $left: number; $top: number; $width: number
   display: none; align-items: center; padding: 2px; border-radius: 10px;
   color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px #0000000b, 0 5px 18px #20262024;
   ${appear('4px', 160)};
-  transition: opacity 160ms ease-out, transform 160ms cubic-bezier(.2, 0, 0, 1),
+  transition: opacity 160ms ease-out, transform 160ms var(--ease-out),
     left 160ms ease-out, top 160ms ease-out, width 160ms ease-out;
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
   @media(pointer: coarse) { display: flex; }
 `;
 const MobileFormatButton = styled.button<{ $active: boolean }>`
   flex: 1 1 40px; min-width: 0; height: 40px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center;
   background: ${({ $active }) => $active ? 'var(--soft)' : 'transparent'}; color: ${({ $active }) => $active ? 'var(--link)' : 'var(--ink)'};
-  transition: background-color 140ms ease-out, color 140ms ease-out;
+  transition: background-color 140ms ease, color 140ms ease;
   font-size: 14px; line-height: 1;
 `;
 

@@ -6,7 +6,7 @@ const Gate = styled.dialog<{ $revealing: boolean }>`
   z-index: 100; display: grid; place-items: center; margin: 0; padding: 24px; border: 0;
   color: var(--ink); background: #00000014;
   opacity: ${({ $revealing }) => $revealing ? 0 : 1};
-  transition: opacity 220ms cubic-bezier(.2, 0, 0, 1);
+  transition: opacity 220ms var(--ease-out);
   &::backdrop { background: transparent; }
 `;
 const Form = styled.form<{ $hidden: boolean }>`
