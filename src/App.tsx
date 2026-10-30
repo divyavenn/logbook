@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
 import { cacheJournal, cachedJournal, getEntry, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
@@ -449,7 +450,9 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     // is whole from the first paint: the day being written is there, with the
     // caret in it, while the rest of the logbook is still on its way. A
     // refresh of the view already on screen is the one request it always was.
-    const changing = shown.current?.tag !== tag;
+    // A view with a page kept from last time already has its earlier days
+    // showing, and must not shrink to today alone while they are fetched.
+    const changing = shown.current?.tag !== tag && !cachedJournal(tag);
     let response: JournalData;
     try {
       if (changing) {
@@ -594,11 +597,19 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     try {
       await flushDrafts();
       tagRef.current = tag; loadedThrough.current = null; generation.current++;
-      setSwitchedView(true); setActiveTag(tag);
+      // Choosing a tag from another page was a question about the log, so the
+      // page turns back to it, and that turn is the answer arriving: the view
+      // does not also rise inside a page that is already moving.
+      const turning = paged && mobileView !== 'log';
+      // The last page seen for this view goes in at once, before anything
+      // moves, so the turn carries a finished page rather than one being built.
+      const cached = cachedJournal(tag);
+      flushSync(() => {
+        setSwitchedView(!turning); setActiveTag(tag);
+        if (cached) setData(cached);
+      });
       if (logViewport.current) logViewport.current.scrollTop = 0;
-      // Choosing a tag was a question about the log, so the page turns back to
-      // it and the answer arrives there, rising into place.
-      if (paged) selectMobileView('log');
+      if (turning) requestAnimationFrame(() => selectMobileView('log'));
     } catch (error) { entryError(error); }
   };
 
