@@ -132,7 +132,7 @@ for (const kind of ['notes', 'tasks'] as const) {
       await composer.press(shortcut);
       await expect(composer.locator(tag)).toHaveText(text);
       if (tag === 'code') {
-        await expect(composer.locator('code')).toHaveCSS('color', 'rgb(77, 97, 93)');
+        await expect(composer.locator('code')).toHaveCSS('color', 'rgb(40, 105, 131)');
         await expect(composer.locator('code')).toHaveCSS('font-family', /monospace/);
         await expect(composer.locator('code')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
         await expect(composer.locator('code')).toHaveCSS('padding-left', '0px');

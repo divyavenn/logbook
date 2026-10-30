@@ -57,27 +57,27 @@ const Page = styled.div<{ $focusing: boolean }>`
       --edge-paper: color-mix(in srgb, var(--paper), #000 20%);
     }
     :root:not([data-theme='night']) & [data-focus-surface] {
-      --paper: color-mix(in srgb, #f2f1ed, #000 16%);
-      --ink: color-mix(in srgb, #242422, #000 16%);
-      --muted: color-mix(in srgb, #626762, #000 16%);
-      --line: color-mix(in srgb, #d4d2cb, #000 16%);
-      --sage: color-mix(in srgb, #59605d, #000 16%);
-      --soft: color-mix(in srgb, #e8e6df, #000 16%);
-      --surface: color-mix(in srgb, #faf9f6, #000 16%);
-      --field: color-mix(in srgb, #fffefa, #000 16%);
-      --date-bg: color-mix(in srgb, #dfe7ed, #000 16%);
-      --tag-bg: color-mix(in srgb, #e8e6df, #000 16%);
-      --tag-ink: color-mix(in srgb, #525a56, #000 16%);
-      --tag-selected: color-mix(in srgb, #1871ba, #000 16%);
-      --code-bg: color-mix(in srgb, #e6e7e1, #000 16%);
-      --code-ink: color-mix(in srgb, #4d615d, #000 16%);
-      --quote: color-mix(in srgb, #5f645f, #000 16%);
-      --selection: color-mix(in srgb, #ccdbe7, #000 16%);
-      --focus: color-mix(in srgb, #6f7f88, #000 16%);
-      --link: color-mix(in srgb, #1871ba, #000 16%);
-      --url: color-mix(in srgb, #70588f, #000 16%);
-      --checkbox: color-mix(in srgb, #747773, #000 16%);
-      --scrollbar: color-mix(in srgb, #c0beb7, #000 16%);
+      --paper: color-mix(in srgb, #faf4ed, #000 16%);
+      --ink: color-mix(in srgb, #575279, #000 16%);
+      --muted: color-mix(in srgb, #6e6a86, #000 16%);
+      --line: color-mix(in srgb, #dfdad9, #000 16%);
+      --sage: color-mix(in srgb, #6e6a86, #000 16%);
+      --soft: color-mix(in srgb, #f2e9e1, #000 16%);
+      --surface: color-mix(in srgb, #fffaf3, #000 16%);
+      --field: color-mix(in srgb, #fffaf3, #000 16%);
+      --date-bg: color-mix(in srgb, #ebe1dc, #000 16%);
+      --tag-bg: color-mix(in srgb, #f2e9e1, #000 16%);
+      --tag-ink: color-mix(in srgb, #6e6a86, #000 16%);
+      --tag-selected: color-mix(in srgb, #286983, #000 16%);
+      --code-bg: color-mix(in srgb, #f2e9e1, #000 16%);
+      --code-ink: color-mix(in srgb, #286983, #000 16%);
+      --quote: color-mix(in srgb, #6e6a86, #000 16%);
+      --selection: color-mix(in srgb, #dfdad9, #000 16%);
+      --focus: color-mix(in srgb, #907aa9, #000 16%);
+      --link: color-mix(in srgb, #286983, #000 16%);
+      --url: color-mix(in srgb, #6e5e85, #000 16%);
+      --checkbox: color-mix(in srgb, #9893a5, #000 16%);
+      --scrollbar: color-mix(in srgb, #cecacd, #000 16%);
       --edge-paper: var(--paper);
     }
   `}
@@ -555,8 +555,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   useEffect(() => {
     let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
     if (!icon) { icon = document.createElement('link'); icon.rel = 'icon'; document.head.appendChild(icon); }
-    const paper = night ? '#011627' : '#d9dcdd';
-    const ink = active ? (night ? '#75d1c4' : '#48675e') : (night ? '#8ca0b0' : '#777b7e');
+    const paper = night ? '#011627' : '#f2e9e1';
+    const ink = active ? (night ? '#75d1c4' : '#286983') : (night ? '#8ca0b0' : '#9893a5');
     const inner = active ? `<circle cx="16" cy="16" r="5" fill="${ink}"/>` : '';
     icon.href = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="${paper}"/><circle cx="16" cy="16" r="10" fill="none" stroke="${ink}" stroke-width="2"/>${inner}</svg>`)}`;
   }, [active, night]);

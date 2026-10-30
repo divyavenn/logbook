@@ -56,13 +56,13 @@ test('timer shows ticking seconds, running colors in both themes, and resets on 
   await expect(timer).toHaveCSS('height', '44px');
   await expect.poll(async () => (await timer.boundingBox())!.width).toBeGreaterThan(44);
   await expect(page.getByTestId('page')).toHaveAttribute('data-focus-running', 'true');
-  await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-16', exact: true })).toHaveCSS('opacity', '0.6');
+  await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-16', exact: true })).toHaveCSS('opacity', '0.78');
   await expect(page.getByRole('group', { name: 'Keep this readable', exact: true })).toHaveCSS('opacity', '1');
   await expect(timer).toHaveCSS('opacity', '1');
   await expect(page.getByRole('main')).toHaveCSS('filter', 'none');
-  await expect(page.getByRole('group', { name: 'Keep this readable', exact: true })).toHaveCSS('color', 'color(srgb 0.118588 0.118588 0.112)');
+  await expect(page.getByRole('group', { name: 'Keep this readable', exact: true })).toHaveCSS('color', 'color(srgb 0.286588 0.270118 0.398588)');
   const activeLightBackground = await page.getByTestId('page').evaluate(el => getComputedStyle(el).backgroundColor);
-  await expect(timer).toHaveCSS('background-color', 'rgb(24, 113, 186)');
+  await expect(timer).toHaveCSS('background-color', 'rgb(40, 105, 131)');
   await page.clock.runFor(200);
   expect(Number((await timer.evaluate(el => getComputedStyle(el, '::before').borderColor)).match(/\d+/)?.[0])).toBeLessThan(120);
   await page.clock.runFor(1000);
@@ -105,7 +105,7 @@ test('timer shows ticking seconds, running colors in both themes, and resets on 
     return color.startsWith('color(') ? values[0] * 255 : values[0];
   };
   expect(redChannel(idleLightBackground) - redChannel(activeLightBackground)).toBeGreaterThan(25);
-  await expect(stopped).toHaveCSS('background-color', 'rgb(86, 98, 107)');
+  await expect(stopped).toHaveCSS('background-color', 'rgb(110, 106, 134)');
   await stopped.click();
   const restarted = page.getByRole('button', { name: 'Stop focus timer', exact: true });
   await page.clock.runFor(16);
@@ -119,7 +119,7 @@ test('timer shows ticking seconds, running colors in both themes, and resets on 
   await expect(restarted).toHaveCSS('width', '44px');
   await expect(restarted).toHaveCSS('height', '44px');
   await expect(restarted).toHaveCSS('scale', '1.03');
-  await expect(restarted).toHaveCSS('background-color', 'rgb(24, 113, 186)');
+  await expect(restarted).toHaveCSS('background-color', 'rgb(40, 105, 131)');
   await expect(restarted.locator('svg')).toBeVisible();
   await expect(restarted).not.toHaveAttribute('aria-busy', 'true');
   // Fix wall time, then deliver the next timer tick independently of the

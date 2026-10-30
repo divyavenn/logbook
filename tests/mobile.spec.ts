@@ -15,7 +15,7 @@ test('the page is laid out past the notch and takes the status bar with it', asy
 
   // The status bar is the paper at the top of the page, in either theme.
   const bar = page.locator('meta[name="theme-color"]');
-  await expect(bar).toHaveAttribute('content', '#f2f1ed');
+  await expect(bar).toHaveAttribute('content', '#faf4ed');
   const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
   await rail.hover();
   await rail.getByRole('switch', { name: 'Night mode', exact: true }).click();
@@ -28,7 +28,7 @@ test('a touch is answered by the page rather than by the browser', async ({ page
   await page.goto('/');
   // No grey flash painted over whatever was tapped, including the entry rows,
   // which are not buttons.
-  expect(await page.evaluate(() => getComputedStyle(document.documentElement).webkitTapHighlightColor))
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('-webkit-tap-highlight-color')))
     .toBe('rgba(0, 0, 0, 0)');
   expect(await page.evaluate(() => getComputedStyle(document.documentElement).webkitTextSizeAdjust)).toBe('100%');
 

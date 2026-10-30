@@ -3,7 +3,7 @@ import styled, { createGlobalStyle, css } from 'styled-components';
 // The paper at the very top of the page, which the status bar and the browser
 // chrome take their colour from. Day and night are the reader's choice here
 // rather than the system's, so the tag is kept in step by hand.
-export const PAPER = { day: '#f2f1ed', night: '#011627' } as const;
+export const PAPER = { day: '#faf4ed', night: '#011627' } as const;
 export function applyTheme(night: boolean): void {
   document.documentElement.dataset.theme = night ? 'night' : 'day';
   const bar = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
@@ -16,16 +16,18 @@ export const GlobalStyle = createGlobalStyle`
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-italic.woff2') format('woff2'); font-weight: 400; font-style: italic; font-display: swap; }
   :root {
     color-scheme: light;
-    --paper: #f2f1ed; --ink: #242422; --muted: #626762; --line: #d4d2cb; --sage: #59605d; --soft: #e8e6df;
-    --surface: #faf9f6; --field: #fffefa; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #e8e6df; --tag-ink: #525a56; --tag-selected: #1871ba;
-    --code-bg: #e6e7e1; --code-ink: #4d615d; --quote: #5f645f; --selection: #ccdbe7; --focus: #6f7f88;
-    --link: #1871ba; --url: #70588f; --checkbox: #747773; --scrollbar: #c0beb7;
-    --timer-ring: #9ba6ad; --timer: #56626b; --timer-hover: #626f78; --timer-ink: #faf9f6;
-    --timer-running: #1871ba; --timer-running-hover: #267bc3; --timer-running-ring: #6f91b3;
+    /* Rosé Pine Dawn. Its subtle, iris and love sit just under AA as text on
+       the base, so the roles that carry words take a deeper step of each. */
+    --paper: #faf4ed; --ink: #575279; --muted: #6e6a86; --line: #dfdad9; --sage: #6e6a86; --soft: #f2e9e1;
+    --surface: #fffaf3; --field: #fffaf3; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #f2e9e1; --tag-ink: #6e6a86; --tag-selected: #286983;
+    --code-bg: #f2e9e1; --code-ink: #286983; --quote: #6e6a86; --selection: #dfdad9; --focus: #907aa9;
+    --link: #286983; --url: #6e5e85; --checkbox: #9893a5; --scrollbar: #cecacd;
+    --timer-ring: #9893a5; --timer: #6e6a86; --timer-hover: #575279; --timer-ink: #fffaf3;
+    --timer-running: #286983; --timer-running-hover: #317591; --timer-running-ring: #56949f;
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 16%);
-    --chrome-opacity: .76; --focus-chrome-opacity: .6;
-    --primary: #354047; --primary-hover: #49565d; --primary-ink: #ffffff;
-    --danger: #99493b; --backdrop: #2d343033; --chart: #a8b8c6; --chart-today: #557fa5; --chart-hover: #7395b4;
+    --chrome-opacity: 1; --focus-chrome-opacity: .78;
+    --primary: #575279; --primary-hover: #6e6a86; --primary-ink: #fffaf3;
+    --danger: #8f556d; --backdrop: #57527933; --chart: #b5cfd3; --chart-today: #286983; --chart-hover: #56949f;
   }
   :root[data-theme='night'] {
     color-scheme: dark;
