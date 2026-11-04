@@ -398,21 +398,28 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   useEffect(() => {
     const measure = () => {
       const body = document.querySelector<HTMLElement>('[data-task-body]');
-      const rows = body?.querySelectorAll<HTMLElement>('li[data-item-id]');
-      const last = rows?.[rows.length - 1];
-      // Saved rows only. The composer comes and goes with the focus, and a
-      // layout that measured it could be flipped by its own answer.
-      if (!body || !last) { setCrowded(false); return; }
-      const height = last.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+      // Saved top-level rows only. The composer comes and goes with the focus,
+      // and an open branch is a glance into an entry rather than a longer
+      // list: a layout that measured either could be flipped by its own
+      // answer, remounting the list and closing the branch again.
+      const rows = body ? [...body.querySelectorAll<HTMLElement>('li[data-depth="0"]:not([data-item-id="draft"]) > div:first-child')] : [];
+      if (!body || !rows.length) { setCrowded(false); return; }
+      // Moving the list to another pane remounts it, so it is not moved out
+      // from under the caret. It is measured again once the focus leaves.
+      if (body.contains(document.activeElement)) return;
+      const height = rows[0].getBoundingClientRect().top - body.getBoundingClientRect().top
+        + rows.reduce((total, row) => total + row.getBoundingClientRect().height, 0);
       const share = height / window.innerHeight;
       setCrowded(previous => share > TASKS_CROWD_HEIGHT ? true : share < TASKS_SETTLE_HEIGHT ? false : previous);
     };
     measure();
     const body = document.querySelector('[data-task-body]');
     const observer = new ResizeObserver(measure);
-    if (body) observer.observe(body);
+    // The focus is still on its way out when this fires.
+    const left = () => requestAnimationFrame(measure);
+    if (body) { observer.observe(body); body.addEventListener('focusout', left); }
     window.addEventListener('resize', measure);
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+    return () => { observer.disconnect(); body?.removeEventListener('focusout', left); window.removeEventListener('resize', measure); };
   }, [data?.tasks, paged]);
   // A pane can stop existing when the window changes shape.
   useEffect(() => {

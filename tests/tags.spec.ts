@@ -652,3 +652,36 @@ test('a task given its first tag waits after it is left, then fades from the unt
   await expect.poll(async () => Number(await row.evaluate(element => getComputedStyle(element).opacity))).toBeLessThan(1);
   await expect(filed).toHaveCount(0);
 });
+
+test('a parent task opened in a filtered view stays open and editable', async ({ page, request }) => {
+  // Few enough tasks that the list sits above the log until a branch opens.
+  const task = await (await request.post('/api/tasks', { data: { content: 'Focus task', tags: ['focused'] } })).json();
+  for (let i = 0; i < 8; i++) await request.post('/api/tasks', { data: { content: `Sub ${i}`, parent_id: task.id } });
+  await page.goto('/');
+  const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
+  await rail.hover();
+  await rail.getByRole('button', { name: '#focused', exact: true }).click();
+  const toggle = page.getByRole('button', { name: 'Expand Focus task', exact: true });
+  const dots = toggle.locator('svg');
+  await expect(dots).toHaveCSS('rotate', '0deg');
+  await toggle.click();
+  await page.mouse.move(1200, 950);
+  // An open branch is not a longer list: the layout holds, and so does the branch.
+  await expect(page.getByRole('group', { name: 'Sub 7', exact: true })).toBeVisible();
+  await expect(page.getByRole('tablist', { name: 'Mobile views' })).toHaveCount(0);
+  const collapse = page.getByRole('button', { name: 'Collapse Focus task', exact: true });
+  await expect(collapse.locator('svg')).toHaveCSS('rotate', '90deg');
+  // The bubble, pie and all, turns a quarter with the dots, as a note's chevron does.
+  await expect.poll(() => collapse.evaluate(button => {
+    const [a, b] = new DOMMatrix(getComputedStyle(button, '::before').transform).toFloat64Array();
+    return [Math.round(a), Math.round(b)];
+  })).toEqual([0, 1]);
+  await page.getByRole('group', { name: 'Focus task', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: 'Edit task', exact: true });
+  await expect(editor).toBeFocused();
+  await editor.press('End');
+  await editor.pressSequentially(' edited');
+  await page.waitForTimeout(600);
+  await expect(editor).toBeFocused();
+  await expect(page.getByRole('group', { name: 'Sub 7', exact: true })).toBeVisible();
+});

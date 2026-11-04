@@ -141,23 +141,26 @@ export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done:
   &::before { content: ''; width: 5px; height: 5px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; translate: 0 var(--entry-marker-offset);
     transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
   /* A parent task wears the same bubble as any task, and the pie fills it in
-     only while it is partly done. Finished, it is a parent again. */
-  ${({ $task, $done, $progress }) => $task && css`
-    &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%; transform: none;
+     only while it is partly done. Finished, it is a parent again. Like the
+     chevron, it turns a quarter as its branch opens. */
+  ${({ $open, $task, $done, $progress }) => $task && css`
+    &::before { --task-progress: ${$progress * 360}deg; width: 12px; height: 12px; border: 1.25px solid currentColor; border-radius: 50%;
+      transform: rotate(${$open ? '90deg' : '0deg'});
       /* Filling the border box leaves no hairline inside the ring, which a
          fractional zoom would otherwise expose. */
       background: ${$done ? 'transparent' : 'conic-gradient(currentColor var(--task-progress), transparent 0)'};
       background-origin: border-box; background-clip: border-box;
-      transition: --task-progress ${TASK_PROGRESS_MS}ms var(--ease-out); }
+      transition: --task-progress ${TASK_PROGRESS_MS}ms var(--ease-out), transform 140ms ease-out; }
   `}
   /* Three dots mark it as a parent whenever the pie is not showing. The 14px
-     box matches the bubble's 12px interior and rendered borders. */
-  ${({ $done, $progress }) => {
+     box matches the bubble's 12px interior and rendered borders. They lie
+     across a closed branch and turn with the bubble to stand down an open one. */
+  ${({ $open, $done, $progress }) => {
     const bare = $done || $progress === 0;
     return css`
       > svg { position: absolute; width: 14px; height: 14px; overflow: hidden; pointer-events: none; translate: 0 var(--entry-marker-offset);
-        opacity: ${bare ? 1 : 0}; scale: ${bare ? 1 : .25}; filter: blur(${bare ? 0 : 4}px);
-        transition: opacity ${TASK_PROGRESS_MS}ms var(--ease-out), scale ${TASK_PROGRESS_MS}ms var(--ease-out), filter ${TASK_PROGRESS_MS}ms var(--ease-out);
+        opacity: ${bare ? 1 : 0}; scale: ${bare ? 1 : .25}; filter: blur(${bare ? 0 : 4}px); rotate: ${$open ? '90deg' : '0deg'};
+        transition: opacity ${TASK_PROGRESS_MS}ms var(--ease-out), scale ${TASK_PROGRESS_MS}ms var(--ease-out), filter ${TASK_PROGRESS_MS}ms var(--ease-out), rotate 140ms ease-out;
         @media (prefers-reduced-motion: reduce) { transition-property: opacity; } }
     `;
   }}
