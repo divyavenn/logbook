@@ -141,7 +141,7 @@ test('write, autosave, complete a task, use the timer, and edit sessions', async
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/');
   const composer = page.getByRole('textbox', { name: 'New note' });
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
   await expect(page.locator('link[rel="stylesheet"]')).toHaveCount(0);
   await expect(page.getByRole('main').locator('svg, img')).toHaveCount(0);
   await page.screenshot({ path: 'test-results/empty-desktop.png', fullPage: true });
@@ -151,7 +151,7 @@ test('write, autosave, complete a task, use the timer, and edit sessions', async
     return data.days[0].notes.some((note: { content: string }) => note.content === 'A small beginning, and a clear mind.');
   }).toBe(true);
   await page.reload();
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
   await expect(composer).toHaveText('');
   await expect(page.getByRole('group', { name: 'A small beginning, and a clear mind.', exact: true })).toBeVisible();
   await composer.fill('Made space for the important work.');
@@ -217,7 +217,7 @@ test('write, autosave, complete a task, use the timer, and edit sessions', async
 test('recovers a failed autosave without losing the draft', async ({ page }) => {
   await page.goto('/');
   const composer = page.getByRole('textbox', { name: 'New note' });
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
   await page.route('**/api/document/edit?*', route => route.abort());
   await composer.fill('This thought stays safe through a connection failure.');
   await expect(composer.locator('xpath=ancestor::li[1]')).toHaveAttribute('data-entry-error', 'true');
@@ -237,7 +237,7 @@ test('narrow screens use the same three-pane journal as short screens', async ({
   previous.setUTCDate(previous.getUTCDate() - 1);
   await request.post('/api/notes', { data: { date: previous.toISOString().slice(0, 10), content: 'Older narrow note' } });
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
   await page.screenshot({ path: 'test-results/journal-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 440, height: 700 });
   await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
@@ -250,14 +250,15 @@ test('narrow screens use the same three-pane journal as short screens', async ({
   await page.screenshot({ path: 'test-results/compact-notes.png' });
   await page.setViewportSize({ width: 260, height: 180 });
   await expect(page.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
-  await expect(page.getByRole('region', { name: /^Today,/ }).getByRole('button', { name: 'Add note', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).not.toBeFocused();
   await expect(page.getByRole('button', { name: 'Start focus timer' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open focus statistics' })).toBeHidden();
   expect(await page.locator('body').evaluate(el => el.scrollWidth)).toBeLessThanOrEqual(260);
   await page.screenshot({ path: 'test-results/timer-only.png' });
 });
 
-test('creates a fresh day at midnight and focuses its new entry', async ({ page }) => {
+test('creates a fresh day at midnight without taking focus', async ({ page }) => {
   await page.clock.install({ time: new Date('2026-09-16T23:59:58-07:00') });
   await page.route('**/api/journal?*', async route => {
     const today = await page.evaluate(() => {
@@ -270,12 +271,12 @@ test('creates a fresh day at midnight and focuses its new entry', async ({ page 
   await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-16' })).toBeVisible();
   await page.clock.runFor(3000);
   await expect(page.getByRole('button', { name: 'Focus sessions for 2026-09-17' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).not.toBeFocused();
 });
 
 test('journal and statistics meet automated accessibility checks', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
   await page.waitForTimeout(160); // Let initial hover/color transitions reach their contrast-stable state.
   const journal = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
   expect(journal.violations).toEqual([]);
@@ -301,7 +302,7 @@ test('recovers a draft from an earlier day into its original date', async ({ pag
   await page.goto('/');
   await expect(page.getByRole('group', { name: 'A thought from before midnight.', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: new RegExp(day) }).getByRole('group', { name: 'A thought from before midnight.', exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
 });
 
 test('loads older days automatically and saves edits to historical notes', async ({ page, request }) => {
@@ -316,7 +317,7 @@ test('loads older days automatically and saves edits to historical notes', async
     if (url.pathname === '/api/journal') pageRequests.push(url);
   });
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New note' })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note' })).toBeVisible();
   await page.waitForTimeout(350);
   const timer = page.getByRole('button', { name: 'Start focus timer' });
   const todo = page.getByRole('region', { name: 'to do', exact: true });

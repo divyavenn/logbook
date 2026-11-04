@@ -151,7 +151,7 @@ test('link shortcut inserts a labeled link at the caret or links selected text',
   } }));
   await page.goto('/');
   const composer = page.getByRole('textbox', { name: 'New note', exact: true });
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
   await composer.press('Meta+k');
   const dialog = page.getByRole('dialog', { name: 'Link', exact: true });
   const label = dialog.getByRole('textbox', { name: 'Link label', exact: true });
@@ -341,7 +341,7 @@ test('Ctrl shortcuts work on Windows and block formatting saves valid Markdown',
   await page.addInitScript(() => Object.defineProperty(navigator, 'platform', { get: () => 'Win32' }));
   await page.goto('/');
   const composer = page.getByRole('textbox', { name: 'New note', exact: true });
-  await expect(composer).toBeFocused();
+  await expect(composer).toBeVisible();
   await composer.fill('Windows bold');
   await composer.press('Control+a'); await composer.press('Control+b');
   await expect(composer.locator('strong')).toHaveText('Windows bold');

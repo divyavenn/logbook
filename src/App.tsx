@@ -16,6 +16,7 @@ import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
 import { LOG_WASH_HEIGHT, compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
+import { useIdleEntry } from './useIdleEntry';
 import { glide, reducedMotion } from './motion';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
@@ -264,6 +265,7 @@ const ConnectionState = styled.div`padding: 50px 0; display: grid; gap: 16px; ju
 export default function App({ locked = false, load = !locked, onReady, onLoadError }: {
   locked?: boolean; load?: boolean; onReady?: () => void; onLoadError?: () => void;
 }) {
+  useIdleEntry();
   // Paint the page we last saw on the first render, before anything is asked
   // of the network. A refresh replaces it as soon as one answers.
   const [data, setData] = useState<JournalData | null>(() => load ? cachedJournal(null) : null);

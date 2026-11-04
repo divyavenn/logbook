@@ -119,13 +119,14 @@ const entireEntrySelected = (editor: Editor) => {
   return dom.contains(native.anchorNode) && dom.contains(native.focusNode);
 };
 export type RichTextHandle = {
+  insertText: (text: string) => void;
   focus: (options?: FocusOptions, selection?: TextOffsets) => void;
   focusAt: (x: number, direction: VerticalDirection, options?: FocusOptions) => void;
   selection: () => TextOffsets | undefined;
   editLink: () => void;
   selectEntry: () => void;
   entireSelected: () => boolean;
-  splitAtSelection: () => { before: { content: string; tags: string[] }; after: { content: string; tags: string[] } } | null;
+  splitAtSelection: () => { before: { content: string; tags: string[]; document: JSONContent | null }; after: { content: string; tags: string[]; document: JSONContent | null } } | null;
 };
 type Props = {
   ref?: Ref<RichTextHandle>; value: string; tags: string[]; label: string; readOnly: boolean;
@@ -611,6 +612,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
   };
 
   useImperativeHandle(ref, () => ({
+    insertText(text) {
+      if (!editor || editor.isDestroyed) return;
+      editor.view.dispatch(editor.state.tr.insertText(text).scrollIntoView());
+    },
     selection() {
       if (!editor || editor.isDestroyed) return;
       const positions = textPositions(editor.state.doc);
@@ -692,18 +697,21 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
       // At the end of a heading, quote, or code block, its empty closing
       // structure is not content to carry into the next entry.
       if (from === to && !written(to, doc.content.size).trim()) return {
-        before: serializeEntry(doc.toJSON()), after: { content: '', tags: [] },
+        before: { ...serializeEntry(doc.toJSON()), document: doc.toJSON() }, after: { content: '', tags: [], document: null },
       };
       return {
-        before: text(0, from) ? serializeEntry(doc.cut(0, from).toJSON()) : { content: '', tags: [] },
-        after: text(to, doc.content.size) ? serializeEntry(doc.cut(to, doc.content.size).toJSON()) : { content: '', tags: [] },
+        before: text(0, from) ? { ...serializeEntry(doc.cut(0, from).toJSON()), document: doc.cut(0, from).toJSON() } : { content: '', tags: [], document: null },
+        after: text(to, doc.content.size) ? { ...serializeEntry(doc.cut(to, doc.content.size).toJSON()), document: doc.cut(to, doc.content.size).toJSON() } : { content: '', tags: [], document: null },
       };
     },
   }), [editor]);
   useEffect(() => {
     const snapshot = JSON.stringify([value, entryTags]);
     if (editor && snapshot !== lastSnapshot.current) {
+      const { anchor, head } = editor.state.selection;
       editor.commands.setContent(stored || documentWithTags(value, entryTags), { emitUpdate: false });
+      const end = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(anchor, end), to: Math.min(head, end) });
       lastSnapshot.current = snapshot;
     }
   }, [editor, value, entryTags]);

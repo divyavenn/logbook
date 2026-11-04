@@ -20,7 +20,7 @@ import { useRangeEditing } from '../useRangeEditing';
 import { useTaskCompletion } from '../useTaskCompletion';
 import { useOutlineDraft } from '../useOutlineDraft';
 import { hasDraftChanges, type Draft } from '../entryDrafts';
-import { ancestorIds, branchIds, checkEntryDepth, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
+import { ancestorIds, branchIds, checkEntryDepth, inheritsTag, orderedEntries as sorted, siblingEntries as siblings } from '../entryTree';
 import type { DocumentChange, OutlineChange } from '../entryChanges';
 import { formattingShortcut, type EntryFormat } from '../entryFormatting';
 import { OutlineSurface, List, Children, Row, Item, Branch, ComposerTarget, LinkCopy, Marker, DraftItem, Checkbox, Disclosure, Text, BRANCH_OPEN_MS, DEPART_MS, FILE_COLLAPSE_MS, FILE_FADE_MS, FILE_PAUSE_MS } from './OutlineStyles';
@@ -80,9 +80,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const items = lingering.length ? [...live, ...lingering] : live;
   const itemsRef = useRef(items);
   itemsRef.current = items;
-  // A filtered view hides the tag it filters by, in the text and as a bubble:
-  // an entry leaves that view by being deleted from it, not by losing the tag
-  // inline. Every other tag stays visible and editable.
+  // The active tag is omitted from previews. Opening an entry shows its own
+  // tags; inherited membership never inserts a tag into the child's document.
   const hiddenTagsFor = (tags: string[] | undefined) =>
     activeTag && (tags ?? []).includes(activeTag) ? [activeTag] : [];
   const [removed, setRemoved] = useState(new Set<number>());
@@ -284,11 +283,6 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const [busy, setBusy] = useState(false);
   const focus = () => {
     if (selectionActive.current) { restoringFocus.current = false; return; }
-    // A new entry seeded with a filtered view's tag starts in front of it, so
-    // the first letter goes before the tag rather than behind it.
-    const seeded = current.current;
-    if (!pendingSelection.current && seeded.id === null && seeded.hiddenTags.length
-      && !entryText(documentOf(seeded)).trim()) pendingSelection.current = { anchor: 0, head: 0 };
     if (pendingVertical.current) input.current?.focusAt(pendingVertical.current.x, pendingVertical.current.direction, { preventScroll: false });
     else input.current?.focus({ preventScroll: false }, pendingSelection.current);
     if (pendingLinkEdit.current) input.current?.editLink();
@@ -300,10 +294,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   const dismissEmptyDraft = () => {
     if (lock.current) return false;
     const snapshot = current.current;
-    // Nothing written, and no tag the reader put there: a filtered view's own
-    // tag is seeded into every new entry and does not make one worth keeping.
-    const typed = snapshot.tags.filter(tag => !snapshot.hiddenTags.includes(tag));
-    if (snapshot.id !== null || entryText(documentOf(snapshot)).trim() || typed.length) return false;
+    if (snapshot.id !== null || snapshot.content.trim() || snapshot.tags.length) return false;
     persist(blank(records.current, false));
     return true;
   };
@@ -314,7 +305,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     if (lock.current || !activeTag) return false;
     const snapshot = current.current;
     if (!snapshot.active || snapshot.mode !== 'edit' || snapshot.id === null || hasDraftChanges(snapshot)) return false;
-    persist(blank(records.current, composer));
+    persist(blank(records.current, false));
     return true;
   };
 
@@ -372,68 +363,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
   }, [composer, persist]);
   useEffect(() => {
     mounted.current = true;
-    // The composer takes the caret when nothing else holds it. Claiming it
-    // while the reader has something selected over the page would take that
-    // selection away; a selection inside an editor is only its own caret.
-    const written = (node: Node | null) => {
-      const element = node instanceof Element ? node : node?.parentElement;
-      return !element?.closest('[contenteditable="true"]');
-    };
-    const unselected = () => {
-      const selection = window.getSelection();
-      if (!selection || selection.isCollapsed || !selection.rangeCount) return true;
-      return !(written(selection.anchorNode) && written(selection.focusNode));
-    };
-    const claim = () => {
-      if (!mounted.current || defaultKind !== 'notes' || !composer) return;
-      if (document.querySelector('dialog[open]') || !unselected()) return;
-      const active = document.activeElement;
-      if (active && active !== document.body) return;
-      input.current?.focus({ preventScroll: true });
-    };
-    // The window coming back is not itself a free caret. The browser says so
-    // before it has given focus back to whatever was holding it, so what was
-    // holding it is remembered as it goes: the caret returns to the entry the
-    // reader left it in, and the composer claims nothing.
-    let held: Element | null = null;
-    const onBlur = () => { held = document.activeElement; };
-    const onFocus = () => {
-      const returning = held && held !== document.body && held.isConnected;
-      held = null;
-      if (!returning) claim();
-    };
-    // What holds the caret now, if it is anything the reader chose. A rebuilt
-    // view must not take it off an entry or a field: those keep it, and the
-    // composer goes without.
-    const chosen = () => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLElement) || active === document.body) return null;
-      return active.closest('[data-outline-key], [contenteditable], input, textarea, dialog') ? 'keeps' : active;
-    };
-    let waiting: HTMLElement | null = null;
-    let release: (() => void) | null = null;
-    let pending = 0;
-    const frame = requestAnimationFrame(() => {
-      const holder = chosen();
-      if (holder === null) { claim(); return; }
-      if (holder === 'keeps') return;
-      // A page control still holds the caret, the tag rail that was just used
-      // among them. It is waited out rather than talked over: the panel closes,
-      // the control lets go, and the composer is ready without having taken
-      // anything from the reader.
-      waiting = holder;
-      release = () => { pending = requestAnimationFrame(claim); };
-      waiting.addEventListener('blur', release, { once: true });
-    });
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('blur', onBlur);
-    return () => {
-      mounted.current = false; cancelAnimationFrame(frame); cancelAnimationFrame(pending);
-      window.removeEventListener('blur', onBlur);
-      if (waiting && release) waiting.removeEventListener('blur', release);
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [composer, kind, save]);
+    return () => { mounted.current = false; };
+  }, []);
 
   const run = async (action: () => Promise<void>, restoreFocus = true) => {
     if (lock.current) return;
@@ -519,6 +450,16 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     flushSync(() => persist(blank(records.current, true)));
     focus();
   };
+  useEffect(() => {
+    const element = surface.current;
+    const start = (event: Event) => {
+      if (lock.current) return;
+      beginEntry();
+      input.current?.insertText((event as CustomEvent<string>).detail);
+    };
+    element?.addEventListener('still-start-entry', start);
+    return () => element?.removeEventListener('still-start-entry', start);
+  });
 
   const navigateBoundary = (direction: VerticalDirection | 'left' | 'right', measuredX?: number) => {
     if (lock.current) return false;
@@ -619,11 +560,12 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     }
     void documentStore.flush().catch(() => {});
   };
-  // Removing an entry from a filtered list takes it out of that list only. The
-  // tag that put it there goes, and the entry stays in the full logbook.
+  // Removing a filtered root drops its tag. A child included through an
+  // ancestor has no independent membership to remove, so delete the child.
   const untagOrDelete = (entry: { kind: EntryKind; id: number; content: string; tags: string[] }): OutlineChange => {
     const remaining = activeTag ? entry.tags.filter(tag => tag !== activeTag) : [];
-    return activeTag && (entry.content.trim() || remaining.length)
+    const parentId = records.current.find(row => row.id === entry.id)?.parent_id ?? null;
+    return activeTag && !inheritsTag(records.current, parentId, activeTag) && (entry.content.trim() || remaining.length)
       ? { kind: entry.kind, id: entry.id, type: 'update', content: entry.content, tags: remaining, allow_empty: true }
       : { kind: entry.kind, id: entry.id, type: 'delete' };
   };
@@ -953,22 +895,26 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       return;
     }
     const split = input.current?.splitAtSelection();
-    const hiddenTags = draftHiddenTags(snapshot);
-    const keepHiddenTag = (content: string, tags: string[]) =>
-      [...new Set([...tags, ...(content.trim() || tags.length ? hiddenTags : [])])];
+    const filingTags = activeTag && !inheritsTag(records.current, snapshot.parentId, activeTag) ? [activeTag] : [];
+    const filedPart = (part: { content: string; tags: string[]; document: EntryDocument | null }, tags = filingTags) => {
+      if (!part.content.trim() && !part.tags.length) return part;
+      const document = withTags(part.document ?? documentWithTags(part.content, part.tags), tags);
+      return { ...serializeEntry(document), document };
+    };
+    const retainedTags = filingTags.filter(tag => snapshot.tags.includes(tag));
     restoringFocus.current = true;
     if (split && !split.before.content && !split.before.tags.length && (split.after.content || split.after.tags.length)) {
       // Keep the trailing entry (and its children) intact. An explicit empty
       // sibling represents the line inserted before it and survives a reload.
       stageDraft();
       const editKey = crypto.randomUUID();
-      persist({ ...current.current, content: split.after.content, tags: keepHiddenTag(split.after.content, split.after.tags) });
+      persist({ ...current.current, ...filedPart(split.after, retainedTags) });
       const id = stageDraft(editKey)!;
       const emptyId = documentStore.allocate();
       const parent = records.current.find(row => row.id === snapshot.parentId);
       const emptyKind = parent ? parent.kind : defaultKind;
       flushSync(() => {
-        documentStore.enqueue([{ id: emptyId, kind: emptyKind, type: 'create', content: '', tags: activeTag ? [activeTag] : [],
+        documentStore.enqueue([{ id: emptyId, kind: emptyKind, type: 'create', content: '', tags: filingTags,
           allow_empty: true, date: day, client_id: crypto.randomUUID(), parent_id: snapshot.parentId, before_id: id }], editKey);
         persist({ ...current.current, clientId: crypto.randomUUID(), mode: 'edit', afterId: emptyId, beforeId: null, placement: 'after' });
       });
@@ -978,12 +924,12 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       return;
     }
     flushSync(() => {
-      if (split) persist({ ...snapshot, content: split.before.content, tags: keepHiddenTag(split.before.content, split.before.tags) });
+      if (split) persist({ ...snapshot, ...filedPart(split.before, retainedTags) });
       const id = stageDraft();
       const parent = records.current.find(item => item.id === snapshot.parentId);
       const next = blank(records.current, true, snapshot.parentId, id ?? snapshot.afterId, parent ? parent.kind : defaultKind);
       persist({ ...next, beforeId: id === null ? snapshot.beforeId : null,
-        content: split?.after.content ?? '', tags: split ? keepHiddenTag(split.after.content, split.after.tags) : [] });
+        ...(split ? filedPart(split.after) : {}) });
     });
     pendingSelection.current = { anchor: 0, head: 0 };
     focus();
@@ -997,7 +943,7 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
     data-entry-gesture-key={gestureKey} data-gesture-selected={gestureSelected || undefined}
     onPointerLeave={() => clearPreview(draft.id)}
     onContextMenuCapture={event => { if (gestureSelected) { event.preventDefault(); event.stopPropagation(); } }}
-    $emptyTask={draft.kind === 'tasks' && draft.id === null && !draft.content.trim() && !draft.tags.length}
+    $empty={draft.id === null && !draft.content.trim() && !draft.tags.length}
     $gestureSelected={gestureSelected} $dragX={gestureSelected ? entrySelection.dragX : 0}
     $leaving={draft.id !== null && completing.has(draft.id)}>
     <Row aria-busy={saving} onClick={gestureSelected ? event => {
@@ -1018,7 +964,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
         // A new entry written in a filtered view is filed under that view's
         // tag. A saved one carries whatever its document says: the tag shows
         // while it is open, so deleting it there is meant.
-        const keep = value.id === null && (content.trim() || tags.length) ? hiddenTags : [];
+        const keep = value.id === null && activeTag && !inheritsTag(records.current, value.parentId, activeTag)
+          && (content.trim() || tags.length) ? [activeTag] : [];
         const kept = document && keep.length ? withTags(document, keep) : document;
         const projected = kept && keep.length ? serializeEntry(kept) : null;
         persist({ ...value, content: projected?.content ?? content, document: kept, hiddenTags,
@@ -1152,7 +1099,8 @@ export function Outline({ kind, items: serverItems, day, composer = false, archi
       await refresh();
     });
   };
-  return <OutlineSurface ref={surface} data-outline-kind={defaultKind} tabIndex={-1}
+  return <OutlineSurface ref={surface} data-outline-kind={defaultKind}
+    data-default-entry={composer || kind === 'tasks' && !archived ? defaultKind : undefined} tabIndex={-1}
   onDragStartCapture={event => {
     if (!entrySelectionRef.current?.key.startsWith('draft:')) return;
     const id = stageDraft();

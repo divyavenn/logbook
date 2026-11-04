@@ -40,8 +40,8 @@ test("today opens before the earlier days have been asked for", async ({ page, r
   const todayEntry = page.getByRole('group', { name: 'Written today', exact: true });
   const older = page.getByRole('group', { name: 'Written long ago', exact: true });
   await expect(todayEntry).toBeVisible({ timeout: 4000 });
-  // The caret is in today's composer while the rest is still on its way.
-  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
+  // Loading the page leaves the caret free while history arrives.
+  await expect(page.locator('[contenteditable="true"]:focus')).toHaveCount(0);
   await expect(older).toHaveCount(0);
   expect(asked[0]).toBe('1');
   release();

@@ -106,8 +106,8 @@ export const Marker = styled.span<{ $task: boolean }>`
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }
   @media ${compactViewport} { width: 36px; min-width: 36px; height: 36px; }
 `;
-export const DraftItem = styled(Item)<{ $emptyTask: boolean }>`
-  ${({ $emptyTask }) => $emptyTask && css`
+export const DraftItem = styled(Item)<{ $empty: boolean }>`
+  ${({ $empty }) => $empty && css`
     > ${Row} > ${Marker} { visibility: hidden; }
     &:focus-within > ${Row} > ${Marker} { visibility: visible; }
   `}
