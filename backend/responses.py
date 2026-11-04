@@ -80,12 +80,26 @@ class DayMetrics(BaseModel):
     last_ended_at: str | None = None
 
 
+class DueHabit(BaseModel):
+    """A habit not yet done today, which the task list shows as a task."""
+    id: int = Field(ge=1)
+    key: str
+    name: str
+
+
+class DoneHabit(DueHabit):
+    """A habit done on a day, which that day in the logbook shows as a done task."""
+    completed_at: str
+    archived: bool
+
+
 class JournalDayOutput(DayMetrics):
     entries: list[JournalEntryOutput]
     # Older clients still read these two views of the same entries.
     notes: list[JournalEntryOutput]
     tasks: list[JournalEntryOutput]
     events: list[CalendarEvent]
+    habits: list[DoneHabit] = Field(default_factory=list)
 
 
 class JournalOutput(BaseModel):
@@ -95,6 +109,7 @@ class JournalOutput(BaseModel):
     tags: list[TagOutput]
     days: list[JournalDayOutput]
     tasks: list[TaskOutput]
+    habits: list[DueHabit] = Field(default_factory=list)
     active_session: SessionOutput | None
     server_time: str
     next_cursor: str | None
@@ -173,6 +188,31 @@ class StoredDay(BaseModel):
     created_at: str
 
 
+class HabitOutput(BaseModel):
+    id: int = Field(ge=1)
+    key: str
+    name: str
+    position: int = Field(ge=0)
+    created_at: str
+    # The days it was done, oldest first, within the range asked for.
+    done: list[str]
+
+
+class StoredHabit(BaseModel):
+    id: int
+    key: str
+    name: str
+    position: int
+    created_at: str
+    archived_at: str | None = None
+
+
+class StoredHabitDay(BaseModel):
+    habit_id: int
+    date: str
+    completed_at: str
+
+
 class ExportOutput(BaseModel):
     schema_version: int
     content_format: Literal['markdown']
@@ -182,3 +222,5 @@ class ExportOutput(BaseModel):
     notes: list[EntryOutput]
     tasks: list[TaskOutput]
     sessions: list[StoredSession]
+    habits: list[StoredHabit] = Field(default_factory=list)
+    habit_days: list[StoredHabitDay] = Field(default_factory=list)

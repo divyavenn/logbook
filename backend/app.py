@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import uuid
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,6 +21,7 @@ from .tags import entry_dict, list_tags, matching_ids, normalize_tag, tagged_ids
 from .stats import EMPTY_TOTALS, daily_totals, parse, slices, stamp
 from .hierarchy import descendants, next_position, remove_with_children
 from .tasks import visible_tasks
+from .habits import done_on as habits_done_on, due as habits_due, habit_dict, history as habit_history, live_habits, required_habit
 from .history import snapshot, record, restore
 from .agent import AgentJournal, AgentQuery, DISCOVERY_LINKS, READ_HEADERS, markdown_journal, read_journal
 from .calendars import CalendarLoadError, calendar_content, calendar_host, calendar_name, drop_calendar, load_calendar
@@ -29,8 +31,8 @@ from .task_service import finish_task, root_task, archive_task_tree, finish_read
 from .entry_kinds import EntryKind, api_kind, stored_kind
 from .sharing import signature_valid
 from .documents import edit_document as apply_document_edits
-from .responses import (AuthStatusOutput, CompletionOutput, DailyStatsOutput, DocumentOutput, EntryOutput, ExportOutput, HealthOutput, JournalOutput, ReopenOutput, RestoredOutput, SearchOutput, SessionOutput, SharedEntryOutput, StatsOutput, TagOutput, TaskOutput, TimerOutput)
-from .models import (PasswordLogin, Content, NewEntry, NewNote, EntryLocation, SessionEdit, StopTimer, CalendarSubscriptionInput, CalendarSubscriptionOutput, DocumentBatch, HistoryDirection, HistoryBatch, ReopenTask)
+from .responses import (AuthStatusOutput, CompletionOutput, DailyStatsOutput, DocumentOutput, EntryOutput, ExportOutput, HabitOutput, HealthOutput, JournalOutput, ReopenOutput, RestoredOutput, SearchOutput, SessionOutput, SharedEntryOutput, StatsOutput, TagOutput, TaskOutput, TimerOutput)
+from .models import (PasswordLogin, Content, NewEntry, NewNote, EntryLocation, SessionEdit, StopTimer, CalendarSubscriptionInput, CalendarSubscriptionOutput, DocumentBatch, HabitName, HabitOrder, HistoryDirection, HistoryBatch, ReopenTask)
 
 
 def utcnow():
@@ -139,6 +141,8 @@ if os.environ.get('STILL_TEST_MODE') == '1':
             db.execute('DELETE FROM document_operations')
             db.execute('DELETE FROM document_requests')
             db.execute('DELETE FROM entries')
+            db.execute('DELETE FROM habit_days')
+            db.execute('DELETE FROM habits')
             db.execute('DELETE FROM sessions')
             db.execute('DELETE FROM days')
             db.execute('DELETE FROM calendar_subscriptions')
@@ -236,6 +240,8 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
         dates.add(today)
         if not tag:
             dates.update(calendar_days)
+            # A day on which only habits were done is still a day in the logbook.
+            dates.update(r["date"] for r in db.execute("SELECT DISTINCT date FROM habit_days"))
         note_ids = matching_ids(db, "notes", tag) if tag else None
         task_ids = set(matching_ids(db, "tasks", tag)) if tag else None
         if note_ids is not None:
@@ -253,6 +259,8 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
                 if included:
                     item = {**entry_dict(row), 'kind': api_kind(row['kind'])}
                     entries.setdefault(row['date'], []).append(item)
+        # Habits keep to the full logbook; a filtered view is a list of entries.
+        done_habits = habits_done_on(db, selected) if not tag else {}
         days = []
         for d in selected:
             day_entries = entries.get(d, [])
@@ -262,6 +270,7 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
             days.append({"date": d, "notes": day_notes, "tasks": day_tasks,
                          "entries": day_entries,
                          "events": calendar_days.get(d, []),
+                         "habits": done_habits.get(d, []),
                          **totals.get(d, EMPTY_TOTALS)})
         tasks = visible_tasks(db)
         if task_ids is not None:
@@ -282,8 +291,90 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
                 "completed_child_count": task["completed_child_count"] - withheld[task["id"]][1],
             } for task in tasks if task["id"] not in filed]
         active = next((session_dict(s, now) for s in sessions if s["ended_at"] is None), None)
-        return {"today": today, "content_format": "markdown", "tag": normalize_tag(tag) if tag else None, "tags": list_tags(db), "days": days, "tasks": tasks, "active_session": active,
+        return {"today": today, "content_format": "markdown", "tag": normalize_tag(tag) if tag else None, "tags": list_tags(db), "days": days, "tasks": tasks,
+                "habits": habits_due(db, today) if not tag else [], "active_session": active,
                 "server_time": stamp(now), "next_cursor": selected[-1] if len(ordered) > limit else None}
+
+
+@app.get("/api/habits", response_model=list[HabitOutput])
+def habits(timezone: str = "UTC", start: CalendarDate | None = None, end: CalendarDate | None = None):
+    zone = get_zone(timezone)
+    end = end or utcnow().astimezone(zone).date()
+    start = start or end - timedelta(days=370)
+    if not 0 <= (end - start).days < 3660:
+        raise HTTPException(422, "Choose an ordered date range of at most 3,660 days.")
+    with connection() as db:
+        done = habit_history(db, start.isoformat(), end.isoformat())
+        return [habit_dict(row, done) for row in live_habits(db)]
+
+
+@app.post("/api/habits", status_code=201, response_model=HabitOutput)
+def add_habit(body: HabitName):
+    with connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        position = db.execute('SELECT COALESCE(MAX(position), -1) + 1 FROM habits').fetchone()[0]
+        cursor = db.execute('INSERT INTO habits(key, name, position, created_at) VALUES (?, ?, ?, ?)',
+                            (str(uuid.uuid4()), body.name, position, stamp(utcnow())))
+        return habit_dict(required_habit(db, cursor.lastrowid), {})
+
+
+@app.put("/api/habits/order", status_code=204)
+def order_habits(body: HabitOrder):
+    """Habits keep the order they are dragged into, on the list and the tracker."""
+    with connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        live = {row['id'] for row in live_habits(db)}
+        if set(body.ids) != live or len(body.ids) != len(live):
+            raise HTTPException(409, 'The habits changed elsewhere. Reload to see them.')
+        for position, habit_id in enumerate(body.ids):
+            db.execute('UPDATE habits SET position = ? WHERE id = ?', (position, habit_id))
+    return Response(status_code=204)
+
+
+@app.patch("/api/habits/{habit_id}", response_model=HabitOutput)
+def rename_habit(habit_id: int, body: HabitName):
+    with connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        required_habit(db, habit_id)
+        db.execute('UPDATE habits SET name = ? WHERE id = ?', (body.name, habit_id))
+        return habit_dict(required_habit(db, habit_id), habit_history(db, '0000-01-01', '9999-12-31'))
+
+
+@app.delete("/api/habits/{habit_id}", status_code=204)
+def delete_habit(habit_id: int):
+    """A habit given up leaves the list and the tracker. The days it was done stay."""
+    with connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        required_habit(db, habit_id)
+        db.execute('UPDATE habits SET archived_at = ? WHERE id = ?', (stamp(utcnow()), habit_id))
+    return Response(status_code=204)
+
+
+def habit_day(day: CalendarDate, timezone: str):
+    if day > utcnow().astimezone(get_zone(timezone)).date():
+        raise HTTPException(422, "A habit can only be done on a day that has come.")
+    return day.isoformat()
+
+
+@app.put("/api/habits/{habit_id}/days/{day}", status_code=204)
+def complete_habit(habit_id: int, day: CalendarDate, timezone: str = "UTC"):
+    date = habit_day(day, timezone)
+    with connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        required_habit(db, habit_id)
+        db.execute('INSERT OR IGNORE INTO habit_days(habit_id, date, completed_at) VALUES (?, ?, ?)', (habit_id, date, stamp(utcnow())))
+    return Response(status_code=204)
+
+
+@app.delete("/api/habits/{habit_id}/days/{day}", status_code=204)
+def reopen_habit(habit_id: int, day: CalendarDate, timezone: str = "UTC"):
+    date = habit_day(day, timezone)
+    with connection() as db:
+        db.execute('BEGIN IMMEDIATE')
+        # A habit given up keeps its days as they were.
+        required_habit(db, habit_id)
+        db.execute('DELETE FROM habit_days WHERE habit_id = ? AND date = ?', (habit_id, date))
+    return Response(status_code=204)
 
 
 @app.get("/api/tags", response_model=list[TagOutput], response_model_exclude_unset=True)
@@ -647,7 +738,9 @@ def export():
                 # Compatibility views for existing exports and clients.
                 "notes": [row for row in entries if row['kind'] == 'note'],
                 "tasks": [row for row in entries if row['kind'] == 'task'],
-                "sessions": [dict(r) for r in db.execute('SELECT * FROM sessions ORDER BY id')]}
+                "sessions": [dict(r) for r in db.execute('SELECT * FROM sessions ORDER BY id')],
+                "habits": [dict(r) for r in db.execute('SELECT * FROM habits ORDER BY id')],
+                "habit_days": [dict(r) for r in db.execute('SELECT * FROM habit_days ORDER BY date, habit_id')]}
 
 
 @app.get("/api/backup", response_class=FileResponse)

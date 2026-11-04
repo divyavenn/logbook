@@ -200,15 +200,14 @@ test('write, autosave, complete a task, use the timer, and edit sessions', async
   const start = new Date(`${day}T09:00:00-07:00`).toISOString();
   await request.post('/api/sessions', { data: { started_at: start, duration_seconds: 75 * 60 } });
   await page.getByRole('navigation', { name: 'Tags' }).hover();
-  await page.getByRole('button', { name: 'Open focus statistics' }).click();
+  await page.getByRole('button', { name: 'Open habits and focus' }).click();
   const statsDialog = page.getByRole('dialog', { name: 'Statistics' });
   await expect(statsDialog).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(1);
-  await expect(statsDialog.getByText(/1h 15m 00s total/)).toBeVisible();
-  await statsDialog.getByRole('button', { name: '30 days', exact: true }).click();
-  await expect(statsDialog.getByRole('button', { name: '30 days', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await statsDialog.getByRole('button', { name: /total · \d+ sessions?$/ }).click();
-  await expect(statsDialog.getByRole('list')).toBeVisible();
+  // Seventy-five minutes over the week is a little under eleven a day.
+  await expect(statsDialog.getByRole('button', { name: 'Show focus chart, 0h 10m a day this week', exact: true })).toBeVisible();
+  await statsDialog.locator(`[data-date="${day}"]`).hover();
+  await expect(statsDialog.getByText('1h 15m', { exact: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/statistics-desktop.png' });
   await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
@@ -253,7 +252,7 @@ test('narrow screens use the same three-pane journal as short screens', async ({
   await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'New note', exact: true })).not.toBeFocused();
   await expect(page.getByRole('button', { name: 'Start focus timer' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Open focus statistics' })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Open habits and focus' })).toBeHidden();
   expect(await page.locator('body').evaluate(el => el.scrollWidth)).toBeLessThanOrEqual(260);
   await page.screenshot({ path: 'test-results/timer-only.png' });
 });
@@ -281,10 +280,10 @@ test('journal and statistics meet automated accessibility checks', async ({ page
   const journal = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
   expect(journal.violations).toEqual([]);
   await page.getByRole('navigation', { name: 'Tags' }).hover();
-  await page.getByRole('button', { name: 'Open focus statistics' }).click();
+  await page.getByRole('button', { name: 'Open habits and focus' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await expect(page.getByRole('dialog', { name: 'Statistics' })).toBeVisible();
-  await expect(page.getByText('focused per day', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Show focus chart, / })).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
   const modal = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze();
   expect(modal.violations).toEqual([]);

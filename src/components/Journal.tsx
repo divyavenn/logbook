@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import styled, { css } from 'styled-components';
-import { dateObject, duration } from '../api';
-import type { CalendarEvent, JournalDay, Task } from '../types';
+import { dateObject, duration, localDate } from '../api';
+import type { CalendarEvent, DueHabit, JournalDay, Task } from '../types';
+import { DoneHabits, DueHabits } from './HabitRows';
 import { TextButton, appear, edgeWash, viewEnter } from '../styles';
 import { Outline } from './Outline';
 import { entryError } from '../entryFeedback';
@@ -62,7 +63,53 @@ const DayBlock = styled.section<{ $today: boolean; $showHistory: boolean; $arriv
   `}
   @media(pointer: coarse) { margin-bottom: 44px; }
   @media ${compactViewport} { display: ${({ $today, $showHistory }) => $today || $showHistory ? 'block' : 'none'}; margin-bottom: 10px; }
+  /* The day's focus time and habits keep out of sight until the day is
+     pointed at or being worked in. */
+  [data-day-reveal] { opacity: 0; transition: opacity 160ms var(--ease-out); }
+  &:hover [data-day-reveal], &:focus-within [data-day-reveal] { opacity: 1; }
+  /* Without hover nothing would show a hidden pill before it was tapped. */
+  @media (hover: none) { [data-day-reveal] { pointer-events: none; } &:focus-within [data-day-reveal] { pointer-events: auto; } }
 `;
+type Fold = { key: string; dates: string[]; days: Map<string, JournalDay> };
+function shiftDate(date: string, days: number) {
+  const value = dateObject(date);
+  value.setDate(value.getDate() + days);
+  return localDate(value);
+}
+const FoldBlock = styled.div`margin: -12px 0 8px;`;
+// A hairline across the log, with room above and below it to be pressed.
+const FoldToggle = styled.button`
+  display: block; width: 100%; height: 14px; padding: 0; border: 0; background: transparent; cursor: pointer;
+  &::before { content: ''; display: block; height: 1px; background: var(--line); opacity: .6; transition: opacity 140ms ease; }
+  &:hover::before, &:focus-visible::before { opacity: 1; }
+`;
+// An opened run folds away again once it has been seen and scrolled past.
+function FoldRun({ open, root, onLeave, children }: { open: boolean; root: RefObject<HTMLDivElement | null>; onLeave: () => void; children: ReactNode }) {
+  const block = useRef<HTMLDivElement>(null);
+  const leave = useRef(onLeave);
+  leave.current = onLeave;
+  useEffect(() => {
+    if (!open || !block.current) return;
+    let seen = false;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) seen = true;
+      else if (seen) leave.current();
+    }, { root: root.current });
+    observer.observe(block.current);
+    return () => observer.disconnect();
+  }, [open, root]);
+  return <FoldBlock ref={block}>{children}</FoldBlock>;
+}
+const FoldDays = styled.div`
+  padding-top: 8px; opacity: 1; transition: opacity 200ms var(--ease-out);
+  @starting-style { opacity: 0; }
+`;
+// A date with nothing recorded on it at all: only its name, until it is
+// pressed to write on.
+const QuietDay = styled.div`min-height: 40px; display: flex; align-items: center; margin-bottom: 20px; cursor: text; outline: none;`;
+const blankDay = (date: string): JournalDay => ({ date, entries: [], events: [], habits: [], focused_seconds: 0, longest_session_seconds: 0, session_count: 0 });
+// The date and, beside it, the habits done that day.
+const DayHeadRow = styled.div`display: flex; align-items: center; flex-wrap: wrap; column-gap: 12px;`;
 const DateHead = styled.button`
   display: flex; align-items: center; gap: 10px; min-height: 40px; margin-bottom: 3px;
   padding: 0; border: 0; background: transparent; text-align: left; white-space: nowrap;
@@ -73,7 +120,8 @@ const DateHead = styled.button`
 `;
 const DateLabel = styled.time`
   /* An outline, not a fill: the date is named rather than highlighted. */
-  display: inline-block; font-size: 15px; line-height: 22px; padding: 0 5px; margin-left: -6px;
+  /* The bottom inset lifts the date to the middle of its outline. */
+  display: inline-block; font-family: var(--date-font); font-variant-numeric: tabular-nums; font-size: 15px; line-height: 20px; padding: 2px 10px 3px; margin-left: -6px;
   border-radius: 9px; border: 1px solid var(--date-bg); transform: translateY(1px);
   @media ${compactViewport} { margin-left: 0; }
 `;
@@ -129,7 +177,12 @@ const Body = styled.div`
   > [data-outline-kind='tasks'] > [data-task-creation-area] { flex: 1; }
   @media ${compactViewport} { padding-left: 0; }
 `;
-const Logbook = styled.section<{ $entering: boolean }>`${({ $entering }) => viewEnter($entering)}`;
+const Logbook = styled.section<{ $entering: boolean }>`
+  ${({ $entering }) => viewEnter($entering)}
+  /* Today is the day in hand until another is being worked in, and is again
+     once that one is left. */
+  &:not(:has([data-day]:not([data-today]):focus-within)) [data-today] [data-day-reveal] { opacity: 1; pointer-events: auto; }
+`;
 const HistoryEnd = styled.div<{ $showHistory: boolean }>`
   display: flex; justify-content: center; padding: 20px 0; color: var(--sage);
   @media ${compactViewport} { display: ${({ $showHistory }) => $showHistory ? 'flex' : 'none'}; padding: 8px 0; }
@@ -172,17 +225,19 @@ function linkLabel(value: string) {
   catch { return value; }
 }
 
-export function Tasks({ tasks, entering = false, fills = false, refresh }: { tasks: Task[]; entering?: boolean; fills?: boolean } & Actions) {
+export function Tasks({ tasks, habits = [], today, entering = false, fills = false, refresh }: { tasks: Task[]; habits?: DueHabit[]; today: string; entering?: boolean; fills?: boolean } & Actions) {
   const [folded, setFolded] = useState(false);
   const [unfolding, setUnfolding] = useState(false);
   const { target, activeTag } = useJournalContext();
   const section = useRef<HTMLElement>(null);
   useEffect(() => { if (target?.kind === 'tasks') setFolded(false); }, [target]);
   // A filtered view has nothing to add to, so an empty list is just noise.
+  // Habits keep to the full list; a filtered view is a list of entries.
+  const due = activeTag ? [] : habits;
   if (activeTag && !tasks.length) return null;
   return <TaskSection ref={section} $entering={entering} $empty={!tasks.length} $fills={fills} aria-labelledby="task-title"><SectionTitle id="task-title" data-focus-chrome aria-expanded={!folded} title={folded ? 'Expand to do' : 'Fold to do'} onClick={() => { setUnfolding(true); setFolded(value => !value); }}>to do</SectionTitle>
     {!folded && <TaskFrame $appearing={unfolding}>
-      <TaskViewport data-testid="task-scroll"><Body data-task-body><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
+      <TaskViewport data-testid="task-scroll"><Body data-task-body><DueHabits habits={due} today={today} refresh={refresh} /><Outline kind="tasks" items={tasks} composer={tasks.length > 0} refresh={refresh} /></Body></TaskViewport>
       <TaskEdgeWash data-testid="task-top-ink-wash" aria-hidden="true" />
       <TaskEdgeWash $edge="bottom" data-testid="task-bottom-ink-wash" aria-hidden="true" />
     </TaskFrame>}
@@ -197,6 +252,26 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
 } & Actions) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
+  // The folds opened by hand, and the dates a jump to them has opened.
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const [revealed, setRevealed] = useState<Set<string>>(() => new Set());
+  // Dates in an opened run that have been pressed to write on. Until then a
+  // date is only its name, so a long run costs no editors.
+  const [writing, setWriting] = useState<Set<string>>(() => new Set());
+  const startWriting = (date: string) => {
+    setWriting(current => new Set([...current, date]));
+    // Its outline listens for this once it has mounted.
+    requestAnimationFrame(() => requestAnimationFrame(() =>
+      window.dispatchEvent(new CustomEvent('still-new-entry', { detail: `still-draft-${date}` }))));
+  };
+  useEffect(() => {
+    const reveal = (event: Event) => {
+      const date = (event as CustomEvent<string>).detail;
+      setRevealed(current => current.has(date) ? current : new Set([...current, date]));
+    };
+    window.addEventListener('still-reveal-day', reveal);
+    return () => window.removeEventListener('still-reveal-day', reveal);
+  }, []);
   const { target, activeTag } = useJournalContext();
   const historyEnd = useRef<HTMLDivElement>(null);
   const loadingLock = useRef(false);
@@ -227,28 +302,28 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
   for (const day of days) {
     if (!firstPaint.current.has(day.date) && !arrivals.current.has(day.date)) arrivals.current.set(day.date, Math.min(batch++, 6));
   }
-  return <Logbook aria-label="Logbook" $entering={entering}>
-    {days.map(day => {
+  const renderDay = (day: JournalDay) => {
       const isToday = day.date === today;
       const date = dateObject(day.date);
       const seconds = secondsForDay(day);
       const title = isToday ? 'Today' : date.toDateString() === yesterday.toDateString() ? 'Yesterday' : date.toLocaleDateString(undefined, { weekday: 'long' });
       const entries = day.entries;
       const targeted = target && entries.some(entry => entry.kind === target.kind && entry.id === target.id);
-      return <DayBlock key={day.date} data-day={day.date} $today={isToday || !!targeted} $showHistory={showHistory} $arrival={arrivals.current.get(day.date)} aria-label={`${title}, ${day.date}`}
+      return <DayBlock key={day.date} data-day={day.date} data-today={isToday || undefined} $today={isToday || !!targeted} $showHistory={showHistory} $arrival={arrivals.current.get(day.date)} aria-label={`${title}, ${day.date}`}
         onClick={event => {
-          if ((event.target as Element).closest('button, a, input, [contenteditable], [role="group"], [data-calendar-event]') || window.getSelection()?.toString()) return;
+          if ((event.target as Element).closest('button, a, input, [contenteditable], [role="group"], [data-calendar-event], [data-habits]') || window.getSelection()?.toString()) return;
           window.dispatchEvent(new CustomEvent('still-new-entry', { detail: `still-draft-${day.date}` }));
         }}>
         {/* Tags are read-only while filtering, so the date leads back to the full day. */}
-        <DateHead type="button" data-focus-chrome disabled={!activeTag && !sessionsEnabled}
+        <DayHeadRow><DateHead type="button" data-focus-chrome disabled={!activeTag && !sessionsEnabled}
           aria-label={activeTag ? `Open ${day.date} in the full logbook` : `Focus sessions for ${day.date}`}
           onClick={() => { if (activeTag) openDate(day.date); else if (sessionsEnabled) openSessions(day.date); }}
           title={activeTag ? 'Open this date in the full logbook' : sessionsEnabled ? 'View and edit focus sessions' : undefined}>
           <DateLabel dateTime={day.date}>{date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</DateLabel>
           {/* A filtered day is a list of matching entries, not the day itself. */}
-          {!activeTag && <FocusTotal data-focus-total>{duration(seconds, true)}</FocusTotal>}
+          {!activeTag && <FocusTotal data-focus-total data-day-reveal>{duration(seconds, true)}</FocusTotal>}
         </DateHead>
+        {!activeTag && <DoneHabits habits={day.habits} date={day.date} refresh={refresh} />}</DayHeadRow>
         {!activeTag && !!day.events?.length && <EventList aria-label={`Calendar events for ${day.date}`}>
           {day.events.map(event => {
             const text = eventText(event);
@@ -285,9 +360,61 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
         </EventList>}
         <Body>
           <Outline kind="mixed" items={entries} day={day.date} archived composer={isToday} refresh={refresh} />
+
         </Body>
       </DayBlock>;
-    })}
+  };
+  // A run of days with nothing written and no focus folds into a thin line
+  // between the days around it, every date in it, recorded or not, a press
+  // away. Today is where writing starts, so it never folds; a filtered view
+  // has no runs.
+  const sequence: ({ kind: 'day'; day: JournalDay } | { kind: 'fold'; fold: Fold })[] = [];
+  if (activeTag) for (const day of days) sequence.push({ kind: 'day', day });
+  else {
+    let fold: Fold | null = null;
+    const add = (date: string, day?: JournalDay) => {
+      if (day && (day.entries.length || secondsForDay(day) > 0 || date === today)) {
+        if (fold) sequence.push({ kind: 'fold', fold });
+        fold = null;
+        sequence.push({ kind: 'day', day });
+        return;
+      }
+      fold ??= { key: date, dates: [], days: new Map() };
+      fold.dates.push(date);
+      if (day) fold.days.set(date, day);
+    };
+    days.forEach((day, index) => {
+      add(day.date, day);
+      const older = days[index + 1]?.date;
+      if (older) for (let date = shiftDate(day.date, -1); date > older; date = shiftDate(date, -1)) add(date);
+    });
+    if (fold) sequence.push({ kind: 'fold', fold });
+  }
+  const renderFold = (fold: Fold) => {
+    const open = opened.has(fold.key) || fold.dates.some(date => revealed.has(date));
+    const count = fold.dates.length;
+    const close = () => {
+      setOpened(current => { const next = new Set(current); next.delete(fold.key); return next; });
+      setRevealed(current => new Set([...current].filter(date => !fold.dates.includes(date))));
+      setWriting(current => new Set([...current].filter(date => !fold.dates.includes(date))));
+    };
+    return <FoldRun key={`fold-${fold.key}`} open={open} root={scrollRoot} onLeave={close}>
+      {/* Opened, the line gives way to the days it held. */}
+      {!open && <FoldToggle type="button" data-focus-chrome aria-expanded={false}
+        aria-label={`Show ${count} ${count === 1 ? 'day' : 'days'} with nothing written`}
+        onClick={() => setOpened(current => new Set([...current, fold.key]))} />}
+      {open && <FoldDays>{fold.dates.map(date => {
+        const day = fold.days.get(date) ?? (writing.has(date) ? blankDay(date) : null);
+        return day ? renderDay(day) : <QuietDay key={date} data-day={date} role="button" tabIndex={0}
+          aria-label={`Write on ${date}`} onClick={() => startWriting(date)}
+          onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); startWriting(date); } }}>
+          <DateLabel dateTime={date}>{dateObject(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</DateLabel>
+        </QuietDay>;
+      })}</FoldDays>}
+    </FoldRun>;
+  };
+  return <Logbook aria-label="Logbook" $entering={entering}>
+    {sequence.map(item => item.kind === 'day' ? renderDay(item.day) : renderFold(item.fold))}
     <HistoryEnd ref={historyEnd} $showHistory={showHistory}>{hasMore && <TextButton disabled={loadingMore} onClick={() => void loadEarlier()}>{historyError ? 'Retry' : 'Earlier days'}</TextButton>}</HistoryEnd>
   </Logbook>;
 }

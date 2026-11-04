@@ -644,6 +644,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       await refresh();
       const result = await getJournal({ on: date });
       setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
+      // A day with nothing written may be folded away; it is opened to be shown.
+      window.dispatchEvent(new CustomEvent('still-reveal-day', { detail: date }));
       // The date itself leads, resting where the first one does: clear of the
       // wash at the top of the log.
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -752,7 +754,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const sidebarControls = <SidebarControls role="group" aria-label="Page controls" data-focus-chrome>
     {REPOSITORY_URL && <RepositoryLink href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub"><Github size={15} aria-hidden="true" /></RepositoryLink>}
     <CalendarToggle aria-label="Manage calendars" title="Calendars" onClick={() => setCalendarOpen(true)}><CalendarDays size={15} aria-hidden="true" /></CalendarToggle>
-    <StatsToggle aria-label="Open focus statistics" title="Statistics" onClick={() => setStatsOpen(true)}><ChartNoAxesColumn size={15} aria-hidden="true" /></StatsToggle>
+    <StatsToggle aria-label="Open habits and focus" title="Habits and focus" onClick={() => setStatsOpen(true)}><ChartNoAxesColumn size={15} aria-hidden="true" /></StatsToggle>
     <ShortcutToggle aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)}><ShortcutGlyph data-shortcut-icon aria-hidden="true" /></ShortcutToggle>
     <ThemeToggle role="switch" aria-label="Night mode" aria-checked={night}
       title={night ? 'Use day mode' : 'Use night mode'} onClick={() => setNight(value => !value)}>
@@ -764,7 +766,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   // Stacked above the log it takes the room it needs; in a pane of its own it
   // takes the pane.
   const taskBand = (fills: boolean) => data
-    ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} fills={fills} refresh={refresh} /> : null;
+    ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} habits={data.habits} today={data.today} entering={switchedView} fills={fills} refresh={refresh} /> : null;
   const logBand = data ? <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
     <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView}
       refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)}
@@ -832,7 +834,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     </Main>
     <Suspense fallback={null}>
       {openedModals.current.has('sessions') && <SessionsModal date={sessionsDate} onClose={() => setSessionsDate(null)} onChange={refresh} />}
-      {openedModals.current.has('stats') && <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />}
+      {openedModals.current.has('stats') && <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} onChange={refresh} openDate={date => void jumpToDate(date)} />}
       {openedModals.current.has('search') && <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={jumpTo} />}
       {openedModals.current.has('calendar') && <CalendarModal open={calendarOpen} onClose={() => setCalendarOpen(false)} onChange={refresh} />}
     </Suspense>

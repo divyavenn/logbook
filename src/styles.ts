@@ -14,6 +14,9 @@ export const GlobalStyle = createGlobalStyle`
   @property --task-progress { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-variable.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: swap; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-italic.woff2') format('woff2'); font-weight: 400; font-style: italic; font-display: swap; }
+  /* Dates are set in the system's own sans, apart from the writing around
+     them, with figures of one width so dates line up down the log. */
+  :root { --date-font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
   /* The curves everything moves on, in either theme: a strong ease-out for
      what arrives, leaves or settles, and an ease-in-out for what travels. */
   :root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); }
@@ -30,7 +33,7 @@ export const GlobalStyle = createGlobalStyle`
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 16%);
     --chrome-opacity: 1; --focus-chrome-opacity: .78;
     --primary: #575279; --primary-hover: #6e6a86; --primary-ink: #fffaf3;
-    --danger: #8f556d; --backdrop: #57527933; --chart: #b5cfd3; --chart-today: #286983; --chart-hover: #56949f;
+    --danger: #8f556d; --backdrop: #57527933; --chart: #b5cfd3; --chart-today: #286983; --chart-hover: #56949f; --chart-select: var(--ink); --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
   }
   :root[data-theme='night'] {
     color-scheme: dark;
@@ -43,7 +46,7 @@ export const GlobalStyle = createGlobalStyle`
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 20%);
     --chrome-opacity: 1; --focus-chrome-opacity: .78;
     --primary: #75d1c4; --primary-hover: #9ddece; --primary-ink: #011627;
-    --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5;
+    --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5; --chart-select: #ffffff; --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
   }
   * { box-sizing: border-box; }
   html {
