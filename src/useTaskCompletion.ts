@@ -7,6 +7,9 @@ import { haptic } from './haptics';
 import type { OutlineDocument } from './outlineDocument';
 import type { OutlineItem } from './types';
 
+// How long a parent waits after the child that finishes it.
+const CASCADE_BEAT_MS = 120;
+
 type CompletionContext = {
   document: OutlineDocument;
   rows: () => OutlineItem[];
@@ -30,6 +33,8 @@ export function useTaskCompletion(context: CompletionContext) {
   const changedAt = useRef(0);
   const [completing, setCompleting] = useState(new Set<number>());
   const [pendingCompletion, setPendingCompletion] = useState(new Map<number, boolean>());
+  // Counts each check, so a parent's late check is dropped if another came after.
+  const cascade = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -54,16 +59,31 @@ export function useTaskCompletion(context: CompletionContext) {
     motion.current?.abort();
     setCompleting(new Set());
     const preview = completionPreview(ctx.rows(), intents);
-    setPendingCompletion(preview);
-    // A check that finishes a parent along with it is the larger moment.
+    // A check that finishes its parent is the larger moment: the parents it
+    // finishes are checked a beat after it, and it is felt as a celebration.
     const rows = ctx.rows();
-    let parent = task.parent_id, cascades = false;
-    while (finishing && parent !== null && !cascades) {
+    const finished: number[] = [];
+    let parent = task.parent_id;
+    while (finishing && parent !== null) {
       const above = rows.find(row => row.id === parent);
-      cascades = !!preview.get(parent) && !above?.completed_at;
+      if (!preview.get(parent) || above?.completed_at) break;
+      finished.push(parent);
       parent = above?.parent_id ?? null;
     }
-    haptic(!finishing ? 'soft' : cascades ? 'celebrate' : 'success');
+    const stage = ++cascade.current;
+    if (finished.length) {
+      const first = new Map(preview);
+      for (const ancestor of finished) first.delete(ancestor);
+      setPendingCompletion(first);
+      window.setTimeout(() => {
+        if (cascade.current === stage && mounted.current) setPendingCompletion(current => {
+          const next = new Map(current);
+          for (const ancestor of finished) next.set(ancestor, true);
+          return next;
+        });
+      }, CASCADE_BEAT_MS);
+    } else setPendingCompletion(preview);
+    haptic(!finishing ? 'soft' : finished.length ? 'celebrate' : 'success');
     if (running.current) return;
     running.current = true;
 

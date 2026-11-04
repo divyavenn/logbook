@@ -265,9 +265,11 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
     expect(mobileMain.x).toBe(24);
     expect(440 - mobileMain.x - mobileMain.width).toBe(16);
     await expect(mobile.getByRole('navigation', { name: 'Tags' })).toHaveCount(0);
+    // Nothing takes the caret on load; typing starts today's note.
+    await mobile.keyboard.type('Mobile typing');
     const composer = mobile.getByRole('textbox', { name: 'New note', exact: true });
     await expect(composer).toBeFocused();
-    await composer.fill('Mobile typing');
+    await expect(composer).toHaveText('Mobile typing');
 
     await mobile.setViewportSize({ width: 440, height: 360 });
     await expect(mobile.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();

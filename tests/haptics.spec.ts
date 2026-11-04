@@ -40,3 +40,14 @@ test('a task checked is felt', async ({ page, request }) => {
   await tasks.getByRole('button', { name: 'Complete Water the plants', exact: true }).click();
   await expect.poll(() => felt(page)).toEqual([10]);
 });
+
+test('a check that finishes its parent is felt as a celebration', async ({ page, request }) => {
+  await record(page);
+  const parent = await (await request.post('/api/tasks', { data: { content: 'Pack for the trip' } })).json();
+  await request.post('/api/tasks', { data: { content: 'Passport', parent_id: parent.id } });
+  await page.goto('/');
+  const tasks = page.getByRole('region', { name: 'to do', exact: true });
+  await tasks.getByRole('button', { name: 'Expand Pack for the trip', exact: true }).click();
+  await tasks.getByRole('button', { name: 'Complete Passport', exact: true }).click();
+  await expect.poll(() => felt(page)).toEqual([[10, 60, 10, 60, 24]]);
+});

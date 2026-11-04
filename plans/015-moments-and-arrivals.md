@@ -4,7 +4,7 @@
 - **Commit**: 0082bdc
 - **Severity**: MEDIUM
 - **Category**: Interruptibility / Missed opportunities
-- **Executed note**: the parent's check running 120ms after the child's was not done. It needs `pendingCompletion` to be staged per row in `Outline.tsx`. The cascade is marked by the `celebrate` haptic only. Left for a later plan.
+- **Executed note**: the parent's check lands 120ms after the child's. `useTaskCompletion` previews the child alone, then adds the ancestors it finishes after `CASCADE_BEAT_MS`; a later check drops the late one.
 - **Estimated scope**: StatsModal.tsx, HabitRows.tsx, useTaskCompletion.ts, OutlineStyles.ts
 
 ## Problem
