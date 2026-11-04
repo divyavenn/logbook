@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, Download, Flame, X } from 'lucide-react';
 import styled, { css } from 'styled-components';
 import { completeHabit, createHabit, dateObject, deleteHabit, duration, errorMessage, getHabits, getStats, localDate, renameHabit, reopenHabit } from '../api';
@@ -6,6 +6,8 @@ import type { Habit, Stats } from '../types';
 import { Field, InlineError, Muted } from '../styles';
 import { ConsistencyChart, focusLevels, type ChartOrientation } from './ConsistencyChart';
 import { Pill, closePill } from './HabitRows';
+import { STREAK_MILESTONES, haptic } from '../haptics';
+import { ROW_FADE_MS, collapseRow } from '../motion';
 import { Modal } from './Modal';
 
 // Six months on the chart, whichever row it is showing.
@@ -29,14 +31,15 @@ const DayDetail = styled.div`
 // The day as a heading, which leads to it in the logbook.
 const DayTitle = styled.button`
   padding: 0; border: 0; background: transparent; color: var(--link); font-family: var(--date-font); font-variant-numeric: tabular-nums; font-size: 20px; line-height: 1.4; font-weight: 500;
-  &:hover { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; }
+  transition: scale 120ms ease-out; &:active:not(:disabled) { scale: .96; }
+  @media (hover: hover) and (pointer: fine) { &:hover { text-decoration: underline; text-underline-offset: 4px; text-decoration-thickness: 1px; } }
 `;
 const DayFocus = styled.span`color: var(--muted); font-size: 13px;`;
 const DayPills = styled.ul`list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center;`;
 const DownloadLink = styled.a`
   width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; color: var(--muted);
   transition: color 120ms ease, scale 120ms ease-out;
-  &:hover { color: var(--link); scale: 1.06; }
+  @media (hover: hover) and (pointer: fine) { &:hover { color: var(--link); scale: 1.06; } }
   &:active { scale: .96; }
 `;
 const Rows = styled.ul`list-style: none; margin: 0; padding: 0; display: grid;`;
@@ -46,15 +49,22 @@ const Pick = styled.button`
 const Figure = styled(Pick)`
   /* Room to press even when there is no streak to show. */
   min-width: 24px; display: flex; align-items: center; justify-content: flex-end; gap: 3px; text-align: right; color: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+  transition: scale 120ms ease-out; &:active:not(:disabled) { scale: .96; }
 `;
 // The row whose chart is showing is lifted onto a soft ground; the others wait
 // on the sheet. A hover only borrows the chart, so it marks the row lightly.
 // The row whose chart is showing takes the link's colour, and a row under the
 // pointer, whose chart it borrows, the ink's; the rest wait in muted text.
-const Row = styled.li<{ $shown: boolean; $pinned: boolean }>`
+const Row = styled.li<{ $shown: boolean; $pinned: boolean; $fresh?: boolean }>`
   min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 0;
   color: ${({ $pinned, $shown }) => $pinned ? 'var(--link)' : $shown ? 'var(--ink)' : 'var(--muted)'};
   transition: color 140ms ease;
+  /* A habit just added rises into the list. */
+  ${({ $fresh }) => $fresh ? css`
+    transition: color 140ms ease, opacity 180ms var(--ease-out), transform 240ms var(--ease-out);
+    @starting-style { opacity: 0; transform: translateY(4px); }
+    @media (prefers-reduced-motion: reduce) { @starting-style { transform: none; } }
+  ` : ''}
 `;
 const NameField = styled(Field)`
   min-height: 36px; padding: 6px 0; border: 0; border-radius: 0; background: transparent; box-shadow: none;
@@ -65,7 +75,8 @@ const SymbolButton = styled.button`
   display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; background: transparent;
   color: var(--muted); border-radius: 50%;
   span { display: block; font-size: 19px; font-weight: 200; opacity: .5; transition: transform 140ms ease-out, color 140ms ease, opacity 140ms ease-out; }
-  &:hover span { transform: rotate(90deg); color: var(--ink); opacity: .9; }
+  @media (hover: hover) and (pointer: fine) { &:hover span { transform: rotate(90deg); color: var(--ink); opacity: .9; } }
+  transition: scale 120ms ease-out; &:active:not(:disabled) { scale: .96; }
 `;
 // A habit's streak and its remove share one place: pointing at the row turns
 // the one into the other, and leaving turns it back. Without hover, the two
@@ -74,7 +85,7 @@ const SWAP = css`transition: opacity 160ms var(--ease-out), scale 160ms var(--ea
   @media (prefers-reduced-motion: reduce) { transition-property: opacity; }`;
 const Slot = styled.span`
   display: grid; grid-auto-flow: column; align-items: center; justify-items: end; gap: 4px; min-width: 40px;
-  @media (hover: hover) {
+  @media (hover: hover) and (pointer: fine) {
     > * { grid-area: 1 / 1; ${SWAP} }
     > ${SymbolButton} { opacity: 0; scale: .8; }
     li:hover > & > ${Figure}, &:has(${SymbolButton}:focus-visible) > ${Figure} { opacity: 0; scale: .8; pointer-events: none; }
@@ -83,13 +94,16 @@ const Slot = styled.span`
 `;
 const Confirm = styled.button`
   justify-self: end; min-height: 40px; padding: 0 10px; border: 0; background: transparent; color: var(--danger); font-size: 12px;
+  transition: scale 120ms ease-out; &:active:not(:disabled) { scale: .96; }
 `;
 // The field for a new habit keeps its room at the foot of the list, and names
 // itself only when pointed at or written in.
 const AddField = styled(NameField)`
   font-size: 13px; color: var(--ink); margin: 2px 0 0;
   &::placeholder { color: transparent; transition: color 140ms ease; }
-  &:hover::placeholder, &:focus::placeholder { color: var(--muted); }
+  &:focus::placeholder { color: var(--muted); }
+  @media (hover: none) { &::placeholder { color: var(--muted); } }
+  @media (hover: hover) and (pointer: fine) { &:hover::placeholder { color: var(--muted); } }
 `;
 // With room across, the chart stands beside the list; without it, it lies
 // beneath. The window's shape decides, not the sheet's, so the two never trade
@@ -161,6 +175,8 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
   const [error, setError] = useState('');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [fresh, setFresh] = useState<number | null>(null);
+  const closing = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<number | null>(null);
   const [pinned, setPinned] = useState<Shown>('focus');
   const [previewed, setPreviewed] = useState<Shown | null>(null);
@@ -190,7 +206,7 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
     setBusy(true); setError('');
     try {
       const habit = await createHabit(name);
-      setHabits(current => [...(current ?? []), habit]); setName('');
+      setHabits(current => [...(current ?? []), habit]); setName(''); setFresh(habit.id);
       changed();
     } catch (value) { setError(errorMessage(value)); }
     finally { setBusy(false); }
@@ -203,10 +219,12 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
       changed();
     } catch (value) { setError(errorMessage(value)); throw value; }
   };
-  const remove = async (habit: Habit) => {
+  const remove = async (habit: Habit, row: HTMLElement | null) => {
     setBusy(true); setError(''); setConfirming(null);
     try {
       await deleteHabit(habit.id);
+      // The row closes the space it held before it is let go.
+      if (row) await collapseRow(row, { fade: ROW_FADE_MS }).finished.catch(() => {});
       setHabits(current => current?.filter(item => item.id !== habit.id) ?? null);
       if (pinned === habit.id) setPinned('focus');
       setPreviewed(null);
@@ -221,11 +239,29 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
     const flip = (on: boolean) => setHabits(current => current?.map(item => item.id !== habit.id ? item
       : { ...item, done: on ? [...item.done, date].sort() : item.done.filter(day => day !== date) }) ?? null);
     flip(!done); setError('');
+    if (done) haptic('soft');
+    else haptic(STREAK_MILESTONES.has(streak(new Set([...habit.done, date]), today)) ? 'celebrate' : 'success');
     (done ? reopenHabit(habit.id, date) : completeHabit(habit.id, date))
       .then(changed).catch(value => { flip(done); setError(errorMessage(value)); });
   };
+  // A pill in the heading takes its day back: saved at once, closing as it
+  // goes, the day let go once both are done, and opened again if the server
+  // will not have it. A second press on a closing pill does nothing.
+  const takeBack = (habit: Habit, date: string, pill: HTMLElement) => {
+    const key = `${date}-${habit.id}`;
+    if (closing.current.has(key)) return;
+    closing.current.add(key);
+    haptic('soft'); setError('');
+    const animation = closePill(pill);
+    Promise.all([reopenHabit(habit.id, date), animation.finished]).then(() => {
+      setHabits(current => current?.map(item => item.id !== habit.id ? item : { ...item, done: item.done.filter(day => day !== date) }) ?? null);
+      changed();
+    }).catch(value => { animation.reverse(); setError(errorMessage(value)); })
+      .finally(() => closing.current.delete(key));
+  };
   // A press pins a row's chart; pressing it again hands the chart back to focus.
-  const pin = (row: Shown) => setPinned(current => current === row && row !== 'focus' ? 'focus' : row);
+  const pin = (row: Shown) => { haptic('selection'); setPinned(current => current === row && row !== 'focus' ? 'focus' : row); };
+  const select = (date: string) => { if (date !== selected) haptic('selection'); setSelected(date); };
   const preview = (row: Shown) => (event: { pointerType: string }) => { if (event.pointerType !== 'touch') setPreviewed(row); };
 
   const loaded = stats && habits;
@@ -254,8 +290,8 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
         {(() => { const seconds = stats.daily.find(row => row.date === day)?.focused_seconds ?? 0; return seconds > 0 && <DayFocus>{duration(seconds, false)}</DayFocus>; })()}
         {/* The habits done that day, taken back the way they are in the logbook. */}
         <DayPills aria-label={`Habits done on ${day}`}>{habits.filter(habit => habit.done.includes(day)).map(habit =>
-          <li key={habit.id}><Pill type="button" $fresh={false} aria-label={`Reopen ${habit.name} on ${day}`}
-            onClick={event => { const date = day; closePill(event.currentTarget).finished.then(() => toggleDay(habit, date), () => {}); }}>
+          <li key={`${day}-${habit.id}`}><Pill type="button" $fresh={false} aria-label={`Reopen ${habit.name} on ${day}`}
+            onClick={event => takeBack(habit, day, event.currentTarget)}>
             <Check size={11} strokeWidth={2.25} aria-hidden="true" /><X size={11} strokeWidth={2.25} aria-hidden="true" />{habit.name}
           </Pill></li>)}</DayPills>
         </DayDetail>
@@ -274,11 +310,11 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
         </Row>
         {habits.map(habit => {
           const run = streak(new Set(habit.done), today);
-          return <Row key={habit.id} $shown={shownId === habit.id} $pinned={pinned === habit.id} onPointerEnter={preview(habit.id)}>
+          return <Row key={habit.id} $fresh={fresh === habit.id} $shown={shownId === habit.id} $pinned={pinned === habit.id} onPointerEnter={preview(habit.id)}>
             <HabitName habit={habit} onRename={next => rename(habit, next)} onFocus={() => setPinned(habit.id)} />
             {confirming === habit.id
               ? <Confirm type="button" autoFocus disabled={busy} onBlur={() => setConfirming(null)}
-                  aria-label={`Remove ${habit.name} for good`} onClick={() => void remove(habit)}>remove</Confirm>
+                  aria-label={`Remove ${habit.name} for good`} onClick={event => { haptic('warning'); void remove(habit, event.currentTarget.closest('li')); }}>remove</Confirm>
               : <Slot>
                 <Figure type="button" aria-pressed={pinned === habit.id} aria-label={`Show ${habit.name} chart, ${run}-day streak`}
                   onClick={() => pin(habit.id)}>{run > 0 && <><Flame size={12} strokeWidth={1.75} aria-hidden="true" />{run}</>}</Figure>
@@ -296,7 +332,7 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
       </div>
       <Chart aria-label="Last six months" $side={side}>
         <ConsistencyChart levels={chart.levels} end={today} weeks={WEEKS} label={chart.label} describe={chart.describe}
-          orientation={orientation} selected={selected} onSelect={setSelected}
+          orientation={orientation} selected={selected} onSelect={select}
           onToggle={shownHabit ? date => toggleDay(shownHabit, date) : undefined} onHover={setHovered} />
       </Chart>
     </Layout>}

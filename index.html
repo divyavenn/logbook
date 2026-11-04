@@ -8,6 +8,14 @@
          in step from the app; the value here is day mode, which is the default. -->
     <meta name="theme-color" content="#faf4ed" />
     <meta name="description" content="Personal logbook." />
+    <!-- Added to a home screen it opens as itself: its own icon, no browser
+         chrome, and the paper running up under the status bar. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Logbook" />
     <link rel="describedby" href="/llms.txt" type="text/plain" title="Agent guide" />
     <link rel="alternate" href="/journal.md" type="text/markdown" title="Logbook as Markdown" />
     <link rel="alternate" href="/api/agent/journal" type="application/json" title="Structured logbook" />

@@ -8,14 +8,14 @@ import { Modal } from './Modal';
 const Title = styled.div`display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; padding: 8px 12px 18px; font-size: 17px; span { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }`;
 const SessionList = styled.div`display: grid; gap: 2px;`;
 const SessionRow = styled.form`display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; align-items: center; min-height: 40px; font-size: 14px; font-variant-numeric: tabular-nums;`;
-const TimeButton = styled.button`min-height: 40px; padding: 8px 12px; border: 0; background: transparent; text-align: left; border-radius: 6px; &:hover { color: var(--link); }`;
+const TimeButton = styled.button`min-height: 40px; padding: 8px 12px; border: 0; background: transparent; text-align: left; border-radius: 6px; @media (hover: hover) and (pointer: fine) { &:hover { color: var(--link); } }`;
 const Input = styled.input`
   width: 100%; min-width: 0; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 0;
   outline: none; box-shadow: none; background: transparent; color: var(--ink); font: inherit;
   &:focus, &:focus-visible { outline: none; box-shadow: none; background: transparent; }
 `;
-const SymbolButton = styled.button`display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; background: transparent; color: var(--muted); border-radius: 50%; span { display: block; font-size: 20px; font-weight: 300; transition: transform 140ms ease-out, color 140ms ease; } &:hover span { transform: rotate(90deg); color: var(--ink); }`;
-const Add = styled(SymbolButton)`margin: 12px 0 0; &:hover span { transform: scale(1.12); }`;
+const SymbolButton = styled.button`display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; background: transparent; color: var(--muted); border-radius: 50%; span { display: block; font-size: 20px; font-weight: 300; transition: transform 140ms ease-out, color 140ms ease; } @media (hover: hover) and (pointer: fine) { &:hover span { transform: rotate(90deg); color: var(--ink); } }`;
+const Add = styled(SymbolButton)`margin: 12px 0 0; @media (hover: hover) and (pointer: fine) { &:hover span { transform: scale(1.12); } }`;
 
 function inputTime(value: string) {
   const d = new Date(value);

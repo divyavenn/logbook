@@ -49,6 +49,9 @@ export const GlobalStyle = createGlobalStyle`
     --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5; --chart-select: #ffffff; --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
   }
   * { box-sizing: border-box; }
+  /* A pull at the top of a pane is the pane's own, never a reload in the
+     middle of writing. */
+  html, body { overscroll-behavior: none; }
   html {
     background: var(--paper); -webkit-font-smoothing: antialiased;
     /* A touch is answered by the page's own press states, not by the grey
@@ -136,18 +139,18 @@ export const press = css`
 export const IconButton = styled.button`
   ${press}; width: 44px; height: 44px; display: inline-flex; justify-content: center; align-items: center;
   border: 0; border-radius: 50%; background: transparent; color: var(--muted); flex-shrink: 0;
-  &:hover { background: var(--soft); color: var(--ink); }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: var(--soft); color: var(--ink); } }
 `;
 export const Button = styled.button<{ $primary?: boolean }>`
   ${press}; min-height: 44px; padding: 8px 17px; display: inline-flex; justify-content: center; align-items: center; gap: 8px;
   border: 0; border-radius: 8px; background: ${({ $primary }) => $primary ? 'var(--primary)' : 'var(--soft)'};
   color: ${({ $primary }) => $primary ? 'var(--primary-ink)' : 'var(--ink)'}; font-size: 13px;
-  &:hover { background: ${({ $primary }) => $primary ? 'var(--primary-hover)' : 'var(--date-bg)'}; }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: ${({ $primary }) => $primary ? 'var(--primary-hover)' : 'var(--date-bg)'}; } }
 `;
 export const TextButton = styled.button`
   ${press}; min-height: 44px; border: 0; background: transparent; color: var(--sage);
   display: inline-flex; align-items: center; gap: 7px; padding: 4px 8px; font-size: 12px; border-radius: 6px;
-  &:hover { background: var(--soft); }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: var(--soft); } }
 `;
 export const Eyebrow = styled.span`
   font-size: 10px; font-weight: 600; letter-spacing: 1.8px; text-transform: uppercase; color: var(--muted);

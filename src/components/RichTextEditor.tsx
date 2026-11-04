@@ -35,8 +35,9 @@ const TagCompletion = styled.div<{ $left: number; $top: number }>`
   position: fixed; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px; z-index: 20;
   width: min(230px, calc(100vw - 24px)); pointer-events: none;
   ${appear('3px', 140)};
-  /* Once shown it slides to follow the caret instead of hopping after it. */
-  transition: opacity 140ms ease-out, transform 140ms var(--ease-out), left 140ms ease-out, top 140ms ease-out;
+  /* It fades in once, then keeps to the caret at once as the tag is typed:
+     a slide on every keystroke would trail the writing. */
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
   @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 const TagAlternatives = styled.div`
@@ -48,7 +49,7 @@ const TagOption = styled.button<{ $selected: boolean }>`
   background: var(--tag-bg); color: ${({ $selected }) => $selected ? 'var(--link)' : 'var(--tag-ink)'}; font-size: 13px; line-height: 20px;
   transition: color 120ms ease;
   text-align: left; overflow-wrap: anywhere;
-  &:hover { color: var(--ink); }
+  @media (hover: hover) and (pointer: fine) { &:hover { color: var(--ink); } }
 `;
 const HiddenTagOption = styled.span`
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
@@ -60,8 +61,8 @@ const MobileFormatBar = styled.div<{ $left: number; $top: number; $width: number
   display: none; align-items: center; padding: 2px; border-radius: 10px;
   color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px #0000000b, 0 5px 18px #20262024;
   ${appear('4px', 160)};
-  transition: opacity 160ms ease-out, transform 160ms var(--ease-out),
-    left 160ms ease-out, top 160ms ease-out, width 160ms ease-out;
+  /* It follows the selection at once; only its arrival fades. */
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
   @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
   @media(pointer: coarse) { display: flex; }
 `;

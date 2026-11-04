@@ -9,7 +9,7 @@ const Backdrop = styled.div<{ $open: boolean; $compactHover: boolean }>`
   opacity: ${({ $open }) => $open ? 1 : 0};
   visibility: ${({ $open }) => $open ? 'visible' : 'hidden'};
   pointer-events: none;
-  transition: opacity 140ms ease-out, visibility 140ms;
+  transition: opacity 140ms var(--ease-out), visibility 140ms;
   body:has(dialog[open]) & { display: none; }
   @media ${narrowViewport} { display: ${({ $compactHover }) => $compactHover ? 'block' : 'none'}; }
 `;
@@ -33,8 +33,9 @@ const Panel = styled.div<{ $open: boolean }>`
   pointer-events: ${({ $open }) => $open ? 'auto' : 'none'};
   transition-property: opacity, transform, visibility;
   transition-duration: 180ms, 220ms, 0s;
-  transition-timing-function: ease-out, var(--ease-out), linear;
+  transition-timing-function: var(--ease-out), var(--ease-out), linear;
   transition-delay: ${({ $open }) => $open ? '0s' : '0s, 0s, 220ms'};
+  @media (prefers-reduced-motion: reduce) { transform: none; }
 `;
 const RailActions = styled.div`
   display: flex; align-items: center; margin-top: 24px;
@@ -42,7 +43,8 @@ const RailActions = styled.div`
 const Heading = styled.h2`margin: 0 0 18px; font-size: 22px; font-weight: 400; letter-spacing: -.02em;`;
 const Home = styled.button`
   min-height: 40px; padding: 0; border: 0; background: transparent; color: var(--ink);
-  font: inherit; letter-spacing: inherit; text-align: left;
+  font: inherit; letter-spacing: inherit; text-align: left; transform-origin: left center;
+  transition: scale 120ms ease-out; &:active:not(:disabled) { scale: .96; }
   @media(pointer: coarse) { min-height: 44px; }
 `;
 const Collection = styled.div`display: flex; flex-wrap: wrap; align-content: start; gap: 8px;`;
@@ -52,7 +54,8 @@ const TagPill = styled.button`
   border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--tag-ink);
   font-size: 14px; line-height: 20px; overflow-wrap: anywhere;
   &[aria-pressed='true'] { border-color: var(--tag-selected); color: var(--tag-selected); }
-  transition: border-color 140ms ease, color 140ms ease;
+  transition: border-color 140ms ease, color 140ms ease, scale 120ms ease-out;
+  &:active:not(:disabled) { scale: .96; }
   &::before { content: ''; position: absolute; inset: -2px; }
   @media(pointer: coarse) { min-height: 44px; &::before { inset: 0; } }
 `;

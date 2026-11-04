@@ -1,9 +1,10 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Check, X } from 'lucide-react';
 import styled, { css } from 'styled-components';
 import { completeHabit, orderHabits, reopenHabit } from '../api';
 import { entryError } from '../entryFeedback';
-import { ROW_FADE_MS, collapseRow, reducedMotion, restoreRow } from '../motion';
+import { STREAK_MILESTONES, haptic } from '../haptics';
+import { EASE_IN_OUT, EASE_OUT, ROW_FADE_MS, collapseRow, reducedMotion, restoreRow } from '../motion';
 import { TASK_PROGRESS_MS } from '../taskCompletion';
 import type { DoneHabit, DueHabit } from '../types';
 import { Checkbox, Item, List, OutlineSurface, Row, Text } from './OutlineStyles';
@@ -11,8 +12,6 @@ import { Checkbox, Item, List, OutlineSurface, Row, Text } from './OutlineStyles
 // Habits are drawn as tasks but are not entries: the text is the habit's name
 // and is not edited here, and a habit holds nothing beneath it.
 const Label = styled(Text)`cursor: default; user-select: none; -webkit-user-select: none;`;
-
-const SHIFT_MS = 180;
 
 function useLeaving() {
   const leaving = useRef(new Map<number, { row: HTMLElement; animation: Animation }>());
@@ -28,12 +27,12 @@ function useLeaving() {
 }
 
 // Today's habits, at the head of the task list. A check sends the day to the
-// logbook; Alt with an arrow changes the order they come in.
+// logbook; Alt with an arrow changes the order they come in, at once: a
+// move made from the keyboard does not animate.
 export function DueHabits({ habits, today, refresh }: { habits: DueHabit[]; today: string; refresh: () => Promise<void> }) {
   const [checked, setChecked] = useState(new Set<number>());
   const [order, setOrder] = useState<number[] | null>(null);
   const rows = useRef(new Map<number, HTMLLIElement>());
-  const before = useRef<Map<number, number> | null>(null);
   const { leave, stay } = useLeaving();
 
   // The server's order, unless a move has set one it has not caught up with.
@@ -41,23 +40,16 @@ export function DueHabits({ habits, today, refresh }: { habits: DueHabit[]; toda
   const local = order && order.length === ids.length && order.every(id => ids.includes(id)) ? order : ids;
   const shown = local.map(id => habits.find(habit => habit.id === id)!);
 
-  // A habit moved past another slides there rather than jumping.
-  useLayoutEffect(() => {
-    const previous = before.current;
-    before.current = null;
-    if (!previous || reducedMotion()) return;
-    for (const [id, top] of previous) {
-      const row = rows.current.get(id);
-      const delta = row ? top - row.getBoundingClientRect().top : 0;
-      if (row && Math.abs(delta) > .5) row.animate([{ transform: `translateY(${delta}px)` }, { transform: 'none' }], { duration: SHIFT_MS, easing: 'cubic-bezier(.23, 1, .32, 1)' });
-    }
-  }, [local.join(',')]);
-
   const check = (habit: DueHabit) => {
     if (checked.has(habit.id)) return;
+    // The last of the day, or a run reaching a mark worth noticing, is felt more.
+    const last = habits.every(other => other.id === habit.id || checked.has(other.id));
+    haptic(last || STREAK_MILESTONES.has((habit.streak ?? 0) + 1) ? 'celebrate' : 'success');
     setChecked(current => new Set([...current, habit.id]));
     leave(habit.id, rows.current.get(habit.id) ?? null);
-    completeHabit(habit.id, today).then(() => refresh()).catch(error => {
+    completeHabit(habit.id, today).then(() => refresh()).then(() => {
+      if (last) window.dispatchEvent(new CustomEvent(HABITS_DONE_EVENT));
+    }).catch(error => {
       stay(habit.id);
       setChecked(current => { const next = new Set(current); next.delete(habit.id); return next; });
       entryError(error, rows.current.get(habit.id));
@@ -70,7 +62,6 @@ export function DueHabits({ habits, today, refresh }: { habits: DueHabit[]; toda
     if (target < 0 || target >= local.length) return;
     const next = [...local];
     [next[index], next[target]] = [next[target], next[index]];
-    before.current = new Map([...rows.current].map(([key, row]) => [key, row.getBoundingClientRect().top]));
     setOrder(next);
     orderHabits(next).catch(error => { setOrder(null); entryError(error, rows.current.get(id)); void refresh().catch(() => {}); });
   };
@@ -111,7 +102,9 @@ export const Pill = styled.button<{ $fresh: boolean }>`
   /* The check gives way to a cross while a press would take the day back. */
   > svg { flex: none; translate: 0 1px; transition: opacity 140ms ease, scale 140ms var(--ease-out); }
   > svg + svg { position: absolute; left: 7px; opacity: 0; scale: .6; }
-  @media (hover: hover) { &:hover:not(:disabled) {
+  /* A finger sees the cross the moment it lands. */
+  &:active:not(:disabled) { > svg:first-of-type { opacity: 0; scale: .6; } > svg + svg { opacity: 1; scale: 1; } }
+  @media (hover: hover) and (pointer: fine) { &:hover:not(:disabled) {
     background: color-mix(in srgb, var(--link) 38%, transparent);
     > svg:first-of-type { opacity: 0; scale: .6; }
     > svg + svg { opacity: 1; scale: 1; }
@@ -126,15 +119,29 @@ export function closePill(pill: HTMLElement) {
     { opacity: 1, width, marginRight: `${PILL_GAP}px`, paddingLeft: '7px', paddingRight: '9px' },
     { opacity: 0, width, marginRight: `${PILL_GAP}px`, paddingLeft: '7px', paddingRight: '9px', offset: reducedMotion() ? 1 : .45 },
     { opacity: 0, width: '0px', marginRight: '0px', paddingLeft: '0px', paddingRight: '0px' },
-  ], { duration: reducedMotion() ? ROW_FADE_MS : ROW_FADE_MS + 160, easing: 'cubic-bezier(.77, 0, .175, 1)', fill: 'both' });
+  ], { duration: reducedMotion() ? ROW_FADE_MS : ROW_FADE_MS + 160, easing: EASE_IN_OUT, fill: 'both' });
 }
 
-export function DoneHabits({ habits, date, refresh }: { habits: DoneHabit[]; date: string; refresh: () => Promise<void> }) {
+// The day's habits all done is marked once: today's pills lift in turn.
+const HABITS_DONE_EVENT = 'still-habits-done';
+export function DoneHabits({ habits, date, refresh, today = false }: { habits: DoneHabit[]; date: string; refresh: () => Promise<void>; today?: boolean }) {
   const [leaving, setLeaving] = useState(new Set<number>());
   const pills = useRef(new Map<number, HTMLButtonElement>());
+  useEffect(() => {
+    if (!today) return;
+    const lift = () => {
+      if (reducedMotion()) return;
+      [...pills.current.values()].forEach((pill, index) => pill.animate(
+        [{ scale: 1 }, { scale: 1.08, offset: .4 }, { scale: 1 }],
+        { duration: 320, delay: index * 40, easing: EASE_OUT }));
+    };
+    window.addEventListener(HABITS_DONE_EVENT, lift);
+    return () => window.removeEventListener(HABITS_DONE_EVENT, lift);
+  }, [today]);
   const reopen = (habit: DoneHabit) => {
     const pill = pills.current.get(habit.id);
     if (leaving.has(habit.id) || habit.archived || !pill) return;
+    haptic('soft');
     setLeaving(current => new Set([...current, habit.id]));
     const closing = closePill(pill);
     reopenHabit(habit.id, date).then(() => refresh()).catch(error => {

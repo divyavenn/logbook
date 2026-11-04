@@ -41,7 +41,7 @@ export type Tag = { name: string; note_count: number; task_count: number };
 export type Habit = { id: number; key: string; name: string; position: number; created_at: string; done: string[] };
 // A habit is drawn as a task: on the list while today is still to do, and in
 // a day of the logbook once that day is done. It is never an entry.
-export type DueHabit = { id: number; key: string; name: string };
+export type DueHabit = { id: number; key: string; name: string; streak?: number };
 export type DoneHabit = DueHabit & { completed_at: string; archived: boolean };
 
 export type CalendarSubscriptionStatus = 'connecting' | 'connected' | 'error';

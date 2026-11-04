@@ -4,6 +4,8 @@ A habit is never an entry. Today's list shows every live habit with no
 habit_days row for today, so a missed day needs nothing done to it: it is
 simply a day with no row. A done day is shown in the logbook from its row.
 """
+from datetime import date, timedelta
+
 from fastapi import HTTPException
 
 
@@ -19,10 +21,20 @@ def required_habit(db, habit_id):
 
 
 def due(db, today):
-    """The habits still to do today, as the task list shows them."""
-    return [{'id': row['id'], 'key': row['key'], 'name': row['name']} for row in db.execute(
+    """The habits still to do today, as the task list shows them, each with
+    the run of days it is on: the days done up to yesterday."""
+    rows = db.execute(
         '''SELECT * FROM habits WHERE archived_at IS NULL
-           AND id NOT IN (SELECT habit_id FROM habit_days WHERE date = ?) ORDER BY position, id''', (today,))]
+           AND id NOT IN (SELECT habit_id FROM habit_days WHERE date = ?) ORDER BY position, id''', (today,)).fetchall()
+    result = []
+    for row in rows:
+        done = {day['date'] for day in db.execute('SELECT date FROM habit_days WHERE habit_id = ? AND date < ?', (row['id'], today))}
+        day, streak = date.fromisoformat(today) - timedelta(days=1), 0
+        while day.isoformat() in done:
+            streak += 1
+            day -= timedelta(days=1)
+        result.append({'id': row['id'], 'key': row['key'], 'name': row['name'], 'streak': streak})
+    return result
 
 
 def done_on(db, dates):

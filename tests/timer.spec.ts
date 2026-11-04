@@ -1,6 +1,6 @@
 import { expect, test } from './fixtures';
 
-test('timer responds before the network and touch controls request haptic feedback', async ({ page }) => {
+test('timer responds before the network and its press is felt as a start', async ({ page }) => {
   await page.addInitScript(() => {
     (window as typeof window & { hapticPatterns: VibratePattern[] }).hapticPatterns = [];
     Object.defineProperty(navigator, 'vibrate', { configurable: true, value: (pattern: VibratePattern) => {
@@ -17,9 +17,12 @@ test('timer responds before the network and touch controls request haptic feedba
   await page.goto('/');
   const start = page.getByRole('button', { name: 'Start focus timer', exact: true });
   await expect(start).not.toHaveAttribute('aria-disabled', 'true');
+  // A touch alone is not an action, and is not felt.
   await start.evaluate(element => element.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch', pointerId: 1, isPrimary: true })));
-  expect(await page.evaluate(() => (window as typeof window & { hapticPatterns: VibratePattern[] }).hapticPatterns)).toEqual([14]);
+  expect(await page.evaluate(() => (window as typeof window & { hapticPatterns: VibratePattern[] }).hapticPatterns)).toEqual([]);
+  // Starting the timer is felt at the press, before the server has answered.
   await start.click();
+  expect(await page.evaluate(() => (window as typeof window & { hapticPatterns: VibratePattern[] }).hapticPatterns)).toEqual([14]);
   const stop = page.getByRole('button', { name: 'Stop focus timer', exact: true });
   await expect(stop).toHaveAttribute('aria-pressed', 'true');
   await expect(stop).toHaveAttribute('aria-disabled', 'true');

@@ -75,7 +75,7 @@ export const Branch = styled.div<{ $open: boolean; $editing: boolean }>`
     transform: ${({ $open }) => $open ? 'none' : 'translateY(-3px)'};
     transition-property: opacity, transform;
     transition-duration: 220ms, 280ms;
-    transition-timing-function: ease-out;
+    transition-timing-function: var(--ease-out);
   }
   ${({ $open }) => $open && css`
     > ${Children} > ${Item}:nth-child(2) > ${Row} { transition-delay: 35ms; }
@@ -123,8 +123,9 @@ export const Checkbox = styled.button<{ $checked?: boolean; $suppressPreview?: b
     -webkit-mask: url('/icons/check-flaticon.svg') center / contain no-repeat;
     opacity: ${({ $checked }) => $checked ? 1 : 0}; scale: ${({ $checked }) => $checked ? 1 : .25}; translate: 0 var(--entry-marker-offset);
     filter: blur(${({ $checked }) => $checked ? 0 : 4}px);
-    transition-property: opacity, scale, filter; transition-duration: 150ms; transition-timing-function: var(--ease-out); }
-  @media (hover: hover) {
+    transition-property: opacity, scale, filter; transition-duration: 150ms; transition-timing-function: var(--ease-out);
+    @media (prefers-reduced-motion: reduce) { transition-property: opacity; } }
+  @media (hover: hover) and (pointer: fine) {
     ${({ $checked, $suppressPreview }) => !$suppressPreview && css`
       &:hover::before { background: transparent; border-color: var(--link); }
       &:hover::after { opacity: ${$checked ? 0 : 1}; scale: ${$checked ? .25 : 1};
@@ -137,7 +138,8 @@ export const Checkbox = styled.button<{ $checked?: boolean; $suppressPreview?: b
 export const Disclosure = styled.button<{ $open: boolean; $task: boolean; $done: boolean; $progress: number }>`
   position: relative; width: 40px; min-width: 40px; height: var(--entry-row-height); padding: 0; border: 0;
   display: grid; place-items: center; background: transparent; border-radius: 4px; color: ${({ $task, $done }) => $task && !$done ? 'var(--ink)' : 'var(--muted)'};
-  transition: color 140ms ease;
+  transition: color 140ms ease, scale 120ms ease-out;
+  &:active:not(:disabled) { scale: .96; }
   &::before { content: ''; width: 5px; height: 5px; border-right: 1.25px solid currentColor; border-bottom: 1.25px solid currentColor; translate: 0 var(--entry-marker-offset);
     transform: rotate(${({ $open }) => $open ? '45deg' : '-45deg'}); transition: transform 140ms ease-out; }
   /* A parent task wears the same bubble as any task, and the pie fills it in
@@ -177,7 +179,7 @@ export const LinkCopy = styled.button`
   padding: 0; border: 0; background: transparent; border-radius: 50%; color: var(--muted);
   transition: color 140ms ease, transform 120ms ease-out;
   &:active { transform: scale(.96); }
-  @media (hover: hover) { &:hover { color: var(--link); } }
+  @media (hover: hover) and (pointer: fine) { &:hover { color: var(--link); } }
   svg { width: 14px; height: 14px; translate: 0 var(--entry-marker-offset); }
   li[data-gesture-selected] > div > & { display: flex; }
   @media(pointer: coarse) { width: 44px; min-width: 44px; height: 44px; }

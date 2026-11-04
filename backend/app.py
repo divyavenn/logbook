@@ -852,6 +852,10 @@ if dist.is_dir():
     def favicon():
         return FileResponse(dist / "favicon.svg")
 
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    def manifest():
+        return FileResponse(dist / "manifest.webmanifest", media_type="application/manifest+json")
+
     @app.get("/sw.js")
     def service_worker():
         # Served from the root so its scope covers the whole app, and never

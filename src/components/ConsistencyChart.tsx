@@ -40,9 +40,12 @@ const Cell = styled.span<{ $level: number; $future: boolean; $selected?: boolean
   display: block; padding: 0; border: 0; border-radius: 3px;
   background: ${({ $level, $selected }) => $selected ? 'var(--chart-select)' : shade($level)};
   visibility: ${({ $future }) => $future ? 'hidden' : 'visible'};
-  transition: background-color 200ms var(--ease-out);
-  @media (hover: hover) { &:hover { background: ${({ $level, $selected }) => $selected ? 'var(--chart-select)' : `color-mix(in srgb, var(--chart-select) 50%, ${shade($level)})`}; } }
-  &:is(button) { cursor: pointer; &:active { scale: .9; } transition: background-color 200ms var(--ease-out), scale 120ms ease-out; }
+  /* A day's colour eases as it is marked or as the chart changes hands; the
+     day under the pointer, or moved to by the keyboard, shows at once. */
+  transition: background-color 120ms ease;
+  &:hover, &[aria-current] { transition: none; }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: ${({ $level, $selected }) => $selected ? 'var(--chart-select)' : `color-mix(in srgb, var(--chart-select) 50%, ${shade($level)})`}; } }
+  &:is(button) { cursor: pointer; &:active { scale: .96; } transition: background-color 120ms ease, scale 120ms ease-out; }
   &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 `;
 
@@ -91,7 +94,7 @@ export function ConsistencyChart({ levels, end, weeks = 26, label, describe, ori
   }, [vertical, end]);
   return <Viewport ref={viewport} $orientation={orientation}>
     <Frame role="group" aria-label={label} $orientation={orientation} $weeks={weeks} onKeyDown={step}
-      onPointerOver={event => { const date = (event.target as HTMLElement).dataset.date; onHover?.(date && date <= end ? date : null); }}
+      onPointerOver={event => { if (event.pointerType === 'touch') return; const date = (event.target as HTMLElement).dataset.date; onHover?.(date && date <= end ? date : null); }}
       onPointerLeave={() => onHover?.(null)}>
       {recent.flatMap((days, week) => {
         const line = vertical ? week + 1 : weeks - week;

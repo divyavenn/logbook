@@ -85,6 +85,8 @@ class DueHabit(BaseModel):
     id: int = Field(ge=1)
     key: str
     name: str
+    # Days done in a row up to yesterday.
+    streak: int = Field(default=0, ge=0)
 
 
 class DoneHabit(DueHabit):

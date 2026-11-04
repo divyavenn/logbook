@@ -3,6 +3,7 @@ import { completeTask, reopenTask } from './api';
 import { recordEdit } from './documentHistory';
 import { completionPreview, TASK_PROGRESS_MS, waitForMotion } from './taskCompletion';
 import { ROW_COLLAPSE_MS, ROW_FADE_MS } from './motion';
+import { haptic } from './haptics';
 import type { OutlineDocument } from './outlineDocument';
 import type { OutlineItem } from './types';
 
@@ -47,11 +48,22 @@ export function useTaskCompletion(context: CompletionContext) {
     const task = ctx.rows().find(row => row.id === id);
     if (!task) return;
     const intents = targets.current;
-    intents.set(id, !(intents.get(id) ?? !!task.completed_at));
+    const finishing = !(intents.get(id) ?? !!task.completed_at);
+    intents.set(id, finishing);
     changedAt.current = performance.now();
     motion.current?.abort();
     setCompleting(new Set());
-    setPendingCompletion(completionPreview(ctx.rows(), intents));
+    const preview = completionPreview(ctx.rows(), intents);
+    setPendingCompletion(preview);
+    // A check that finishes a parent along with it is the larger moment.
+    const rows = ctx.rows();
+    let parent = task.parent_id, cascades = false;
+    while (finishing && parent !== null && !cascades) {
+      const above = rows.find(row => row.id === parent);
+      cascades = !!preview.get(parent) && !above?.completed_at;
+      parent = above?.parent_id ?? null;
+    }
+    haptic(!finishing ? 'soft' : cascades ? 'celebrate' : 'success');
     if (running.current) return;
     running.current = true;
 

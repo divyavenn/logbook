@@ -17,6 +17,7 @@ import { documentUndo, historyShortcutDirection, recordCompletion } from './docu
 import { LOG_WASH_HEIGHT, compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
 import { useIdleEntry } from './useIdleEntry';
+import { haptic } from './haptics';
 import { glide, reducedMotion } from './motion';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
@@ -110,8 +111,8 @@ const pageControl = css`
   width: 28px; height: 36px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--muted); text-decoration: none;
   svg, [data-shortcut-icon] { transition: scale 140ms ease-out; }
-  &:hover { color: var(--link); }
-  &:hover svg, &:hover [data-shortcut-icon] { scale: 1.05; }
+  @media (hover: hover) and (pointer: fine) { &:hover { color: var(--link); } }
+  @media (hover: hover) and (pointer: fine) { &:hover svg, &:hover [data-shortcut-icon] { scale: 1.05; } }
   @media(pointer: coarse) { width: 44px; height: 44px; }
 `;
 const ThemeToggle = styled.button`${pageControl}`;
@@ -135,7 +136,7 @@ const SidebarControls = styled.div`display: flex; align-items: center;`;
 const TimerChrome = styled.div`
   position: fixed; top: 20px; right: 24px; z-index: 43;
   display: flex; align-items: center; gap: 10px;
-  @media ${compactViewport} { top: max(12px, env(safe-area-inset-top)); right: 12px; }
+  @media ${compactViewport} { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
 `;
 const TimerTime = styled.span`
   color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: -.01em;
@@ -148,9 +149,9 @@ const TimerButton = styled.button<{ $running: boolean }>`
     opacity: ${({ $running }) => $running ? .3 : 0}; transform: scale(${({ $running }) => $running ? 1.14 : 1});
     transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out);
     @media (prefers-reduced-motion: reduce) { transition-property: opacity; } }
-  &:hover { background: var(--timer-hover); }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: var(--timer-hover); } }
   &[aria-pressed='true'] { background: var(--timer-running); scale: 1.03; }
-  &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
+  @media (hover: hover) and (pointer: fine) { &[aria-pressed='true']:hover { background: var(--timer-running-hover); } }
   &[aria-pressed='true']::before { border-color: var(--timer-running-ring); }
 `;
 // The strip above the panes is the plainest place a page turn comes from: it
@@ -164,7 +165,7 @@ const MobileTabs = styled.div<{ $aside: boolean }>`
   /* Centred along the top while the sidebar keeps its own side. Once the tags
      have taken a tab there is no sidebar, so the dots take its place. */
   position: fixed; top: max(12px, env(safe-area-inset-top)); z-index: 43;
-  ${({ $aside }) => $aside ? 'left: 12px;' : 'left: 50%; translate: -50% 0;'}
+  ${({ $aside }) => $aside ? 'left: max(12px, env(safe-area-inset-left));' : 'left: 50%; translate: -50% 0;'}
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
@@ -184,7 +185,7 @@ const MobilePager = styled.div`
   &::-webkit-scrollbar { display: none; }
 `;
 const MobilePane = styled.section`
-  flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto;
+  flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto; overscroll-behavior-y: contain;
   display: flex; flex-direction: column; scrollbar-width: none;
   /* Across is the page turning, down is the pane scrolling, and the turn is
      carried by the drag the pane reads rather than by the browser, so a drag
@@ -582,6 +583,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     if (timerLock.current) return;
     const stopping = !!active;
     timerLock.current = true; setTimerIntent(stopping ? 'stop' : 'start'); setTimerBusy(true);
+    // Felt at the press, inside the gesture, where the hand is.
+    haptic(stopping ? 'stop' : 'start');
     try {
       if (active) {
         await stopTimer(active.id);
@@ -802,7 +805,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     onPointerUpCapture={() => { if (!turning.current?.turned) turning.current = null; }}>
     <TimerChrome>
       <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(visibleElapsed)}</TimerTime>
-      <TimerButton $running={timerRunning} type="button" disabled={!data} data-haptic="impact"
+      <TimerButton $running={timerRunning} type="button" disabled={!data}
         aria-label={timerRunning ? 'Stop focus timer' : 'Start focus timer'} aria-pressed={timerRunning} aria-disabled={timerBusy || undefined} aria-busy={timerBusy || undefined}
         title="Click to start/stop · right-click for sound"
         onContextMenu={event => { event.preventDefault(); setSoundOpen(true); }}
@@ -816,7 +819,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
           <MobileTabs role="tablist" aria-label="Mobile views" $aside={views.includes('tags')}>
             {views.map(view => <MobileTab key={view} id={`mobile-tab-${view}`} type="button" role="tab"
               aria-controls={`mobile-panel-${view}`} aria-selected={mobileView === view} $active={mobileView === view}
-              onClick={() => selectMobileView(view)}>{view}</MobileTab>)}
+              onClick={() => { if (view !== mobileView) haptic('selection'); selectMobileView(view); }}>{view}</MobileTab>)}
           </MobileTabs>
         </ShortHeader>
         <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}

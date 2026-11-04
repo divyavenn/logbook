@@ -4,7 +4,6 @@ import styled from 'styled-components';
 import App from './App';
 import { GlobalStyle, applyTheme } from './styles';
 import { PasswordGate } from './components/PasswordGate';
-import { installTouchHaptics } from './haptics';
 import { getAuthStatus, getSharedEntry, login } from './api';
 import { storage } from './storage';
 import { parseEntryLink } from './entryLinks';
@@ -33,7 +32,6 @@ function Root() {
     () => storage.getItem(UNLOCKED_KEY) === 'true' ? 'ready' : 'checking');
   // An entry a link asked for, shown to a reader the journal is closed to.
   const [shared, setShared] = useState<SharedEntry | null>(null);
-  useEffect(() => installTouchHaptics(), []);
   useEffect(() => {
     let cancelled = false;
     getAuthStatus().then(status => {

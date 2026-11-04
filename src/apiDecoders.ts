@@ -84,7 +84,7 @@ export function calendarSubscription(value: unknown): CalendarSubscription {
 }
 function dueHabit(value: unknown): DueHabit {
   const row = object(value);
-  return { id: positiveId(row.id), key: text(row.key), name: text(row.name) };
+  return { id: positiveId(row.id), key: text(row.key), name: text(row.name), streak: optional(row.streak, nonnegative, 0) };
 }
 function doneHabit(value: unknown): DoneHabit {
   const row = object(value);

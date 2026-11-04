@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { flushSync } from 'react-dom';
 import styled, { css } from 'styled-components';
 import { dateObject, duration, localDate } from '../api';
 import type { CalendarEvent, DueHabit, JournalDay, Task } from '../types';
@@ -7,9 +8,10 @@ import { TextButton, appear, edgeWash, viewEnter } from '../styles';
 import { Outline } from './Outline';
 import { entryError } from '../entryFeedback';
 import { useJournalContext } from '../JournalContext';
+import { ROW_FADE_MS, collapseRow } from '../motion';
 import { compactViewport, fullViewport } from '../layout';
 
-const SectionTitle = styled.button`font-size: 20px; line-height: 1.4; margin-bottom: 4px; font-weight: 500; border: 0; padding: 0; height: calc(var(--task-heading-height) - 4px); background: transparent; text-align: left;`;
+const SectionTitle = styled.button`font-size: 20px; line-height: 1.4; margin-bottom: 4px; font-weight: 500; border: 0; padding: 0; height: calc(var(--task-heading-height) - 4px); background: transparent; text-align: left; transform-origin: left center; transition: scale 120ms ease-out; &:active:not(:disabled) { scale: .96; }`;
 const TaskSection = styled.section<{ $entering: boolean; $empty: boolean; $fills: boolean }>`
   ${({ $entering }) => viewEnter($entering)};
   align-self: stretch; display: flex; flex-direction: column; flex-shrink: 0; min-width: 180px; width: 100%; padding: 0 12px 4px 8px; margin-bottom: 8px;
@@ -66,9 +68,13 @@ const DayBlock = styled.section<{ $today: boolean; $showHistory: boolean; $arriv
   /* The day's focus time and habits keep out of sight until the day is
      pointed at or being worked in. */
   [data-day-reveal] { opacity: 0; transition: opacity 160ms var(--ease-out); }
-  &:hover [data-day-reveal], &:focus-within [data-day-reveal] { opacity: 1; }
+  &:focus-within [data-day-reveal] { opacity: 1; }
+  @media (hover: hover) and (pointer: fine) { &:hover [data-day-reveal] { opacity: 1; } }
   /* Without hover nothing would show a hidden pill before it was tapped. */
+  /* Without hover nothing would show a hidden pill before it was tapped, so
+     touch takes a day in hand by a tap anywhere on it. */
   @media (hover: none) { [data-day-reveal] { pointer-events: none; } &:focus-within [data-day-reveal] { pointer-events: auto; } }
+  &[data-in-hand] [data-day-reveal] { opacity: 1; pointer-events: auto; }
 `;
 type Fold = { key: string; dates: string[]; days: Map<string, JournalDay> };
 function shiftDate(date: string, days: number) {
@@ -91,8 +97,12 @@ const FoldBlock = styled.div<{ $open: boolean }>`margin: 0 0 ${({ $open }) => $o
 const FoldGhost = styled.button`
   display: flex; align-items: center; min-height: 40px; padding: 0; border: 0; background: transparent; cursor: pointer;
   > span { ${datePill}; border: 1px dashed var(--date-bg); color: color-mix(in srgb, var(--muted) 75%, transparent);
-    opacity: 0; transition: opacity 160ms var(--ease-out); }
-  &:hover > span, &:focus-visible > span { opacity: 1; }
+    opacity: 0; transition: opacity 160ms var(--ease-out), scale 120ms ease-out; }
+  &:active > span { scale: .96; }
+  &:focus-visible > span { opacity: 1; }
+  /* Without hover, the ghost stays faintly in view to be found. */
+  @media (hover: none) { > span { opacity: .5; } }
+  @media (hover: hover) and (pointer: fine) { &:hover > span { opacity: 1; } }
   @media(pointer: coarse) { min-height: 44px; }
 `;
 // Opened, the run's dates step in, held by a faint spine down their side;
@@ -100,11 +110,14 @@ const FoldGhost = styled.button`
 // It runs from the top of the first date to the foot of the last, drawn in
 // the dates' own outline.
 const FoldSpine = styled.button`
-  position: absolute; left: -10px; top: var(--spine-top, 0); height: var(--spine-height, 0); width: 12px;
+  position: absolute; left: -10px; top: 0; height: 0; width: 12px;
   padding: 0; border: 0; background: transparent; cursor: pointer;
   &::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; translate: -50% 0;
     background: var(--date-bg); transition: background-color 140ms ease; }
-  &:hover::before, &:focus-visible::before { background: var(--muted); }
+  &:focus-visible::before { background: var(--muted); }
+  @media (hover: hover) and (pointer: fine) { &:hover::before { background: var(--muted); } }
+  /* A hairline has nothing to shrink; a press darkens it instead. */
+  &:active::before { background: var(--ink); }
   @media ${compactViewport} { left: -4px; }
 `;
 // An opened run folds away again once it has been seen and scrolled past.
@@ -113,41 +126,52 @@ function FoldRun({ open, root, onLeave, children }: { open: boolean; root: RefOb
   const leave = useRef(onLeave);
   leave.current = onLeave;
   useEffect(() => {
-    if (!open || !block.current) return;
+    const run = block.current, pane = root.current;
+    if (!open || !run) return;
     let seen = false;
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) seen = true;
-      else if (seen) leave.current();
-    }, { root: root.current });
-    observer.observe(block.current);
+      if (entry.isIntersecting) { seen = true; return; }
+      if (!seen) return;
+      // A run folded above the reader would pull the page out from under them;
+      // the height it gives up is given back to the scroll in the same frame.
+      const above = !!entry.rootBounds && entry.boundingClientRect.bottom <= entry.rootBounds.top;
+      const before = run.offsetHeight;
+      flushSync(() => leave.current());
+      if (above && pane) pane.scrollTop -= before - run.offsetHeight;
+    }, { root: pane });
+    observer.observe(run);
     return () => observer.disconnect();
   }, [open, root]);
-  // The spine is measured against the dates it holds, whose rows vary.
+  // The spine is measured against the dates it holds, whose rows vary, when
+  // the run opens and whenever it changes size, and set on the spine alone.
   useLayoutEffect(() => {
     const days = block.current?.querySelector<HTMLElement>('[data-fold-days]');
-    if (!open || !days) return;
+    const spine = days?.querySelector<HTMLElement>('[data-fold-spine]');
+    if (!open || !days || !spine) return;
     const place = () => {
       const dates = days.querySelectorAll(':scope > [data-day] time');
       if (!dates.length) return;
       const frame = days.getBoundingClientRect();
       const top = dates[0].getBoundingClientRect().top - frame.top;
       const bottom = dates[dates.length - 1].getBoundingClientRect().bottom - frame.top;
-      days.style.setProperty('--spine-top', `${top}px`);
-      days.style.setProperty('--spine-height', `${bottom - top}px`);
+      spine.style.top = `${top}px`;
+      spine.style.height = `${bottom - top}px`;
     };
     place();
     const observer = new ResizeObserver(place);
     observer.observe(days);
     return () => observer.disconnect();
-  });
+  }, [open]);
   return <FoldBlock ref={block} $open={open}>{children}</FoldBlock>;
 }
 // The days of an opened run are ghosts of dates, as the run's own mark was,
 // and come to themselves while one is pointed at or worked in. A day written
 // on leaves the run at the next refresh, and is a date like any other.
 const FoldDays = styled.div`
-  position: relative; padding: 8px 0 0 14px; opacity: 1; transition: opacity 200ms var(--ease-out);
-  @starting-style { opacity: 0; }
+  position: relative; padding: 8px 0 0 14px; opacity: 1; transform: none;
+  transition: opacity 180ms var(--ease-out), transform 240ms var(--ease-out);
+  @starting-style { opacity: 0; transform: translateY(4px); }
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; @starting-style { transform: none; } }
   [data-day] time { border-style: dashed; color: color-mix(in srgb, var(--muted) 75%, transparent); transition: color 160ms ease; }
   [data-day]:is(:hover, :focus-within) time { border-style: solid; color: var(--ink); }
 `;
@@ -160,7 +184,7 @@ const DayHeadRow = styled.div`display: flex; align-items: center; flex-wrap: wra
 const DateHead = styled.button`
   display: flex; align-items: center; gap: 10px; min-height: 40px; margin-bottom: 3px;
   padding: 0; border: 0; background: transparent; text-align: left; white-space: nowrap;
-  &:hover > span { text-decoration: underline; }
+  @media (hover: hover) and (pointer: fine) { &:hover > span { text-decoration: underline; } }
   &:disabled { cursor: default; opacity: 1; }
   @media(pointer: coarse) { min-height: 44px; }
   @media ${compactViewport} { min-height: 36px; gap: 6px; margin-bottom: 0; }
@@ -202,7 +226,7 @@ const EventText = styled.span<{ $cancelled: boolean }>`${eventEntry};`;
 const EventToggle = styled.button<{ $cancelled: boolean; $linked: boolean }>`
   ${eventEntry}; width: 100%; text-align: left; cursor: pointer;
   color: ${({ $linked }) => $linked ? 'color-mix(in srgb, var(--link), #000 12%)' : 'var(--ink)'};
-  &:hover { text-decoration: ${({ $cancelled }) => $cancelled ? 'line-through underline' : 'underline'}; text-underline-offset: 2px; }
+  @media (hover: hover) and (pointer: fine) { &:hover { text-decoration: ${({ $cancelled }) => $cancelled ? 'line-through underline' : 'underline'}; text-underline-offset: 2px; } }
 `;
 const EventTitle = styled.span`font-weight: 400;`;
 const EventMeta = styled.span`color: inherit; font-weight: 300; font-variant-numeric: tabular-nums;`;
@@ -212,7 +236,7 @@ const EventDetails = styled.div`
   ${appear('3px', 160)};
 `;
 const EventDetail = styled.div`min-width: 0; white-space: pre-wrap;`;
-const EventDetailLink = styled.a`color: var(--link); text-decoration: none; text-underline-offset: 2px; &:hover { text-decoration: underline; }`;
+const EventDetailLink = styled.a`color: var(--link); text-decoration: none; text-underline-offset: 2px; @media (hover: hover) and (pointer: fine) { &:hover { text-decoration: underline; } }`;
 const Body = styled.div`
   min-width: 0; padding-left: 20px; flex: 1; display: flex; flex-direction: column;
   > [data-outline-kind='tasks'] { flex: 1; display: flex; flex-direction: column; }
@@ -223,7 +247,7 @@ const Logbook = styled.section<{ $entering: boolean }>`
   ${({ $entering }) => viewEnter($entering)}
   /* Today is the day in hand until another is being worked in, and is again
      once that one is left. */
-  &:not(:has([data-day]:not([data-today]):focus-within)) [data-today] [data-day-reveal] { opacity: 1; pointer-events: auto; }
+  &:not(:has([data-day]:not([data-today]):is(:focus-within, [data-in-hand]))) [data-today] [data-day-reveal] { opacity: 1; pointer-events: auto; }
 `;
 const HistoryEnd = styled.div<{ $showHistory: boolean }>`
   display: flex; justify-content: center; padding: 20px 0; color: var(--sage);
@@ -301,6 +325,17 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
   // Dates in an opened run that have been pressed to write on. Until then a
   // date is only its name, so a long run costs no editors.
   const [writing, setWriting] = useState<Set<string>>(() => new Set());
+  // The day a finger last touched, which shows its focus and habits as a
+  // pointer's hover would. Touching outside the log lets it go.
+  const [inHand, setInHand] = useState<string | null>(null);
+  useEffect(() => {
+    if (!inHand) return;
+    const release = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest(`[data-day="${inHand}"]`)) setInHand(null);
+    };
+    document.addEventListener('pointerdown', release, true);
+    return () => document.removeEventListener('pointerdown', release, true);
+  }, [inHand]);
   const startWriting = (date: string) => {
     setWriting(current => new Set([...current, date]));
     // Its outline listens for this once it has mounted.
@@ -352,7 +387,8 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
       const title = isToday ? 'Today' : date.toDateString() === yesterday.toDateString() ? 'Yesterday' : date.toLocaleDateString(undefined, { weekday: 'long' });
       const entries = day.entries;
       const targeted = target && entries.some(entry => entry.kind === target.kind && entry.id === target.id);
-      return <DayBlock key={day.date} data-day={day.date} data-today={isToday || undefined} $today={isToday || !!targeted} $showHistory={showHistory} $arrival={arrivals.current.get(day.date)} aria-label={`${title}, ${day.date}`}
+      return <DayBlock key={day.date} data-day={day.date} data-today={isToday || undefined} data-in-hand={inHand === day.date || undefined}
+        onPointerDown={event => { if (event.pointerType === 'touch') setInHand(day.date); }} $today={isToday || !!targeted} $showHistory={showHistory} $arrival={arrivals.current.get(day.date)} aria-label={`${title}, ${day.date}`}
         onClick={event => {
           if ((event.target as Element).closest('button, a, input, [contenteditable], [role="group"], [data-calendar-event], [data-habits]') || window.getSelection()?.toString()) return;
           window.dispatchEvent(new CustomEvent('still-new-entry', { detail: `still-draft-${day.date}` }));
@@ -366,7 +402,7 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
           {/* A filtered day is a list of matching entries, not the day itself. */}
           {!activeTag && <FocusTotal data-focus-total data-day-reveal>{duration(seconds, true)}</FocusTotal>}
         </DateHead>
-        {!activeTag && <DoneHabits habits={day.habits} date={day.date} refresh={refresh} />}</DayHeadRow>
+        {!activeTag && <DoneHabits habits={day.habits} date={day.date} refresh={refresh} today={isToday} />}</DayHeadRow>
         {!activeTag && !!day.events?.length && <EventList aria-label={`Calendar events for ${day.date}`}>
           {day.events.map(event => {
             const text = eventText(event);
@@ -443,7 +479,12 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
       {!open && <FoldGhost type="button" data-focus-chrome aria-expanded={false} aria-label={`Show ${label}`}
         onClick={() => setOpened(current => new Set([...current, ...fold.dates]))}><span>{count} {count === 1 ? 'day' : 'days'}</span></FoldGhost>}
       {open && <FoldDays data-fold-days>
-        <FoldSpine type="button" data-focus-chrome aria-expanded aria-label={`Hide ${label}`} onClick={close} />
+        <FoldSpine type="button" data-focus-chrome data-fold-spine aria-expanded aria-label={`Hide ${label}`} onClick={event => {
+          // The run closes the space it held, as a finished row does, then folds.
+          const days = event.currentTarget.closest<HTMLElement>('[data-fold-days]');
+          if (!days) { close(); return; }
+          collapseRow(days, { fade: ROW_FADE_MS }).finished.then(close, close);
+        }} />
         {fold.dates.map(date => {
         const day = fold.days.get(date) ?? (writing.has(date) ? blankDay(date) : null);
         return day ? renderDay(day) : <QuietDay key={date} data-day={date} role="button" tabIndex={0}
