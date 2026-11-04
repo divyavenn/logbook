@@ -292,6 +292,8 @@ test('short sessions have exact totals, inline editing, add/delete controls, and
   const today = '2026-09-03'; // Use a past day so sessions cannot accidentally be in the future.
   await request.post('/api/sessions', { data: { started_at: new Date(`${today}T05:00:13`).toISOString(), duration_seconds: 30 } });
   await page.goto('/');
+  // A day with only focus on it is folded away with the other quiet days.
+  await page.getByRole('button', { name: /^Show \d+ days? with nothing written$/ }).first().click();
   await page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true }).click();
   const modal = page.getByRole('dialog', { name: `Sessions for ${today}`, exact: true });
   await expect(modal.locator('label, th')).toHaveCount(0);

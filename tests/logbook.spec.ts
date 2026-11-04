@@ -65,6 +65,8 @@ test('session times edit inline without exposing or changing the date', async ({
   const today = '2026-09-02'; // A past day keeps manual sessions valid at any test run time.
   await request.post('/api/sessions', { data: { started_at: new Date(`${today}T10:15:00`).toISOString(), duration_seconds: 1500 } });
   await page.goto('/');
+  // A day with only focus on it is folded away with the other quiet days.
+  await page.getByRole('button', { name: /^Show \d+ days? with nothing written$/ }).first().click();
   await page.getByRole('button', { name: `Focus sessions for ${today}` }).click();
   const dialog = page.getByRole('dialog');
   const start = dialog.getByRole('button', { name: /Edit start of session/ });

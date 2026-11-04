@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import styled, { css } from 'styled-components';
 import { dateObject, duration, localDate } from '../api';
 import type { CalendarEvent, DueHabit, JournalDay, Task } from '../types';
@@ -76,12 +76,36 @@ function shiftDate(date: string, days: number) {
   value.setDate(value.getDate() + days);
   return localDate(value);
 }
-const FoldBlock = styled.div`margin: -12px 0 8px;`;
-// A hairline across the log, with room above and below it to be pressed.
-const FoldToggle = styled.button`
-  display: block; width: 100%; height: 14px; padding: 0; border: 0; background: transparent; cursor: pointer;
-  &::before { content: ''; display: block; height: 1px; background: var(--line); opacity: .6; transition: opacity 140ms ease; }
-  &:hover::before, &:focus-visible::before { opacity: 1; }
+// The date pill's shape, shared with the ghost of one: the bottom inset lifts
+// the text to the middle of its outline.
+const datePill = css`
+  display: inline-block; font-family: var(--date-font); font-variant-numeric: tabular-nums; font-size: 15px; line-height: 20px;
+  padding: 4px 10px 5px; margin-left: -6px; border-radius: 9px; transform: translateY(1px);
+  @media ${compactViewport} { margin-left: 0; }
+`;
+// A folded run keeps the room of one day, its date row and the gap after it,
+// so the missing day is felt in the rhythm of the log.
+const FoldBlock = styled.div<{ $open: boolean }>`margin: 0 0 ${({ $open }) => $open ? '0' : '20px'};`;
+// Pointed at, the room shows the ghost of a date: the same pill, its outline
+// broken and fainter, holding the count of days it stands for.
+const FoldGhost = styled.button`
+  display: flex; align-items: center; min-height: 40px; padding: 0; border: 0; background: transparent; cursor: pointer;
+  > span { ${datePill}; border: 1px dashed var(--date-bg); color: color-mix(in srgb, var(--muted) 75%, transparent);
+    opacity: 0; transition: opacity 160ms var(--ease-out); }
+  &:hover > span, &:focus-visible > span { opacity: 1; }
+  @media(pointer: coarse) { min-height: 44px; }
+`;
+// Opened, the run's dates step in, held by a faint spine down their side;
+// the spine is what folds them again.
+// It runs from the top of the first date to the foot of the last, drawn in
+// the dates' own outline.
+const FoldSpine = styled.button`
+  position: absolute; left: -10px; top: var(--spine-top, 0); height: var(--spine-height, 0); width: 12px;
+  padding: 0; border: 0; background: transparent; cursor: pointer;
+  &::before { content: ''; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; translate: -50% 0;
+    background: var(--date-bg); transition: background-color 140ms ease; }
+  &:hover::before, &:focus-visible::before { background: var(--muted); }
+  @media ${compactViewport} { left: -4px; }
 `;
 // An opened run folds away again once it has been seen and scrolled past.
 function FoldRun({ open, root, onLeave, children }: { open: boolean; root: RefObject<HTMLDivElement | null>; onLeave: () => void; children: ReactNode }) {
@@ -98,11 +122,34 @@ function FoldRun({ open, root, onLeave, children }: { open: boolean; root: RefOb
     observer.observe(block.current);
     return () => observer.disconnect();
   }, [open, root]);
-  return <FoldBlock ref={block}>{children}</FoldBlock>;
+  // The spine is measured against the dates it holds, whose rows vary.
+  useLayoutEffect(() => {
+    const days = block.current?.querySelector<HTMLElement>('[data-fold-days]');
+    if (!open || !days) return;
+    const place = () => {
+      const dates = days.querySelectorAll(':scope > [data-day] time');
+      if (!dates.length) return;
+      const frame = days.getBoundingClientRect();
+      const top = dates[0].getBoundingClientRect().top - frame.top;
+      const bottom = dates[dates.length - 1].getBoundingClientRect().bottom - frame.top;
+      days.style.setProperty('--spine-top', `${top}px`);
+      days.style.setProperty('--spine-height', `${bottom - top}px`);
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(days);
+    return () => observer.disconnect();
+  });
+  return <FoldBlock ref={block} $open={open}>{children}</FoldBlock>;
 }
+// The days of an opened run are ghosts of dates, as the run's own mark was,
+// and come to themselves while one is pointed at or worked in. A day written
+// on leaves the run at the next refresh, and is a date like any other.
 const FoldDays = styled.div`
-  padding-top: 8px; opacity: 1; transition: opacity 200ms var(--ease-out);
+  position: relative; padding: 8px 0 0 14px; opacity: 1; transition: opacity 200ms var(--ease-out);
   @starting-style { opacity: 0; }
+  [data-day] time { border-style: dashed; color: color-mix(in srgb, var(--muted) 75%, transparent); transition: color 160ms ease; }
+  [data-day]:is(:hover, :focus-within) time { border-style: solid; color: var(--ink); }
 `;
 // A date with nothing recorded on it at all: only its name, until it is
 // pressed to write on.
@@ -118,13 +165,8 @@ const DateHead = styled.button`
   @media(pointer: coarse) { min-height: 44px; }
   @media ${compactViewport} { min-height: 36px; gap: 6px; margin-bottom: 0; }
 `;
-const DateLabel = styled.time`
-  /* An outline, not a fill: the date is named rather than highlighted. */
-  /* The bottom inset lifts the date to the middle of its outline. */
-  display: inline-block; font-family: var(--date-font); font-variant-numeric: tabular-nums; font-size: 15px; line-height: 20px; padding: 2px 10px 3px; margin-left: -6px;
-  border-radius: 9px; border: 1px solid var(--date-bg); transform: translateY(1px);
-  @media ${compactViewport} { margin-left: 0; }
-`;
+// An outline, not a fill: the date is named rather than highlighted.
+const DateLabel = styled.time`${datePill}; border: 1px solid var(--date-bg);`;
 // Dark enough to clear AA contrast at 12px once the chrome opacity fades it.
 const FocusTotal = styled.span`font-size: 12px; line-height: 24px; color: color-mix(in srgb, var(--ink), var(--muted) 40%); font-variant-numeric: tabular-nums;`;
 const EventList = styled.ul`
@@ -252,9 +294,10 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
 } & Actions) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState<Set<string>>(() => new Set());
-  // The folds opened by hand, and the dates a jump to them has opened.
+  // The dates of the runs that are open, by hand or by a jump to one of them.
+  // Kept by date, so a run written into the middle of splits into two runs
+  // that are both still open, and fold apart from each other.
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
-  const [revealed, setRevealed] = useState<Set<string>>(() => new Set());
   // Dates in an opened run that have been pressed to write on. Until then a
   // date is only its name, so a long run costs no editors.
   const [writing, setWriting] = useState<Set<string>>(() => new Set());
@@ -267,7 +310,7 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
   useEffect(() => {
     const reveal = (event: Event) => {
       const date = (event as CustomEvent<string>).detail;
-      setRevealed(current => current.has(date) ? current : new Set([...current, date]));
+      setOpened(current => current.has(date) ? current : new Set([...current, date]));
     };
     window.addEventListener('still-reveal-day', reveal);
     return () => window.removeEventListener('still-reveal-day', reveal);
@@ -364,16 +407,16 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
         </Body>
       </DayBlock>;
   };
-  // A run of days with nothing written and no focus folds into a thin line
-  // between the days around it, every date in it, recorded or not, a press
-  // away. Today is where writing starts, so it never folds; a filtered view
-  // has no runs.
+  // A run of days with nothing written and nothing on the calendar, focus and
+  // habits or not, folds away between the days around it, every date in it,
+  // recorded or not, a press away. Today is where writing starts, so it never
+  // folds; a filtered view has no runs.
   const sequence: ({ kind: 'day'; day: JournalDay } | { kind: 'fold'; fold: Fold })[] = [];
   if (activeTag) for (const day of days) sequence.push({ kind: 'day', day });
   else {
     let fold: Fold | null = null;
     const add = (date: string, day?: JournalDay) => {
-      if (day && (day.entries.length || secondsForDay(day) > 0 || date === today)) {
+      if (day && (day.entries.length || day.events?.length || date === today)) {
         if (fold) sequence.push({ kind: 'fold', fold });
         fold = null;
         sequence.push({ kind: 'day', day });
@@ -391,19 +434,17 @@ export function Journal({ days, today, refresh, openSessions, openDate, entering
     if (fold) sequence.push({ kind: 'fold', fold });
   }
   const renderFold = (fold: Fold) => {
-    const open = opened.has(fold.key) || fold.dates.some(date => revealed.has(date));
+    const open = fold.dates.some(date => opened.has(date));
     const count = fold.dates.length;
-    const close = () => {
-      setOpened(current => { const next = new Set(current); next.delete(fold.key); return next; });
-      setRevealed(current => new Set([...current].filter(date => !fold.dates.includes(date))));
-      setWriting(current => new Set([...current].filter(date => !fold.dates.includes(date))));
-    };
+    const without = (current: Set<string>) => new Set([...current].filter(date => !fold.dates.includes(date)));
+    const close = () => { setOpened(without); setWriting(without); };
+    const label = `${count} ${count === 1 ? 'day' : 'days'} with nothing written`;
     return <FoldRun key={`fold-${fold.key}`} open={open} root={scrollRoot} onLeave={close}>
-      {/* Opened, the line gives way to the days it held. */}
-      {!open && <FoldToggle type="button" data-focus-chrome aria-expanded={false}
-        aria-label={`Show ${count} ${count === 1 ? 'day' : 'days'} with nothing written`}
-        onClick={() => setOpened(current => new Set([...current, fold.key]))} />}
-      {open && <FoldDays>{fold.dates.map(date => {
+      {!open && <FoldGhost type="button" data-focus-chrome aria-expanded={false} aria-label={`Show ${label}`}
+        onClick={() => setOpened(current => new Set([...current, ...fold.dates]))}><span>{count} {count === 1 ? 'day' : 'days'}</span></FoldGhost>}
+      {open && <FoldDays data-fold-days>
+        <FoldSpine type="button" data-focus-chrome aria-expanded aria-label={`Hide ${label}`} onClick={close} />
+        {fold.dates.map(date => {
         const day = fold.days.get(date) ?? (writing.has(date) ? blankDay(date) : null);
         return day ? renderDay(day) : <QuietDay key={date} data-day={date} role="button" tabIndex={0}
           aria-label={`Write on ${date}`} onClick={() => startWriting(date)}
