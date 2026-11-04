@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from backend.db import connection, initialize
+from backend.db import SCHEMA_VERSION, connection, initialize
 from .test_app import client  # noqa: F401 -- shared isolated database fixture
 
 
@@ -154,7 +154,7 @@ def test_migration_preserves_existing_content_and_order(tmp_path, monkeypatch):
         """)
     initialize(); initialize()
     with connection() as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         notes = [dict(row) for row in db.execute("SELECT * FROM entries WHERE kind = 'note' ORDER BY position")]
         assert [row["content"] for row in notes] == ["First", "Second"]
         assert all(row["parent_id"] is None for row in notes)
@@ -186,7 +186,7 @@ def test_interrupted_legacy_migration_rolls_back_and_retries(tmp_path, monkeypat
     monkeypatch.setattr(storage, '_migrate_entries', original)
     storage.initialize()
     with storage.connection() as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 13
+        assert db.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
         assert db.execute('SELECT content FROM entries').fetchone()[0] == 'Survives interruption'
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'notes'").fetchone()
 

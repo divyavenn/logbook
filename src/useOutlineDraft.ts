@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { registerDraftFlush } from './JournalContext';
 import { freshDraft as fresh, hasDraftChanges, readDraft, type Draft } from './entryDrafts';
-import { siblingEntries as siblings } from './entryTree';
+import { inheritsTag, siblingEntries as siblings } from './entryTree';
 import { storage } from './storage';
 import type { OutlineDocument } from './outlineDocument';
 import type { OutlineChange } from './entryChanges';
@@ -11,21 +11,18 @@ type DraftContext = {
   key: string; documentStore: OutlineDocument; items: OutlineItem[]; defaultKind: EntryKind;
   // Called when a saved edit drops the tag this view filters by.
   onUnfiled?: (id: number) => void;
+  // Called when a saved edit gives an entry its first tag in the unfiltered view.
+  onFiled?: (id: number) => void;
   composer: boolean; day?: string; activeTag: string | null;
 };
 
-export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled }: DraftContext) {
+export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled, onFiled }: DraftContext) {
   const mounted = useRef(true);
-  // A new entry written in a filtered view is filed under that view's tag, so
-  // the tag is there from the start rather than arriving on the first letter
-  // and displacing the caret. It counts as already saved, so an untouched
-  // composer is still untouched.
+  // Empty writing areas carry no content. A root gets the current tag once
+  // writing starts; children already belong through their tagged ancestor.
   const blank = (rows: OutlineItem[], active: boolean, parentId: number | null = null, afterId?: number | null, draftKind: EntryKind = defaultKind): Draft => {
-    const empty = { ...fresh(rows, active, draftKind, parentId, afterId), hiddenTags: activeTag ? [activeTag] : [] };
-    if (!activeTag) return empty;
-    const document = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'journalTag', attrs: { name: activeTag } }] }] };
-    const content = `#${activeTag}`;
-    return { ...empty, document, content, saved: content, tags: [activeTag], savedTags: [activeTag] };
+    return { ...fresh(rows, active, draftKind, parentId, afterId),
+      hiddenTags: activeTag && !inheritsTag(rows, parentId, activeTag) ? [activeTag] : [] };
   };
   const [draft, setDraft] = useState<Draft>(() => {
     try {
@@ -87,10 +84,12 @@ export function useOutlineDraft({ key, documentStore, items, defaultKind, compos
     documentStore.enqueue([change], historyKey ?? value.clientId);
     // The tag that filed this entry here has been taken off it, so the entry
     // takes its leave of this view.
-    if (activeTag && value.savedTags.includes(activeTag) && !value.tags.includes(activeTag)) onUnfiled?.(id);
+    if (activeTag && value.savedTags.includes(activeTag) && !value.tags.includes(activeTag)
+      && !inheritsTag(records.current, value.parentId, activeTag)) onUnfiled?.(id);
+    if (!activeTag && value.tags.length && !value.savedTags.length) onFiled?.(id);
     persist({ ...value, id, saved: value.content, savedTags: value.tags });
     return id;
-  }, [activeTag, day, documentStore, onUnfiled, persist]);
+  }, [activeTag, day, documentStore, onUnfiled, onFiled, persist]);
   const save = useCallback(() => {
     const id = stageDraft();
     if (mounted.current) setSaving(true);

@@ -1,4 +1,4 @@
-import { ENTRY_KINDS, type CalendarEvent, type CalendarSubscription, type CompletionResult, type DayMetrics, type DocumentResult,
+import { ENTRY_KINDS, type CalendarEvent, type CalendarSubscription, type CompletionResult, type DayMetrics, type DocumentResult, type DoneHabit, type DueHabit, type Habit,
   type EntryDocument, type EntryKind, type JournalData, type JournalDay, type OutlineItem, type ReopenResult, type SearchResults, type Session, type SharedEntry, type Stats, type Task } from './types';
 import { array, boolean, integer, nonnegative, nullable, object, optional, positiveId, strings, text } from './validation';
 
@@ -61,7 +61,7 @@ function day(value: unknown): JournalDay {
   const entries = row.entries == null
     ? [...array(row.notes ?? [], item => entry(item, 'notes')), ...array(row.tasks ?? [], item => entry(item, 'tasks'))]
     : array(row.entries, item => entry(item));
-  return { ...metrics(row), entries, events: array(row.events ?? [], calendarEvent) };
+  return { ...metrics(row), entries, events: array(row.events ?? [], calendarEvent), habits: array(row.habits ?? [], doneHabit) };
 }
 export function normalizeJournal(value: unknown): JournalData {
   const row = object(value);
@@ -72,7 +72,7 @@ export function normalizeJournal(value: unknown): JournalData {
       const tag = object(value);
       return { name: text(tag.name), note_count: optional(tag.note_count, nonnegative, 0), task_count: optional(tag.task_count, nonnegative, 0) };
     }),
-    days: array(row.days ?? [], day), tasks: array(row.tasks ?? [], task),
+    days: array(row.days ?? [], day), tasks: array(row.tasks ?? [], task), habits: array(row.habits ?? [], dueHabit),
   };
 }
 export function calendarSubscription(value: unknown): CalendarSubscription {
@@ -81,6 +81,19 @@ export function calendarSubscription(value: unknown): CalendarSubscription {
   if (status !== 'connecting' && status !== 'connected' && status !== 'error') throw new Error('Unknown calendar status.');
   return { id: positiveId(row.id), name: text(row.name), host: text(row.host), status,
     error: nullable(row.error, text), created_at: text(row.created_at) };
+}
+function dueHabit(value: unknown): DueHabit {
+  const row = object(value);
+  return { id: positiveId(row.id), key: text(row.key), name: text(row.name), streak: optional(row.streak, nonnegative, 0) };
+}
+function doneHabit(value: unknown): DoneHabit {
+  const row = object(value);
+  return { ...dueHabit(row), completed_at: text(row.completed_at), archived: boolean(row.archived) };
+}
+export function habit(value: unknown): Habit {
+  const row = object(value);
+  return { id: positiveId(row.id), key: text(row.key), name: text(row.name), position: integer(row.position),
+    created_at: text(row.created_at), done: array(row.done, text) };
 }
 export function documentResult(value: unknown): DocumentResult {
   const row = object(value);

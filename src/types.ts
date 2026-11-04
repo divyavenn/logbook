@@ -37,6 +37,12 @@ export type Session = {
   seconds_on_day?: number;
 };
 export type Tag = { name: string; note_count: number; task_count: number };
+// A habit puts a task on the list each day; done holds the days it was checked off.
+export type Habit = { id: number; key: string; name: string; position: number; created_at: string; done: string[] };
+// A habit is drawn as a task: on the list while today is still to do, and in
+// a day of the logbook once that day is done. It is never an entry.
+export type DueHabit = { id: number; key: string; name: string; streak?: number };
+export type DoneHabit = DueHabit & { completed_at: string; archived: boolean };
 
 export type CalendarSubscriptionStatus = 'connecting' | 'connected' | 'error';
 export type CalendarSubscription = {
@@ -66,13 +72,14 @@ export type DayMetrics = {
   longest_session_seconds: number;
   session_count: number;
 };
-export type JournalDay = DayMetrics & { entries: JournalEntry[]; events: CalendarEvent[] };
+export type JournalDay = DayMetrics & { entries: JournalEntry[]; events: CalendarEvent[]; habits: DoneHabit[] };
 export type JournalData = {
   tag: string | null;
   tags: Tag[];
   today: string;
   days: JournalDay[];
   tasks: Task[];
+  habits: DueHabit[];
   active_session: Session | null;
   server_time: string;
   next_cursor: string | null;

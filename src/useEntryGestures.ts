@@ -1,4 +1,5 @@
 import { useEffect, useRef, type PointerEvent } from 'react';
+import { haptic } from './haptics';
 
 const ENTRY_MOVE_THRESHOLD = 48;
 export type EntrySelection = { key: string; dragX: number };
@@ -55,6 +56,7 @@ export function useEntryGestures() {
     const last = Math.max(0, Math.round(gesture.pager.scrollWidth / width) - 1);
     const target = Math.max(0, Math.min(last, initial + direction));
     gesture.pager.scrollTo({ left: target * width, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    if (target !== initial) haptic('selection');
     suppressClick.current = true;
   };
   const cancelEntryGesture = (event: PointerEvent) => {

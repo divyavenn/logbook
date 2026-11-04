@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
 import { cacheJournal, cachedJournal, getEntry, getJournal, isAbortError, localDate, startTimer, stopTimer, timerDuration } from './api';
@@ -15,6 +16,9 @@ import type { SearchHit } from './components/SearchModal';
 import { documentUndo, historyShortcutDirection, recordCompletion } from './documentHistory';
 import { LOG_WASH_HEIGHT, compactViewport, narrowViewport, shortViewport } from './layout';
 import { usePager } from './usePager';
+import { useIdleEntry } from './useIdleEntry';
+import { haptic } from './haptics';
+import { glide, reducedMotion } from './motion';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
 import { ENTRY_LINK_EVENT, ENTRY_LINK_PATTERN, entryLinkLabel, parseEntryLink, type EntryLink } from './entryLinks';
@@ -57,27 +61,27 @@ const Page = styled.div<{ $focusing: boolean }>`
       --edge-paper: color-mix(in srgb, var(--paper), #000 20%);
     }
     :root:not([data-theme='night']) & [data-focus-surface] {
-      --paper: color-mix(in srgb, #f2f1ed, #000 16%);
-      --ink: color-mix(in srgb, #242422, #000 16%);
-      --muted: color-mix(in srgb, #626762, #000 16%);
-      --line: color-mix(in srgb, #d4d2cb, #000 16%);
-      --sage: color-mix(in srgb, #59605d, #000 16%);
-      --soft: color-mix(in srgb, #e8e6df, #000 16%);
-      --surface: color-mix(in srgb, #faf9f6, #000 16%);
-      --field: color-mix(in srgb, #fffefa, #000 16%);
-      --date-bg: color-mix(in srgb, #dfe7ed, #000 16%);
-      --tag-bg: color-mix(in srgb, #e8e6df, #000 16%);
-      --tag-ink: color-mix(in srgb, #525a56, #000 16%);
-      --tag-selected: color-mix(in srgb, #1871ba, #000 16%);
-      --code-bg: color-mix(in srgb, #e6e7e1, #000 16%);
-      --code-ink: color-mix(in srgb, #4d615d, #000 16%);
-      --quote: color-mix(in srgb, #5f645f, #000 16%);
-      --selection: color-mix(in srgb, #ccdbe7, #000 16%);
-      --focus: color-mix(in srgb, #6f7f88, #000 16%);
-      --link: color-mix(in srgb, #1871ba, #000 16%);
-      --url: color-mix(in srgb, #70588f, #000 16%);
-      --checkbox: color-mix(in srgb, #747773, #000 16%);
-      --scrollbar: color-mix(in srgb, #c0beb7, #000 16%);
+      --paper: color-mix(in srgb, #faf4ed, #000 16%);
+      --ink: color-mix(in srgb, #575279, #000 16%);
+      --muted: color-mix(in srgb, #6e6a86, #000 16%);
+      --line: color-mix(in srgb, #dfdad9, #000 16%);
+      --sage: color-mix(in srgb, #6e6a86, #000 16%);
+      --soft: color-mix(in srgb, #f2e9e1, #000 16%);
+      --surface: color-mix(in srgb, #fffaf3, #000 16%);
+      --field: color-mix(in srgb, #fffaf3, #000 16%);
+      --date-bg: color-mix(in srgb, #ebe1dc, #000 16%);
+      --tag-bg: color-mix(in srgb, #f2e9e1, #000 16%);
+      --tag-ink: color-mix(in srgb, #6e6a86, #000 16%);
+      --tag-selected: color-mix(in srgb, #286983, #000 16%);
+      --code-bg: color-mix(in srgb, #f2e9e1, #000 16%);
+      --code-ink: color-mix(in srgb, #286983, #000 16%);
+      --quote: color-mix(in srgb, #6e6a86, #000 16%);
+      --selection: color-mix(in srgb, #dfdad9, #000 16%);
+      --focus: color-mix(in srgb, #907aa9, #000 16%);
+      --link: color-mix(in srgb, #286983, #000 16%);
+      --url: color-mix(in srgb, #6e5e85, #000 16%);
+      --checkbox: color-mix(in srgb, #9893a5, #000 16%);
+      --scrollbar: color-mix(in srgb, #cecacd, #000 16%);
       --edge-paper: var(--paper);
     }
   `}
@@ -107,8 +111,8 @@ const pageControl = css`
   width: 28px; height: 36px; padding: 0; border: 0; border-radius: 50%;
   background: transparent; color: var(--muted); text-decoration: none;
   svg, [data-shortcut-icon] { transition: scale 140ms ease-out; }
-  &:hover { color: var(--link); }
-  &:hover svg, &:hover [data-shortcut-icon] { scale: 1.05; }
+  @media (hover: hover) and (pointer: fine) { &:hover { color: var(--link); } }
+  @media (hover: hover) and (pointer: fine) { &:hover svg, &:hover [data-shortcut-icon] { scale: 1.05; } }
   @media(pointer: coarse) { width: 44px; height: 44px; }
 `;
 const ThemeToggle = styled.button`${pageControl}`;
@@ -123,7 +127,8 @@ const ThemeGlyph = styled.span<{ $shown: boolean }>`
   position: absolute; display: grid; place-items: center; pointer-events: none;
   opacity: ${({ $shown }) => $shown ? 1 : 0}; scale: ${({ $shown }) => $shown ? 1 : .25};
   filter: blur(${({ $shown }) => $shown ? 0 : 4}px);
-  transition: opacity 150ms cubic-bezier(.2,0,0,1), scale 150ms cubic-bezier(.2,0,0,1), filter 150ms cubic-bezier(.2,0,0,1);
+  transition: opacity 150ms var(--ease-out), scale 150ms var(--ease-out), filter 150ms var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 const StatsToggle = styled.button`${pageControl}`;
 const CalendarToggle = styled.button`${pageControl}`;
@@ -131,7 +136,7 @@ const SidebarControls = styled.div`display: flex; align-items: center;`;
 const TimerChrome = styled.div`
   position: fixed; top: 20px; right: 24px; z-index: 43;
   display: flex; align-items: center; gap: 10px;
-  @media ${compactViewport} { top: max(12px, env(safe-area-inset-top)); right: 12px; }
+  @media ${compactViewport} { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
 `;
 const TimerTime = styled.span`
   color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: -.01em;
@@ -139,13 +144,14 @@ const TimerTime = styled.span`
 const TimerButton = styled.button<{ $running: boolean }>`
   ${press}; position: relative; width: 44px; height: 44px; display: grid; place-items: center; flex-shrink: 0;
   padding: 0; border: 0; border-radius: 50%; background: var(--timer); color: var(--timer-ink);
-  &::before { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-ring); border-radius: 50%; pointer-events: none; transition: border-color 160ms ease-out; }
+  &::before { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-ring); border-radius: 50%; pointer-events: none; transition: border-color 160ms ease; }
   &::after { content: ''; position: absolute; inset: -3px; border: 1px solid var(--timer-running-ring); border-radius: 50%; pointer-events: none;
     opacity: ${({ $running }) => $running ? .3 : 0}; transform: scale(${({ $running }) => $running ? 1.14 : 1});
-    transition: opacity 240ms ease-out, transform 240ms ease-out; }
-  &:hover { background: var(--timer-hover); }
+    transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out);
+    @media (prefers-reduced-motion: reduce) { transition-property: opacity; } }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: var(--timer-hover); } }
   &[aria-pressed='true'] { background: var(--timer-running); scale: 1.03; }
-  &[aria-pressed='true']:hover { background: var(--timer-running-hover); }
+  @media (hover: hover) and (pointer: fine) { &[aria-pressed='true']:hover { background: var(--timer-running-hover); } }
   &[aria-pressed='true']::before { border-color: var(--timer-running-ring); }
 `;
 // The strip above the panes is the plainest place a page turn comes from: it
@@ -159,7 +165,7 @@ const MobileTabs = styled.div<{ $aside: boolean }>`
   /* Centred along the top while the sidebar keeps its own side. Once the tags
      have taken a tab there is no sidebar, so the dots take its place. */
   position: fixed; top: max(12px, env(safe-area-inset-top)); z-index: 43;
-  ${({ $aside }) => $aside ? 'left: 12px;' : 'left: 50%; translate: -50% 0;'}
+  ${({ $aside }) => $aside ? 'left: max(12px, env(safe-area-inset-left));' : 'left: 50%; translate: -50% 0;'}
   height: 44px; display: flex; align-items: center;
 `;
 const MobileTab = styled.button<{ $active: boolean }>`
@@ -170,7 +176,7 @@ const MobileTab = styled.button<{ $active: boolean }>`
   font-size: 0;
   &::before { content: ''; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
     border-radius: 50%; background: currentColor; opacity: ${({ $active }) => $active ? 1 : .48}; translate: -50% -50%;
-    transition: color 120ms ease-out, opacity 120ms ease-out; }
+    transition: color 120ms ease, opacity 120ms ease-out; }
 `;
 const MobilePager = styled.div`
   display: flex; flex: 1; min-width: 0; min-height: 0; width: 100%; max-width: 100%; overflow-x: auto; overflow-y: hidden;
@@ -179,7 +185,7 @@ const MobilePager = styled.div`
   &::-webkit-scrollbar { display: none; }
 `;
 const MobilePane = styled.section`
-  flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto;
+  flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow-x: clip; overflow-y: auto; overscroll-behavior-y: contain;
   display: flex; flex-direction: column; scrollbar-width: none;
   /* Across is the page turning, down is the pane scrolling, and the turn is
      carried by the drag the pane reads rather than by the browser, so a drag
@@ -201,7 +207,7 @@ const MobileTagPill = styled.button<{ $selected: boolean }>`
   border: 1px solid ${({ $selected }) => $selected ? 'var(--tag-selected)' : 'var(--line)'}; border-radius: 999px; overflow-wrap: anywhere;
   background: transparent; color: ${({ $selected }) => $selected ? 'var(--tag-selected)' : 'var(--tag-ink)'};
   font-size: 14px; line-height: 20px;
-  transition: border-color 140ms ease-out, color 140ms ease-out, scale 150ms ease-out;
+  transition: border-color 140ms ease, color 140ms ease, scale 150ms ease-out;
 `;
 const MobileTagControls = styled.div`
   margin-top: 10px;
@@ -260,6 +266,7 @@ const ConnectionState = styled.div`padding: 50px 0; display: grid; gap: 16px; ju
 export default function App({ locked = false, load = !locked, onReady, onLoadError }: {
   locked?: boolean; load?: boolean; onReady?: () => void; onLoadError?: () => void;
 }) {
+  useIdleEntry();
   // Paint the page we last saw on the first render, before anything is asked
   // of the network. A refresh replaces it as soon as one answers.
   const [data, setData] = useState<JournalData | null>(() => load ? cachedJournal(null) : null);
@@ -392,21 +399,28 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   useEffect(() => {
     const measure = () => {
       const body = document.querySelector<HTMLElement>('[data-task-body]');
-      const rows = body?.querySelectorAll<HTMLElement>('li[data-item-id]');
-      const last = rows?.[rows.length - 1];
-      // Saved rows only. The composer comes and goes with the focus, and a
-      // layout that measured it could be flipped by its own answer.
-      if (!body || !last) { setCrowded(false); return; }
-      const height = last.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+      // Saved top-level rows only. The composer comes and goes with the focus,
+      // and an open branch is a glance into an entry rather than a longer
+      // list: a layout that measured either could be flipped by its own
+      // answer, remounting the list and closing the branch again.
+      const rows = body ? [...body.querySelectorAll<HTMLElement>('li[data-depth="0"]:not([data-item-id="draft"]) > div:first-child')] : [];
+      if (!body || !rows.length) { setCrowded(false); return; }
+      // Moving the list to another pane remounts it, so it is not moved out
+      // from under the caret. It is measured again once the focus leaves.
+      if (body.contains(document.activeElement)) return;
+      const height = rows[0].getBoundingClientRect().top - body.getBoundingClientRect().top
+        + rows.reduce((total, row) => total + row.getBoundingClientRect().height, 0);
       const share = height / window.innerHeight;
       setCrowded(previous => share > TASKS_CROWD_HEIGHT ? true : share < TASKS_SETTLE_HEIGHT ? false : previous);
     };
     measure();
     const body = document.querySelector('[data-task-body]');
     const observer = new ResizeObserver(measure);
-    if (body) observer.observe(body);
+    // The focus is still on its way out when this fires.
+    const left = () => requestAnimationFrame(measure);
+    if (body) { observer.observe(body); body.addEventListener('focusout', left); }
     window.addEventListener('resize', measure);
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+    return () => { observer.disconnect(); body?.removeEventListener('focusout', left); window.removeEventListener('resize', measure); };
   }, [data?.tasks, paged]);
   // A pane can stop existing when the window changes shape.
   useEffect(() => {
@@ -449,7 +463,9 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     // is whole from the first paint: the day being written is there, with the
     // caret in it, while the rest of the logbook is still on its way. A
     // refresh of the view already on screen is the one request it always was.
-    const changing = shown.current?.tag !== tag;
+    // A view with a page kept from last time already has its earlier days
+    // showing, and must not shrink to today alone while they are fetched.
+    const changing = shown.current?.tag !== tag && !cachedJournal(tag);
     let response: JournalData;
     try {
       if (changing) {
@@ -555,8 +571,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   useEffect(() => {
     let icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
     if (!icon) { icon = document.createElement('link'); icon.rel = 'icon'; document.head.appendChild(icon); }
-    const paper = night ? '#011627' : '#d9dcdd';
-    const ink = active ? (night ? '#75d1c4' : '#48675e') : (night ? '#8ca0b0' : '#777b7e');
+    const paper = night ? '#011627' : '#f2e9e1';
+    const ink = active ? (night ? '#75d1c4' : '#286983') : (night ? '#8ca0b0' : '#9893a5');
     const inner = active ? `<circle cx="16" cy="16" r="5" fill="${ink}"/>` : '';
     icon.href = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="${paper}"/><circle cx="16" cy="16" r="10" fill="none" stroke="${ink}" stroke-width="2"/>${inner}</svg>`)}`;
   }, [active, night]);
@@ -567,6 +583,8 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     if (timerLock.current) return;
     const stopping = !!active;
     timerLock.current = true; setTimerIntent(stopping ? 'stop' : 'start'); setTimerBusy(true);
+    // Felt at the press, inside the gesture, where the hand is.
+    haptic(stopping ? 'stop' : 'start');
     try {
       if (active) {
         await stopTimer(active.id);
@@ -594,11 +612,19 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     try {
       await flushDrafts();
       tagRef.current = tag; loadedThrough.current = null; generation.current++;
-      setSwitchedView(true); setActiveTag(tag);
+      // Choosing a tag from another page was a question about the log, so the
+      // page turns back to it, and that turn is the answer arriving: the view
+      // does not also rise inside a page that is already moving.
+      const turning = paged && mobileView !== 'log';
+      // The last page seen for this view goes in at once, before anything
+      // moves, so the turn carries a finished page rather than one being built.
+      const cached = cachedJournal(tag);
+      flushSync(() => {
+        setSwitchedView(!turning); setActiveTag(tag);
+        if (cached) setData(cached);
+      });
       if (logViewport.current) logViewport.current.scrollTop = 0;
-      // Choosing a tag was a question about the log, so the page turns back to
-      // it and the answer arrives there, rising into place.
-      if (paged) selectMobileView('log');
+      if (turning) requestAnimationFrame(() => selectMobileView('log'));
     } catch (error) { entryError(error); }
   };
 
@@ -621,15 +647,22 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
       await refresh();
       const result = await getJournal({ on: date });
       setData(current => current ? { ...current, days: [...current.days.filter(day => day.date !== date), ...result.days].sort((a, b) => b.date.localeCompare(a.date)) } : current);
+      // A day with nothing written may be folded away; it is opened to be shown.
+      window.dispatchEvent(new CustomEvent('still-reveal-day', { detail: date }));
       // The date itself leads, resting where the first one does: clear of the
       // wash at the top of the log.
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const pane = logViewport.current, day = document.querySelector(`[data-day="${date}"]`);
-        if (!pane || !day) return;
-        pane.scrollTo({
-          top: pane.scrollTop + day.getBoundingClientRect().top - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT,
-          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
-        });
+        if (!pane || !(day instanceof HTMLElement)) return;
+        // A day that has just arrived is still settling in, a few pixels low.
+        const settling = new DOMMatrix(getComputedStyle(day).transform).m42;
+        const rest = pane.scrollTop + day.getBoundingClientRect().top - settling - pane.getBoundingClientRect().top - LOG_WASH_HEIGHT;
+        // Years of logbook are too far to travel over: the page is put within
+        // a screen of the date, on the side it is coming from, and glides the
+        // rest, so every arrival is the same short movement.
+        const approach = pane.clientHeight * .85;
+        if (!reducedMotion()) pane.scrollTop = rest > pane.scrollTop ? Math.max(pane.scrollTop, rest - approach) : Math.min(pane.scrollTop, rest + approach);
+        glide(pane, rest);
       }));
     } catch (e) { entryError(e); }
   };
@@ -724,7 +757,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   const sidebarControls = <SidebarControls role="group" aria-label="Page controls" data-focus-chrome>
     {REPOSITORY_URL && <RepositoryLink href={REPOSITORY_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" title="GitHub"><Github size={15} aria-hidden="true" /></RepositoryLink>}
     <CalendarToggle aria-label="Manage calendars" title="Calendars" onClick={() => setCalendarOpen(true)}><CalendarDays size={15} aria-hidden="true" /></CalendarToggle>
-    <StatsToggle aria-label="Open focus statistics" title="Statistics" onClick={() => setStatsOpen(true)}><ChartNoAxesColumn size={15} aria-hidden="true" /></StatsToggle>
+    <StatsToggle aria-label="Open habits and focus" title="Habits and focus" onClick={() => setStatsOpen(true)}><ChartNoAxesColumn size={15} aria-hidden="true" /></StatsToggle>
     <ShortcutToggle aria-label="Keyboard shortcuts" title="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)}><ShortcutGlyph data-shortcut-icon aria-hidden="true" /></ShortcutToggle>
     <ThemeToggle role="switch" aria-label="Night mode" aria-checked={night}
       title={night ? 'Use day mode' : 'Use night mode'} onClick={() => setNight(value => !value)}>
@@ -736,7 +769,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
   // Stacked above the log it takes the room it needs; in a pane of its own it
   // takes the pane.
   const taskBand = (fills: boolean) => data
-    ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} entering={switchedView} fills={fills} refresh={refresh} /> : null;
+    ? <Tasks key={data.tag ?? 'all'} tasks={data.tasks} habits={data.habits} today={data.today} entering={switchedView} fills={fills} refresh={refresh} /> : null;
   const logBand = data ? <LogFrame><LogViewport ref={logViewport} data-testid="log-scroll">
     <Journal key={data.tag ?? 'all'} scrollRoot={logViewport} days={data.days} today={data.today} entering={switchedView}
       refresh={refresh} openSessions={setSessionsDate} openDate={date => void jumpToDate(date)}
@@ -772,7 +805,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     onPointerUpCapture={() => { if (!turning.current?.turned) turning.current = null; }}>
     <TimerChrome>
       <TimerTime data-testid="compact-timer-time" aria-hidden="true">{timerDuration(visibleElapsed)}</TimerTime>
-      <TimerButton $running={timerRunning} type="button" disabled={!data} data-haptic="impact"
+      <TimerButton $running={timerRunning} type="button" disabled={!data}
         aria-label={timerRunning ? 'Stop focus timer' : 'Start focus timer'} aria-pressed={timerRunning} aria-disabled={timerBusy || undefined} aria-busy={timerBusy || undefined}
         title="Click to start/stop · right-click for sound"
         onContextMenu={event => { event.preventDefault(); setSoundOpen(true); }}
@@ -786,7 +819,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
           <MobileTabs role="tablist" aria-label="Mobile views" $aside={views.includes('tags')}>
             {views.map(view => <MobileTab key={view} id={`mobile-tab-${view}`} type="button" role="tab"
               aria-controls={`mobile-panel-${view}`} aria-selected={mobileView === view} $active={mobileView === view}
-              onClick={() => selectMobileView(view)}>{view}</MobileTab>)}
+              onClick={() => { if (view !== mobileView) haptic('selection'); selectMobileView(view); }}>{view}</MobileTab>)}
           </MobileTabs>
         </ShortHeader>
         <MobilePager ref={mobilePager} data-testid="mobile-pager" data-mobile-pager onScroll={event => trackMobileScroll(event.currentTarget)}
@@ -804,7 +837,7 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
     </Main>
     <Suspense fallback={null}>
       {openedModals.current.has('sessions') && <SessionsModal date={sessionsDate} onClose={() => setSessionsDate(null)} onChange={refresh} />}
-      {openedModals.current.has('stats') && <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} />}
+      {openedModals.current.has('stats') && <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} onChange={refresh} openDate={date => void jumpToDate(date)} />}
       {openedModals.current.has('search') && <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={jumpTo} />}
       {openedModals.current.has('calendar') && <CalendarModal open={calendarOpen} onClose={() => setCalendarOpen(false)} onChange={refresh} />}
     </Suspense>

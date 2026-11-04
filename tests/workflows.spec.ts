@@ -12,7 +12,7 @@ test('parent progress retains completed children, finishes automatically, and ca
   await page.getByRole('button', { name: 'Complete Progress first', exact: true }).click();
   // Done is the checkmark and the muted ink; no rule is drawn over the text.
   await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toHaveCSS('text-decoration-line', 'none');
-  await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toHaveCSS('color', 'rgb(98, 103, 98)');
+  await expect(page.getByRole('group', { name: 'Progress first', exact: true })).toHaveCSS('color', 'rgb(110, 106, 134)');
   await expect(page.getByRole('button', { name: 'Reopen Progress first', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const progress = page.getByRole('button', { name: 'Collapse Progress project', exact: true });
   await expect(progress).toHaveAttribute('aria-description', '1 of 2 children completed');
@@ -292,11 +292,13 @@ test('short sessions have exact totals, inline editing, add/delete controls, and
   const today = '2026-09-03'; // Use a past day so sessions cannot accidentally be in the future.
   await request.post('/api/sessions', { data: { started_at: new Date(`${today}T05:00:13`).toISOString(), duration_seconds: 30 } });
   await page.goto('/');
+  // A day with only focus on it is folded away with the other quiet days.
+  await page.getByRole('button', { name: /^Show \d+ days? with nothing written$/ }).first().click();
   await page.getByRole('button', { name: `Focus sessions for ${today}`, exact: true }).click();
   const modal = page.getByRole('dialog', { name: `Sessions for ${today}`, exact: true });
   await expect(modal.locator('label, th')).toHaveCount(0);
   await expect(modal.getByRole('button', { name: 'Close dialog' })).toHaveCount(0);
-  await expect(modal.getByRole('button', { name: 'Open focus statistics' })).toHaveCount(0);
+  await expect(modal.getByRole('button', { name: 'Open habits and focus' })).toHaveCount(0);
   const durationButton = modal.getByRole('button', { name: /Edit duration of session/ });
   await expect(durationButton).toHaveText('30s');
   await durationButton.click(); await modal.getByLabel('Duration', { exact: true }).fill('45s');
@@ -315,30 +317,42 @@ test('short sessions have exact totals, inline editing, add/delete controls, and
   await page.mouse.click(5, 5); await expect(modal).toBeHidden();
 });
 
-test('zero days have no bars and statistics expose the averaging period', async ({ page }) => {
-  await page.route('**/api/stats?*', route => route.fulfill({ json: {
-    start: '2026-09-10', end: '2026-09-16', day_count: 7, active_days: 1, total_focused_seconds: 30, session_count: 1,
-    daily: Array.from({ length: 7 }, (_, i) => ({ date: `2026-09-${10 + i}`, focused_seconds: i === 6 ? 30 : 0, longest_session_seconds: i === 6 ? 30 : 0, completed_task_count: 0 })),
-  } }));
+test('a quiet week reads as no focus, and the backup still downloads', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Tags' }).hover();
-  await page.getByRole('button', { name: 'Open focus statistics', exact: true }).click();
+  await page.getByRole('button', { name: 'Open habits and focus', exact: true }).click();
   const modal = page.getByRole('dialog', { name: 'Statistics', exact: true });
-  await expect(modal.getByText(/30s total/)).toBeVisible();
-  await expect(modal.getByText('1 of 7 days', { exact: true })).toHaveCount(0);
-  await expect(modal.getByText('days', { exact: true })).toHaveCount(0);
-  await expect(modal.getByText('sep 16', { exact: true })).toBeHidden();
-  const breakdown = modal.getByRole('button', { name: '30s total · 1 session', exact: true });
-  await breakdown.hover();
-  await expect(modal.getByText('sep 16', { exact: true })).toBeVisible();
-  await breakdown.click();
-  await page.mouse.move(5, 5);
-  await expect(modal.getByText('sep 16', { exact: true })).toBeVisible();
-  const heights = await modal.getByRole('img').locator('div').evaluateAll(els => els.map(el => el.getBoundingClientRect().height));
-  expect(heights.slice(0, 6)).toEqual([0, 0, 0, 0, 0, 0]); expect(heights[6]).toBeGreaterThan(100);
-  await modal.getByRole('button', { name: 'focus days', exact: true }).click();
-  await expect(modal.getByText('focused per day', { exact: true }).locator('..').getByText('30s', { exact: true })).toBeVisible();
+  await expect(modal.getByRole('button', { name: 'Show focus chart, 0h 00m a day this week', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const chart = modal.getByRole('group', { name: /^Focus: 0 of the last \d+ days\.$/ });
+  await expect(chart.locator('[data-level]:not([data-level="0"])')).toHaveCount(0);
   const downloadPromise = page.waitForEvent('download');
   await modal.getByRole('link', { name: 'Download SQLite backup', exact: true }).click();
   expect((await downloadPromise).suggestedFilename()).toMatch(/^still-logbook-\d{4}-\d{2}-\d{2}\.sqlite3$/);
+});
+
+test('a finished task closes the space it held, so the task below slides up rather than jumping', async ({ page, request }) => {
+  for (const content of ['Slide above', 'Slide finished', 'Slide below']) await request.post('/api/tasks', { data: { content } });
+  await page.goto('/');
+  const list = page.locator('[data-task-body]');
+  const below = list.getByRole('group', { name: 'Slide below', exact: true });
+  await expect(below).toBeVisible();
+  const start = (await below.boundingBox())!.y;
+  await page.getByRole('button', { name: 'Complete Slide finished', exact: true }).click();
+  // Sample the task below while the finished one leaves: it passes through
+  // places between where it was and where it rests.
+  const seen = await below.evaluate(element => new Promise<number[]>(resolve => {
+    const ys: number[] = [];
+    const began = performance.now();
+    const sample = () => {
+      ys.push(element.getBoundingClientRect().y);
+      if (performance.now() - began < 900) requestAnimationFrame(sample); else resolve(ys);
+    };
+    requestAnimationFrame(sample);
+  }));
+  await expect(list.getByRole('group', { name: 'Slide finished', exact: true })).toHaveCount(0);
+  const end = (await below.boundingBox())!.y;
+  expect(end).toBeLessThan(start - 10);
+  const between = seen.filter(y => y < start - 2 && y > end + 2);
+  expect(between.length).toBeGreaterThan(2);
+  expect(Math.abs(seen.at(-1)! - end)).toBeLessThan(1);
 });

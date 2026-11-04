@@ -4,7 +4,6 @@ import styled from 'styled-components';
 import App from './App';
 import { GlobalStyle, applyTheme } from './styles';
 import { PasswordGate } from './components/PasswordGate';
-import { installTouchHaptics } from './haptics';
 import { getAuthStatus, getSharedEntry, login } from './api';
 import { storage } from './storage';
 import { parseEntryLink } from './entryLinks';
@@ -17,7 +16,7 @@ const AppSurface = styled.div<{ $blurred: boolean; $blocked: boolean }>`
   min-height: 100dvh; filter: blur(${({ $blurred }) => $blurred ? '7px' : '0'});
   opacity: ${({ $blurred }) => $blurred ? .72 : 1}; pointer-events: ${({ $blocked }) => $blocked ? 'none' : 'auto'};
   user-select: ${({ $blocked }) => $blocked ? 'none' : 'auto'};
-  transition-property: filter, opacity; transition-duration: 260ms; transition-timing-function: cubic-bezier(.2, 0, 0, 1);
+  transition-property: filter, opacity; transition-duration: 260ms; transition-timing-function: var(--ease-out);
 `;
 
 // Whether the last answer from the server let us in. With no network there is
@@ -33,7 +32,6 @@ function Root() {
     () => storage.getItem(UNLOCKED_KEY) === 'true' ? 'ready' : 'checking');
   // An entry a link asked for, shown to a reader the journal is closed to.
   const [shared, setShared] = useState<SharedEntry | null>(null);
-  useEffect(() => installTouchHaptics(), []);
   useEffect(() => {
     let cancelled = false;
     getAuthStatus().then(status => {

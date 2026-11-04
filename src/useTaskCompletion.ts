@@ -2,8 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { completeTask, reopenTask } from './api';
 import { recordEdit } from './documentHistory';
 import { completionPreview, TASK_PROGRESS_MS, waitForMotion } from './taskCompletion';
+import { ROW_COLLAPSE_MS, ROW_FADE_MS } from './motion';
+import { haptic } from './haptics';
 import type { OutlineDocument } from './outlineDocument';
 import type { OutlineItem } from './types';
+
+// How long a parent waits after the child that finishes it.
+const CASCADE_BEAT_MS = 120;
 
 type CompletionContext = {
   document: OutlineDocument;
@@ -28,6 +33,8 @@ export function useTaskCompletion(context: CompletionContext) {
   const changedAt = useRef(0);
   const [completing, setCompleting] = useState(new Set<number>());
   const [pendingCompletion, setPendingCompletion] = useState(new Map<number, boolean>());
+  // Counts each check, so a parent's late check is dropped if another came after.
+  const cascade = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -46,11 +53,37 @@ export function useTaskCompletion(context: CompletionContext) {
     const task = ctx.rows().find(row => row.id === id);
     if (!task) return;
     const intents = targets.current;
-    intents.set(id, !(intents.get(id) ?? !!task.completed_at));
+    const finishing = !(intents.get(id) ?? !!task.completed_at);
+    intents.set(id, finishing);
     changedAt.current = performance.now();
     motion.current?.abort();
     setCompleting(new Set());
-    setPendingCompletion(completionPreview(ctx.rows(), intents));
+    const preview = completionPreview(ctx.rows(), intents);
+    // A check that finishes its parent is the larger moment: the parents it
+    // finishes are checked a beat after it, and it is felt as a celebration.
+    const rows = ctx.rows();
+    const finished: number[] = [];
+    let parent = task.parent_id;
+    while (finishing && parent !== null) {
+      const above = rows.find(row => row.id === parent);
+      if (!preview.get(parent) || above?.completed_at) break;
+      finished.push(parent);
+      parent = above?.parent_id ?? null;
+    }
+    const stage = ++cascade.current;
+    if (finished.length) {
+      const first = new Map(preview);
+      for (const ancestor of finished) first.delete(ancestor);
+      setPendingCompletion(first);
+      window.setTimeout(() => {
+        if (cascade.current === stage && mounted.current) setPendingCompletion(current => {
+          const next = new Map(current);
+          for (const ancestor of finished) next.set(ancestor, true);
+          return next;
+        });
+      }, CASCADE_BEAT_MS);
+    } else setPendingCompletion(preview);
+    haptic(!finishing ? 'soft' : finished.length ? 'celebrate' : 'success');
     if (running.current) return;
     running.current = true;
 
@@ -97,7 +130,8 @@ export function useTaskCompletion(context: CompletionContext) {
           const rows = current.current.rows();
           const exits = new Set(rows.filter(row => row.parent_id === null && !row.completed_at && states.get(row.id)?.completed_at).map(row => row.id));
           if (mounted.current) setCompleting(exits);
-          if (exits.size && !await waitForMotion(180, wait.signal)) continue;
+          // The row fades and closes its space before the list lets it go.
+          if (exits.size && !await waitForMotion(ROW_FADE_MS + ROW_COLLAPSE_MS, wait.signal)) continue;
           const activeId = current.current.activeId();
           if (activeId !== null && states.get(activeId)?.completed_at && completionPreview(rows, intents).get(activeId) === true) current.current.clearActive();
           await current.current.refresh();

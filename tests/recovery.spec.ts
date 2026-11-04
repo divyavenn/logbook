@@ -3,7 +3,7 @@ import { expect, test } from './fixtures';
 test('a superseded refresh keeps the saved entry visible until fresh data arrives', async ({ page }) => {
   await page.goto('/');
   const editor = page.getByRole('textbox', { name: 'New note', exact: true });
-  await expect(editor).toBeFocused();
+  await expect(editor).toBeVisible();
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let refreshes = 0;

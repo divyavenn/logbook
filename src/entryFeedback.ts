@@ -1,7 +1,11 @@
+import { haptic } from './haptics';
+import { EASE_OUT } from './motion';
+
 const reported = new WeakSet<object>();
 const running = new WeakMap<HTMLElement, () => void>();
 
 export function entryError(error: unknown, entry?: HTMLElement | null) {
+  haptic('warning');
   if (typeof error !== 'object' || error === null || !reported.has(error)) {
     console.error('Entry edit failed:', error);
     if (typeof error === 'object' && error !== null) reported.add(error);
@@ -18,7 +22,7 @@ export function entryError(error: unknown, entry?: HTMLElement | null) {
   const animation = row.animate(reduced
     ? [{ opacity: start.opacity }, { opacity: .5 }, { opacity: 1 }]
     : [{ translate: start.translate }, ...[-3, 3, -2, 2, 0].map(x => ({ translate: `${x}px 0` }))],
-  { duration: 280, easing: 'ease-out' });
+  { duration: 280, easing: EASE_OUT });
   let settling: Animation | null = null;
   const events = new AbortController();
   const cleanup = () => {
@@ -29,7 +33,7 @@ export function entryError(error: unknown, entry?: HTMLElement | null) {
     const style = getComputedStyle(row);
     const from = reduced ? { opacity: style.opacity } : { translate: style.translate };
     animation.cancel(); events.abort();
-    settling = row.animate([from, reduced ? { opacity: 1 } : { translate: '0px 0px' }], { duration: preference.matches ? 0 : 90, easing: 'ease-out' });
+    settling = row.animate([from, reduced ? { opacity: 1 } : { translate: '0px 0px' }], { duration: preference.matches ? 0 : 90, easing: EASE_OUT });
     settling.onfinish = cleanup;
   };
   running.set(row, cleanup);

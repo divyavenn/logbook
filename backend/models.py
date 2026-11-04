@@ -65,6 +65,22 @@ class NewNote(NewEntry):
     date: CalendarDate
 
 
+class HabitName(BaseModel):
+    name: EntryContent
+
+    @field_validator("name")
+    @classmethod
+    def named(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("A habit needs a name.")
+        return value
+
+
+class HabitOrder(BaseModel):
+    ids: list[SavedId] = Field(max_length=1000)
+
+
 class EntryLocation(BaseModel):
     parent_id: SavedId | None
     after_id: SavedId | None = None

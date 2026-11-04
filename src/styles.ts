@@ -3,7 +3,7 @@ import styled, { createGlobalStyle, css } from 'styled-components';
 // The paper at the very top of the page, which the status bar and the browser
 // chrome take their colour from. Day and night are the reader's choice here
 // rather than the system's, so the tag is kept in step by hand.
-export const PAPER = { day: '#f2f1ed', night: '#011627' } as const;
+export const PAPER = { day: '#faf4ed', night: '#011627' } as const;
 export function applyTheme(night: boolean): void {
   document.documentElement.dataset.theme = night ? 'night' : 'day';
   const bar = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
@@ -14,18 +14,26 @@ export const GlobalStyle = createGlobalStyle`
   @property --task-progress { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-variable.woff2') format('woff2'); font-weight: 100 900; font-style: normal; font-display: swap; }
   @font-face { font-family: 'Sohne'; src: url('/fonts/sohne-italic.woff2') format('woff2'); font-weight: 400; font-style: italic; font-display: swap; }
+  /* Dates are set in the system's own sans, apart from the writing around
+     them, with figures of one width so dates line up down the log. */
+  :root { --date-font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  /* The curves everything moves on, in either theme: a strong ease-out for
+     what arrives, leaves or settles, and an ease-in-out for what travels. */
+  :root { --ease-out: cubic-bezier(0.23, 1, 0.32, 1); --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); }
   :root {
     color-scheme: light;
-    --paper: #f2f1ed; --ink: #242422; --muted: #626762; --line: #d4d2cb; --sage: #59605d; --soft: #e8e6df;
-    --surface: #faf9f6; --field: #fffefa; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #e8e6df; --tag-ink: #525a56; --tag-selected: #1871ba;
-    --code-bg: #e6e7e1; --code-ink: #4d615d; --quote: #5f645f; --selection: #ccdbe7; --focus: #6f7f88;
-    --link: #1871ba; --url: #70588f; --checkbox: #747773; --scrollbar: #c0beb7;
-    --timer-ring: #9ba6ad; --timer: #56626b; --timer-hover: #626f78; --timer-ink: #faf9f6;
-    --timer-running: #1871ba; --timer-running-hover: #267bc3; --timer-running-ring: #6f91b3;
+    /* Rosé Pine Dawn. Its subtle, iris and love sit just under AA as text on
+       the base, so the roles that carry words take a deeper step of each. */
+    --paper: #faf4ed; --ink: #575279; --muted: #6e6a86; --line: #dfdad9; --sage: #6e6a86; --soft: #f2e9e1;
+    --surface: #fffaf3; --field: #fffaf3; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #f2e9e1; --tag-ink: #6e6a86; --tag-selected: #286983;
+    --code-bg: #f2e9e1; --code-ink: #286983; --quote: #6e6a86; --selection: #dfdad9; --focus: #907aa9;
+    --link: #286983; --url: #6e5e85; --checkbox: #9893a5; --scrollbar: #cecacd;
+    --timer-ring: #9893a5; --timer: #6e6a86; --timer-hover: #575279; --timer-ink: #fffaf3;
+    --timer-running: #286983; --timer-running-hover: #317591; --timer-running-ring: #56949f;
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 16%);
-    --chrome-opacity: .76; --focus-chrome-opacity: .6;
-    --primary: #354047; --primary-hover: #49565d; --primary-ink: #ffffff;
-    --danger: #99493b; --backdrop: #2d343033; --chart: #a8b8c6; --chart-today: #557fa5; --chart-hover: #7395b4;
+    --chrome-opacity: 1; --focus-chrome-opacity: .78;
+    --primary: #575279; --primary-hover: #6e6a86; --primary-ink: #fffaf3;
+    --danger: #8f556d; --backdrop: #57527933; --chart: #b5cfd3; --chart-today: #286983; --chart-hover: #56949f; --chart-select: var(--ink); --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
   }
   :root[data-theme='night'] {
     color-scheme: dark;
@@ -38,9 +46,12 @@ export const GlobalStyle = createGlobalStyle`
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 20%);
     --chrome-opacity: 1; --focus-chrome-opacity: .78;
     --primary: #75d1c4; --primary-hover: #9ddece; --primary-ink: #011627;
-    --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5;
+    --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5; --chart-select: #ffffff; --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
   }
   * { box-sizing: border-box; }
+  /* A pull at the top of a pane is the pane's own, never a reload in the
+     middle of writing. */
+  html, body { overscroll-behavior: none; }
   html {
     background: var(--paper); -webkit-font-smoothing: antialiased;
     /* A touch is answered by the page's own press states, not by the grey
@@ -49,7 +60,7 @@ export const GlobalStyle = createGlobalStyle`
     /* Landscape must not inflate the writing. */
     -webkit-text-size-adjust: 100%;
   }
-  body { margin: 0; color: var(--ink); background: var(--paper); font-family: 'Sohne', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 300; line-height: 1.4; transition: background-color 160ms ease-out, color 160ms ease-out; }
+  body { margin: 0; color: var(--ink); background: var(--paper); font-family: 'Sohne', 'Helvetica Neue', Arial, sans-serif; font-size: 18px; font-weight: 300; line-height: 1.4; transition: background-color 160ms ease, color 160ms ease; }
   body:has(dialog[open]) { overflow: hidden; }
   button, input, textarea, select { font: inherit; color: inherit; }
   /* A control is not writing: a press is answered at once rather than after
@@ -73,8 +84,10 @@ export const GlobalStyle = createGlobalStyle`
   @media (pointer: coarse) {
     input:not([type='range']), textarea, select { font-size: 16px; }
   }
+  /* Reduced motion takes the movement out, not the feedback: each moving
+     piece keeps its fade and drops its travel where it is defined. */
   @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    *, *::before, *::after { scroll-behavior: auto !important; }
   }
 `;
 
@@ -84,11 +97,11 @@ export const GlobalStyle = createGlobalStyle`
 // anything measuring it, so callers opt in once a view has actually changed.
 export const viewEnter = (enabled: boolean) => enabled && css`
   opacity: 1; transform: none;
-  @starting-style { opacity: 0; transform: translateY(6px); }
+  @starting-style { opacity: 0; transform: translateY(4px); }
   transition-property: opacity, transform;
-  transition-duration: 320ms, 420ms;
-  transition-timing-function: ease-out, cubic-bezier(.2, 0, 0, 1);
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  transition-duration: 220ms, 260ms;
+  transition-timing-function: var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 
 // The ink wash that fades scrolled content into the page at a viewport edge.
@@ -115,29 +128,29 @@ export const edgeWash = (edge: 'top' | 'bottom') => css`
 export const appear = (rise = '4px', ms = 180) => css`
   opacity: 1; transform: none;
   @starting-style { opacity: 0; transform: translateY(${rise}); }
-  transition: opacity ${ms}ms ease-out, transform ${ms}ms cubic-bezier(.2, 0, 0, 1);
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  transition: opacity ${ms}ms var(--ease-out), transform ${ms}ms var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 
 export const press = css`
-  transition: background-color 120ms ease-out, color 120ms ease-out, scale 150ms ease-out;
+  transition: background-color 120ms ease, color 120ms ease, scale 150ms ease-out;
   &:active:not(:disabled) { scale: .96; }
 `;
 export const IconButton = styled.button`
   ${press}; width: 44px; height: 44px; display: inline-flex; justify-content: center; align-items: center;
   border: 0; border-radius: 50%; background: transparent; color: var(--muted); flex-shrink: 0;
-  &:hover { background: var(--soft); color: var(--ink); }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: var(--soft); color: var(--ink); } }
 `;
 export const Button = styled.button<{ $primary?: boolean }>`
   ${press}; min-height: 44px; padding: 8px 17px; display: inline-flex; justify-content: center; align-items: center; gap: 8px;
   border: 0; border-radius: 8px; background: ${({ $primary }) => $primary ? 'var(--primary)' : 'var(--soft)'};
   color: ${({ $primary }) => $primary ? 'var(--primary-ink)' : 'var(--ink)'}; font-size: 13px;
-  &:hover { background: ${({ $primary }) => $primary ? 'var(--primary-hover)' : 'var(--date-bg)'}; }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: ${({ $primary }) => $primary ? 'var(--primary-hover)' : 'var(--date-bg)'}; } }
 `;
 export const TextButton = styled.button`
   ${press}; min-height: 44px; border: 0; background: transparent; color: var(--sage);
   display: inline-flex; align-items: center; gap: 7px; padding: 4px 8px; font-size: 12px; border-radius: 6px;
-  &:hover { background: var(--soft); }
+  @media (hover: hover) and (pointer: fine) { &:hover { background: var(--soft); } }
 `;
 export const Eyebrow = styled.span`
   font-size: 10px; font-weight: 600; letter-spacing: 1.8px; text-transform: uppercase; color: var(--muted);

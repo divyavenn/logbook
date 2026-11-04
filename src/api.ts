@@ -3,12 +3,12 @@ import { array, boolean, nullable, object, text, type Decoder } from './validati
 import type { EntryLink } from './entryLinks';
 import type { DocumentChange } from './entryChanges';
 import { readStored, storage } from './storage';
-import type { CalendarSubscription, CompletionResult, DocumentResult, EntryKind, JournalData, ReopenResult, SearchHit, SearchResults, Session, SessionInput, SharedEntry, Stats } from './types';
+import type { CalendarSubscription, CompletionResult, DocumentResult, EntryKind, Habit, JournalData, ReopenResult, SearchHit, SearchResults, Session, SessionInput, SharedEntry, Stats } from './types';
 
 export { normalizeJournal } from './apiDecoders';
 
 export const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -98,6 +98,15 @@ export function getSharedEntry(link: EntryLink, signal?: AbortSignal): Promise<S
 export function getStats(start: string, end: string, signal?: AbortSignal): Promise<Stats> {
   return decoded(`/stats?${new URLSearchParams({ start, end })}`, decode.stats, 'GET', undefined, signal);
 }
+export function getHabits(start: string, end: string, signal?: AbortSignal): Promise<Habit[]> {
+  return decoded(`/habits?${new URLSearchParams({ start, end })}`, value => array(value, decode.habit), 'GET', undefined, signal);
+}
+export const createHabit = (name: string): Promise<Habit> => decoded('/habits', decode.habit, 'POST', { name });
+export const renameHabit = (id: number, name: string): Promise<Habit> => decoded(`/habits/${id}`, decode.habit, 'PATCH', { name });
+export async function deleteHabit(id: number): Promise<void> { await request(`/habits/${id}`, 'DELETE'); }
+export async function completeHabit(id: number, date: string): Promise<void> { await request(`/habits/${id}/days/${date}`, 'PUT'); }
+export async function reopenHabit(id: number, date: string): Promise<void> { await request(`/habits/${id}/days/${date}`, 'DELETE'); }
+export async function orderHabits(ids: number[]): Promise<void> { await request('/habits/order', 'PUT', { ids }); }
 export function getSessions(date: string, signal?: AbortSignal): Promise<Session[]> {
   return decoded(`/sessions?${new URLSearchParams({ date })}`, value => array(value, decode.session), 'GET', undefined, signal);
 }

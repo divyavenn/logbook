@@ -344,8 +344,8 @@ const EntryReference = styled.a`
   padding: 0 9px 0 8px; border: 1px solid var(--line); border-radius: 999px;
   color: var(--link); text-decoration: none; font-size: calc(1em - .5px);
   white-space: nowrap; overflow: hidden;
-  transition: border-color 140ms ease-out;
-  &:hover { border-color: var(--link); }
+  transition: border-color 140ms ease;
+  @media (hover: hover) and (pointer: fine) { &:hover { border-color: var(--link); } }
   > span {
     display: inline-block; max-width: 100%;
     -webkit-mask-image: linear-gradient(to right, #000 52%, transparent 100%);

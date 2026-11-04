@@ -26,7 +26,7 @@ const Surface = styled.div`
 const LinkForm = styled.form`display: grid; gap: 8px; margin: 0;`;
 const LinkField = styled(Field)<{ $url?: boolean }>`
   color: ${({ $url }) => $url ? "var(--url)" : "var(--link)"};
-  transition: color 140ms ease-out;
+  transition: color 140ms ease;
   border: 0; outline: none; box-shadow: none; background: transparent;
   &:focus-visible { outline: none; background: var(--field); }
 `;
@@ -35,9 +35,10 @@ const TagCompletion = styled.div<{ $left: number; $top: number }>`
   position: fixed; left: ${({ $left }) => $left}px; top: ${({ $top }) => $top}px; z-index: 20;
   width: min(230px, calc(100vw - 24px)); pointer-events: none;
   ${appear('3px', 140)};
-  /* Once shown it slides to follow the caret instead of hopping after it. */
-  transition: opacity 140ms ease-out, transform 140ms cubic-bezier(.2, 0, 0, 1), left 140ms ease-out, top 140ms ease-out;
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  /* It fades in once, then keeps to the caret at once as the tag is typed:
+     a slide on every keystroke would trail the writing. */
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
 `;
 const TagAlternatives = styled.div`
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding-top: 31px;
@@ -46,9 +47,9 @@ const TagAlternatives = styled.div`
 const TagOption = styled.button<{ $selected: boolean }>`
   max-width: 100%; min-height: 28px; border: 0; border-radius: 999px; padding: 4px 9px;
   background: var(--tag-bg); color: ${({ $selected }) => $selected ? 'var(--link)' : 'var(--tag-ink)'}; font-size: 13px; line-height: 20px;
-  transition: color 120ms ease-out;
+  transition: color 120ms ease;
   text-align: left; overflow-wrap: anywhere;
-  &:hover { color: var(--ink); }
+  @media (hover: hover) and (pointer: fine) { &:hover { color: var(--ink); } }
 `;
 const HiddenTagOption = styled.span`
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
@@ -60,15 +61,15 @@ const MobileFormatBar = styled.div<{ $left: number; $top: number; $width: number
   display: none; align-items: center; padding: 2px; border-radius: 10px;
   color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px #0000000b, 0 5px 18px #20262024;
   ${appear('4px', 160)};
-  transition: opacity 160ms ease-out, transform 160ms cubic-bezier(.2, 0, 0, 1),
-    left 160ms ease-out, top 160ms ease-out, width 160ms ease-out;
-  @media (prefers-reduced-motion: reduce) { transition: none; }
+  /* It follows the selection at once; only its arrival fades. */
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
+  @media (prefers-reduced-motion: reduce) { transition-property: opacity; }
   @media(pointer: coarse) { display: flex; }
 `;
 const MobileFormatButton = styled.button<{ $active: boolean }>`
   flex: 1 1 40px; min-width: 0; height: 40px; padding: 0; border: 0; border-radius: 8px; display: grid; place-items: center;
   background: ${({ $active }) => $active ? 'var(--soft)' : 'transparent'}; color: ${({ $active }) => $active ? 'var(--link)' : 'var(--ink)'};
-  transition: background-color 140ms ease-out, color 140ms ease-out;
+  transition: background-color 140ms ease, color 140ms ease;
   font-size: 14px; line-height: 1;
 `;
 
@@ -119,13 +120,14 @@ const entireEntrySelected = (editor: Editor) => {
   return dom.contains(native.anchorNode) && dom.contains(native.focusNode);
 };
 export type RichTextHandle = {
+  insertText: (text: string) => void;
   focus: (options?: FocusOptions, selection?: TextOffsets) => void;
   focusAt: (x: number, direction: VerticalDirection, options?: FocusOptions) => void;
   selection: () => TextOffsets | undefined;
   editLink: () => void;
   selectEntry: () => void;
   entireSelected: () => boolean;
-  splitAtSelection: () => { before: { content: string; tags: string[] }; after: { content: string; tags: string[] } } | null;
+  splitAtSelection: () => { before: { content: string; tags: string[]; document: JSONContent | null }; after: { content: string; tags: string[]; document: JSONContent | null } } | null;
 };
 type Props = {
   ref?: Ref<RichTextHandle>; value: string; tags: string[]; label: string; readOnly: boolean;
@@ -611,6 +613,10 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
   };
 
   useImperativeHandle(ref, () => ({
+    insertText(text) {
+      if (!editor || editor.isDestroyed) return;
+      editor.view.dispatch(editor.state.tr.insertText(text).scrollIntoView());
+    },
     selection() {
       if (!editor || editor.isDestroyed) return;
       const positions = textPositions(editor.state.doc);
@@ -692,18 +698,21 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
       // At the end of a heading, quote, or code block, its empty closing
       // structure is not content to carry into the next entry.
       if (from === to && !written(to, doc.content.size).trim()) return {
-        before: serializeEntry(doc.toJSON()), after: { content: '', tags: [] },
+        before: { ...serializeEntry(doc.toJSON()), document: doc.toJSON() }, after: { content: '', tags: [], document: null },
       };
       return {
-        before: text(0, from) ? serializeEntry(doc.cut(0, from).toJSON()) : { content: '', tags: [] },
-        after: text(to, doc.content.size) ? serializeEntry(doc.cut(to, doc.content.size).toJSON()) : { content: '', tags: [] },
+        before: text(0, from) ? { ...serializeEntry(doc.cut(0, from).toJSON()), document: doc.cut(0, from).toJSON() } : { content: '', tags: [], document: null },
+        after: text(to, doc.content.size) ? { ...serializeEntry(doc.cut(to, doc.content.size).toJSON()), document: doc.cut(to, doc.content.size).toJSON() } : { content: '', tags: [], document: null },
       };
     },
   }), [editor]);
   useEffect(() => {
     const snapshot = JSON.stringify([value, entryTags]);
     if (editor && snapshot !== lastSnapshot.current) {
+      const { anchor, head } = editor.state.selection;
       editor.commands.setContent(stored || documentWithTags(value, entryTags), { emitUpdate: false });
+      const end = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(anchor, end), to: Math.min(head, end) });
       lastSnapshot.current = snapshot;
     }
   }, [editor, value, entryTags]);

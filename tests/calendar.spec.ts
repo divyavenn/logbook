@@ -197,7 +197,7 @@ test('a failed background connection exposes its error when its alert icon is cl
     return { fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight, opacity: style.opacity };
   };
   expect(await errorMessage.evaluate(textStyle)).toEqual(await helpMessage.evaluate(textStyle));
-  await expect(errorMessage).toHaveCSS('color', 'rgb(153, 73, 59)');
+  await expect(errorMessage).toHaveCSS('color', 'rgb(143, 85, 109)');
   await alert.hover();
   await expect(errorMessage).toBeVisible();
   const [messageBox, removeBox] = await Promise.all([errorMessage.boundingBox(), dialog.getByRole('button', { name: 'Remove calendar.example', exact: true }).boundingBox()]);

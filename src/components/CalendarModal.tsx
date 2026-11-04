@@ -27,13 +27,13 @@ const BareField = styled(Field)`
 const SymbolButton = styled.button`
   display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 0; background: transparent;
   color: var(--muted); border-radius: 50%;
-  span { display: block; font-size: 19px; font-weight: 200; opacity: .5; transition: transform 140ms ease-out, color 140ms ease-out, opacity 140ms ease-out; }
-  &:hover span { transform: rotate(90deg); color: var(--ink); opacity: .9; }
+  span { display: block; font-size: 19px; font-weight: 200; opacity: .5; transition: transform 140ms ease-out, color 140ms ease, opacity 140ms ease-out; }
+  @media (hover: hover) and (pointer: fine) { &:hover span { transform: rotate(90deg); color: var(--ink); opacity: .9; } }
 `;
 const QuestionButton = styled(SymbolButton)`
   color: var(--link);
   span { width: 16px; height: 16px; display: grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; font-weight: 500; opacity: .72; }
-  &:hover span { transform: none; color: var(--link); opacity: 1; }
+  @media (hover: hover) and (pointer: fine) { &:hover span { transform: none; color: var(--link); opacity: 1; } }
 `;
 const spin = keyframes`to { transform: rotate(360deg); }`;
 const LoadingIndicator = styled.span`

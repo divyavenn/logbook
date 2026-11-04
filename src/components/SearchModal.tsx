@@ -31,7 +31,7 @@ export function SearchModal({ open, onClose, onSelect }: { open: boolean; onClos
     return () => { cancelled = true; clearTimeout(timeout); };
   }, [query, open]);
   useEffect(() => { if (open) document.getElementById(`search-result-${selected}`)?.scrollIntoView({ block: 'nearest' }); }, [selected, open]);
-  return <Modal open={open} onClose={onClose} title="Search journal" compact>
+  return <Modal open={open} onClose={onClose} title="Search journal" compact instant>
     <Input autoFocus aria-label="Search all notes and tasks" placeholder="Search" value={query} onChange={e => setQuery(e.target.value)}
       onKeyDown={e => {
         if (['ArrowDown', 'ArrowUp'].includes(e.key) && result.results.length) { e.preventDefault(); setSelected(value => (value + (e.key === 'ArrowDown' ? 1 : -1) + result.results.length) % result.results.length); }

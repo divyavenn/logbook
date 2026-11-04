@@ -28,6 +28,11 @@ export function ancestorIds(rows: readonly OutlineItem[], parentId: number | nul
   return [...seen];
 }
 
+export function inheritsTag(rows: readonly OutlineItem[], parentId: number | null, tag: string): boolean {
+  const ancestors = new Set(ancestorIds(rows, parentId));
+  return rows.some(row => ancestors.has(row.id) && row.tags?.includes(tag));
+}
+
 export function checkEntryDepth(rows: readonly OutlineItem[], id: number | null, parentId: number | null): void {
   const parents = ancestorIds(rows, parentId);
   if (id !== null && parents.includes(id)) throw new Error('An entry cannot be nested inside itself.');

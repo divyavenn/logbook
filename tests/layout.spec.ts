@@ -265,9 +265,11 @@ test('a mobile keyboard height change keeps the active editor mounted and stable
     expect(mobileMain.x).toBe(24);
     expect(440 - mobileMain.x - mobileMain.width).toBe(16);
     await expect(mobile.getByRole('navigation', { name: 'Tags' })).toHaveCount(0);
+    // Nothing takes the caret on load; typing starts today's note.
+    await mobile.keyboard.type('Mobile typing');
     const composer = mobile.getByRole('textbox', { name: 'New note', exact: true });
     await expect(composer).toBeFocused();
-    await composer.fill('Mobile typing');
+    await expect(composer).toHaveText('Mobile typing');
 
     await mobile.setViewportSize({ width: 440, height: 360 });
     await expect(mobile.getByRole('tablist', { name: 'Mobile views' })).toBeVisible();
@@ -411,9 +413,9 @@ test('task checkmarks preview completion and reopening on hover', async ({ page 
   expect(await unfinished.evaluate(el => getComputedStyle(el, '::after').opacity)).toBe('0');
   await unfinished.hover();
   await expect.poll(() => unfinished.evaluate(el => getComputedStyle(el, '::after').opacity)).toBe('1');
-  await expect.poll(() => unfinished.evaluate(el => getComputedStyle(el, '::before').borderColor)).toBe('rgb(24, 113, 186)');
+  await expect.poll(() => unfinished.evaluate(el => getComputedStyle(el, '::before').borderColor)).toBe('rgb(40, 105, 131)');
   expect(await unfinished.evaluate(el => getComputedStyle(el, '::before').backgroundColor)).toBe('rgba(0, 0, 0, 0)');
-  expect(await unfinished.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).toBe('rgb(24, 113, 186)');
+  expect(await unfinished.evaluate(el => getComputedStyle(el, '::after').backgroundColor)).toBe('rgb(40, 105, 131)');
   await unfinished.click();
   await expect(unfinished).toHaveAttribute('data-preview-suppressed', 'true');
   await expect.poll(() => unfinished.evaluate(el => getComputedStyle(el, '::after').opacity)).toBe('0');

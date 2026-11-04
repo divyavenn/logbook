@@ -30,9 +30,26 @@ CREATE TABLE IF NOT EXISTS calendar_subscriptions (
     feed_cache BLOB,
     created_at TEXT NOT NULL
 );
+-- A habit is its own record, not an entry: the task list draws it as a task
+-- each day until that day is done, and a done day is one row of habit_days.
+-- Giving a habit up archives it; the days it was done stay.
+CREATE TABLE IF NOT EXISTS habits (
+    id INTEGER PRIMARY KEY,
+    key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0 CHECK(position >= 0),
+    created_at TEXT NOT NULL,
+    archived_at TEXT
+);
+CREATE TABLE IF NOT EXISTS habit_days (
+    habit_id INTEGER NOT NULL REFERENCES habits(id),
+    date TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY(habit_id, date)
+);
 """
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 ENTRY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (

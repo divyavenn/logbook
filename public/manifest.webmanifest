@@ -1,0 +1,14 @@
+{
+  "name": "Logbook",
+  "short_name": "Logbook",
+  "description": "Personal logbook.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#faf4ed",
+  "theme_color": "#faf4ed",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

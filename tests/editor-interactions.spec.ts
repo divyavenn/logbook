@@ -515,7 +515,7 @@ test('inline tag text rides higher than the pill around it, saved and in the edi
 
 test('search can reopen during its exit transition without losing keyboard focus', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeVisible();
   await page.keyboard.press('Meta+f');
   const dialog = page.getByRole('dialog', { name: 'Search journal', exact: true });
   const search = dialog.getByRole('textbox');
@@ -529,5 +529,5 @@ test('search can reopen during its exit transition without losing keyboard focus
   await expect(search).toHaveValue('Immediately usable');
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
-  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).toBeFocused();
+  await expect(page.getByRole('textbox', { name: 'New note', exact: true })).not.toBeFocused();
 });
