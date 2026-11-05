@@ -425,27 +425,17 @@ def test_carrying_a_checked_task_to_another_date_leaves_it_a_task(client):
     assert task['id'] not in {row['id'] for row in client.get('/api/journal').json()['tasks']}
 
 
-def test_a_tagged_task_is_listed_under_its_tag_alone(client):
+def test_a_tagged_task_is_listed_in_the_main_view_and_under_its_tag(client):
     plain = create(client, 'tasks', 'Still listed')
-    filed = create(client, 'tasks', 'Filed away')
-    child = create(client, 'tasks', 'Beneath the filed one', filed['id'])
-    batch(client, [{'kind': 'tasks', 'id': filed['id'], 'content': 'Filed away', 'tags': ['errands']}])
-
-    listed = client.get('/api/journal').json()['tasks']
-    assert [row['id'] for row in listed] == [plain['id']]
-    filtered = client.get('/api/journal?tag=errands').json()['tasks']
-    assert {row['id'] for row in filtered} == {filed['id'], child['id']}
-
-
-def test_filing_a_subtask_leaves_its_parent_without_a_count(client):
-    parent = create(client, 'tasks', 'Parent')
-    child = create(client, 'tasks', 'Only child', parent['id'])
-    batch(client, [{'kind': 'tasks', 'id': child['id'], 'content': 'Only child', 'tags': ['errands']}])
+    tagged = create(client, 'tasks', 'Tagged')
+    child = create(client, 'tasks', 'Beneath the tagged one', tagged['id'])
+    batch(client, [{'kind': 'tasks', 'id': tagged['id'], 'content': 'Tagged', 'tags': ['errands']}])
 
     listed = {row['id']: row for row in client.get('/api/journal').json()['tasks']}
-    assert child['id'] not in listed
-    assert listed[parent['id']]['child_count'] == 0
-    assert listed[parent['id']]['completed_child_count'] == 0
+    assert set(listed) == {plain['id'], tagged['id'], child['id']}
+    assert listed[tagged['id']]['child_count'] == 1
+    filtered = client.get('/api/journal?tag=errands').json()['tasks']
+    assert {row['id'] for row in filtered} == {tagged['id'], child['id']}
 
 
 def test_deleting_a_parent_takes_its_whole_branch_and_undo_brings_it_back(client):

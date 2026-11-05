@@ -18,8 +18,8 @@ for (const kind of ['notes', 'tasks'] as const) {
     await composer.press('Enter');
     await expect(composer).toHaveText('');
     if (kind === 'tasks') {
-      // A tagged task is filed under its tag, and listed in that view alone.
-      await expect(page.getByRole('group', { name: new RegExp(`^A tagged ${kind}`) })).toHaveCount(0);
+      // A tagged task stays in the main list, and is listed under its tag too.
+      await expect(page.getByRole('group', { name: new RegExp(`^A tagged ${kind}`) })).toBeVisible();
       const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
       await rail.hover();
       await rail.getByRole('button', { name: `#unique-${kind}`, exact: true }).click();
@@ -522,8 +522,7 @@ test('a date in tag view opens that day in the full logbook', async ({ page, req
 test('completion animates out and in while preserving tag metadata', async ({ page, request }) => {
   const task = await (await request.post('/api/tasks', { data: { content: 'Animated task', tags: ['animation', 'filed'] } })).json();
   await page.goto('/');
-  // Tagging files it away, so the run happens in one of its tags' views, where
-  // the other tag still shows.
+  // The run happens in one of its tags' views, where the other tag still shows.
   const rail = page.getByRole('navigation', { name: 'Tags', exact: true });
   await rail.hover();
   await rail.getByRole('button', { name: '#filed', exact: true }).click();
@@ -635,22 +634,21 @@ test('a tag kept as text in a stored document still reads as a tag', async ({ pa
   await expect(filtered).toHaveText(/^written then filed\s*$/);
 });
 
-test('a task given its first tag waits after it is left, then fades from the untagged list', async ({ page }) => {
+test('a task given its first tag stays in the main list', async ({ page }) => {
   await page.goto('/');
   const add = page.getByRole('button', { name: 'Add task', exact: true });
   await expect(add).toBeVisible();
   await add.click();
   const composer = page.getByRole('textbox', { name: 'New task', exact: true });
-  await composer.pressSequentially('Filed later #errands');
+  await composer.pressSequentially('Tagged later #errands');
   await composer.press('Enter');
   await expect(composer).toHaveText('');
-  const filed = page.getByRole('group', { name: /^Filed later/ });
-  // Saved and filed by now, but the reader has only just left it.
-  await page.waitForTimeout(600);
-  await expect(filed).toBeVisible();
-  const row = filed.locator('xpath=ancestor::li[1]');
-  await expect.poll(async () => Number(await row.evaluate(element => getComputedStyle(element).opacity))).toBeLessThan(1);
-  await expect(filed).toHaveCount(0);
+  const tagged = page.getByRole('group', { name: /^Tagged later/ });
+  // Long past the moment it was saved, and past a reload, it is still listed.
+  await page.waitForTimeout(2500);
+  await expect(tagged).toBeVisible();
+  await page.reload();
+  await expect(tagged).toBeVisible();
 });
 
 test('a parent task opened in a filtered view stays open and editable', async ({ page, request }) => {

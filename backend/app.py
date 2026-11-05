@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 from .db import connection, initialize
-from .tags import entry_dict, list_tags, matching_ids, normalize_tag, tagged_ids
+from .tags import entry_dict, list_tags, matching_ids, normalize_tag
 from .stats import EMPTY_TOTALS, daily_totals, parse, slices, stamp
 from .hierarchy import descendants, next_position, remove_with_children
 from .tasks import visible_tasks
@@ -275,21 +275,6 @@ def journal(timezone: str = "UTC", before: CalendarDate | None = None, tag: str 
         tasks = visible_tasks(db)
         if task_ids is not None:
             tasks = [task for task in tasks if task["id"] in task_ids]
-        else:
-            # A tagged task is filed under its tag, and is listed in that view
-            # alone, along with everything beneath it.
-            filed = tagged_ids(db, "tasks")
-            withheld: dict[int, tuple[int, int]] = {}
-            for task in tasks:
-                if task["id"] in filed and task["parent_id"] is not None:
-                    total, done = withheld.get(task["parent_id"], (0, 0))
-                    withheld[task["parent_id"]] = (total + 1, done + bool(task["completed_at"]))
-            # A parent must not promise progress on children it no longer shows.
-            tasks = [task if task["id"] not in withheld else {
-                **task,
-                "child_count": task["child_count"] - withheld[task["id"]][0],
-                "completed_child_count": task["completed_child_count"] - withheld[task["id"]][1],
-            } for task in tasks if task["id"] not in filed]
         active = next((session_dict(s, now) for s in sessions if s["ended_at"] is None), None)
         return {"today": today, "content_format": "markdown", "tag": normalize_tag(tag) if tag else None, "tags": list_tags(db), "days": days, "tasks": tasks,
                 "habits": habits_due(db, today) if not tag else [], "active_session": active,
