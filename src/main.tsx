@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import styled from 'styled-components';
+import { PageBoundary } from './recovery';
 import App from './App';
 import { GlobalStyle, applyTheme } from './styles';
 import { PasswordGate } from './components/PasswordGate';
@@ -91,5 +92,5 @@ function Root() {
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><GlobalStyle /><Root /></React.StrictMode>,
+  <React.StrictMode><GlobalStyle /><PageBoundary><Root /></PageBoundary></React.StrictMode>,
 );

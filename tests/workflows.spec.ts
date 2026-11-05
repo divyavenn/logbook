@@ -80,7 +80,9 @@ test('a reopened root task animates into its saved position ahead of the compose
 
 test('a new subtask added in the logbook starts checked and can reopen its tree', async ({ page, request }) => {
   const parent = await (await request.post('/api/tasks', { data: { content: 'Extended project' } })).json();
-  await request.post(`/api/tasks/${parent.id}/complete`);
+  // Filed under the reader's day, as the page itself would ask: without a
+  // timezone it would be UTC's, which in the evening is tomorrow.
+  await request.post(`/api/tasks/${parent.id}/complete?timezone=America/Los_Angeles`);
   await page.goto('/');
   await page.getByRole('group', { name: 'Extended project', exact: true }).click();
   await page.getByRole('textbox', { name: 'Edit task', exact: true }).press('Meta+ArrowDown');

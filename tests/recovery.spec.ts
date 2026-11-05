@@ -98,3 +98,35 @@ for (const failure of ['blocked', 'full'] as const) {
     expect(pageErrors).toEqual([]);
   });
 }
+
+test.describe('a page running an older build', () => {
+  // The service worker would answer from its cache; these tests stand for
+  // the moment a new build has replaced it.
+  test.use({ serviceWorkers: 'block' });
+
+  test('reloads into the new build when a part it asks for is gone', async ({ page }) => {
+    let missing = true;
+    await page.route('**/assets/StatsModal-*.js', route => missing ? (missing = false, route.fulfill({ status: 404, body: 'Not Found' })) : route.continue());
+    await page.goto('/');
+    await page.getByRole('navigation', { name: 'Tags', exact: true }).hover();
+    await page.getByRole('button', { name: 'Open habits and focus', exact: true }).click();
+    // The page comes back, and the panel opens from the build that has it.
+    await page.waitForEvent('load');
+    await page.getByRole('navigation', { name: 'Tags', exact: true }).hover();
+    await page.getByRole('button', { name: 'Open habits and focus', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Statistics', exact: true })).toBeVisible();
+  });
+
+  test('keeps the page when a part cannot be had at all', async ({ page }) => {
+    await page.route('**/assets/StatsModal-*.js', route => route.fulfill({ status: 404, body: 'Not Found' }));
+    await page.goto('/');
+    await page.getByRole('navigation', { name: 'Tags', exact: true }).hover();
+    await page.getByRole('button', { name: 'Open habits and focus', exact: true }).click();
+    await page.waitForEvent('load');
+    await page.getByRole('navigation', { name: 'Tags', exact: true }).hover();
+    await page.getByRole('button', { name: 'Open habits and focus', exact: true }).click();
+    // The panel cannot open, but the logbook is still there.
+    await expect(page.getByRole('region', { name: 'to do', exact: true })).toBeVisible();
+    await expect(page.getByTestId('log-scroll')).toBeVisible();
+  });
+});

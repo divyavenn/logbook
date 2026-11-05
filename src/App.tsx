@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import styled, { css } from 'styled-components';
 import { CalendarDays, ChartNoAxesColumn, Github, Moon, Sun, Timer as TimerIcon } from 'lucide-react';
@@ -18,6 +18,7 @@ import { LOG_WASH_HEIGHT, compactViewport, narrowViewport, shortViewport } from 
 import { usePager } from './usePager';
 import { useIdleEntry } from './useIdleEntry';
 import { haptic } from './haptics';
+import { PartBoundary, lazyPart } from './recovery';
 import { glide, reducedMotion } from './motion';
 import { useEntryGestures } from './useEntryGestures';
 import { entryError } from './entryFeedback';
@@ -39,10 +40,10 @@ const rememberedPane = (): View => {
 const TASKS_CROWD_HEIGHT = 0.2;
 const TASKS_SETTLE_HEIGHT = 0.17;
 const REPOSITORY_URL = import.meta.env.VITE_REPOSITORY_URL || 'https://github.com/divyavenn/still';
-const SessionsModal = lazy(() => import('./components/SessionsModal').then(module => ({ default: module.SessionsModal })));
-const StatsModal = lazy(() => import('./components/StatsModal').then(module => ({ default: module.StatsModal })));
-const SearchModal = lazy(() => import('./components/SearchModal').then(module => ({ default: module.SearchModal })));
-const CalendarModal = lazy(() => import('./components/CalendarModal').then(module => ({ default: module.CalendarModal })));
+const SessionsModal = lazyPart(() => import('./components/SessionsModal').then(module => ({ default: module.SessionsModal })));
+const StatsModal = lazyPart(() => import('./components/StatsModal').then(module => ({ default: module.StatsModal })));
+const SearchModal = lazyPart(() => import('./components/SearchModal').then(module => ({ default: module.SearchModal })));
+const CalendarModal = lazyPart(() => import('./components/CalendarModal').then(module => ({ default: module.CalendarModal })));
 
 const Page = styled.div<{ $focusing: boolean }>`
   --current-page-paper: ${({ $focusing }) => $focusing ? 'var(--page-focus-paper)' : 'var(--page-paper)'};
@@ -835,12 +836,12 @@ export default function App({ locked = false, load = !locked, onReady, onLoadErr
         </MobilePager>
       </> : pane('log')}
     </Main>
-    <Suspense fallback={null}>
+    <PartBoundary><Suspense fallback={null}>
       {openedModals.current.has('sessions') && <SessionsModal date={sessionsDate} onClose={() => setSessionsDate(null)} onChange={refresh} />}
       {openedModals.current.has('stats') && <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} onChange={refresh} openDate={date => void jumpToDate(date)} />}
       {openedModals.current.has('search') && <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelect={jumpTo} />}
       {openedModals.current.has('calendar') && <CalendarModal open={calendarOpen} onClose={() => setCalendarOpen(false)} onChange={refresh} />}
-    </Suspense>
+    </Suspense></PartBoundary>
     <Modal open={soundOpen} onClose={() => setSoundOpen(false)} title="Focus sound" compact><SoundMenu>
       <TextButton aria-label={audible ? 'Mute focus sound' : 'Play focus sound'} onClick={() => void toggleSound()}>{audible ? 'Mute' : 'Play sound'}</TextButton>
       <input aria-label="Focus sound volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={e => { const value = Number(e.target.value); setVolume(value); storage.setItem('still-volume', String(value)); sound.current.setVolume(value); }} />
