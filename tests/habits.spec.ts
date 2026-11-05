@@ -176,7 +176,7 @@ test('focus reads as its weekly average, and a day shows its time as soon as it 
   const cell = chart.locator(`[data-date="${day}"]`);
   await expect(cell).toHaveAttribute('data-level', '1');
   await cell.hover();
-  await expect(stats.getByText('1h 10m', { exact: true })).toBeVisible();
+  await expect(stats.getByText('1h 10m', { exact: true }).filter({ visible: true })).toBeVisible();
   await expect(stats.getByText(/^[a-z]{3} \d{1,2}$/)).toBeVisible();
   // With room across, the chart stands beside the list: this week heads it,
   // and the earlier weeks wait below.

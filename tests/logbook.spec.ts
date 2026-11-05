@@ -209,7 +209,7 @@ test('write, autosave, complete a task, use the timer, and edit sessions', async
   // Seventy-five minutes over the week is a little under eleven a day.
   await expect(statsDialog.getByRole('button', { name: 'Show focus chart, 0h 10m a day this week', exact: true })).toBeVisible();
   await statsDialog.locator(`[data-date="${day}"]`).hover();
-  await expect(statsDialog.getByText('1h 15m', { exact: true })).toBeVisible();
+  await expect(statsDialog.getByText('1h 15m', { exact: true }).filter({ visible: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/statistics-desktop.png' });
   await page.keyboard.press('Escape');
   expect(errors).toEqual([]);
