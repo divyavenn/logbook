@@ -518,7 +518,7 @@ export function RichTextEditor({ ref, value, tags: entryTags, label, readOnly, d
     if (!names.length) { suggest(null); return; }
     const rect = current.view.coordsAtPos(from);
     const start = current.view.coordsAtPos(from - match[1].length - 1);
-    const left = Math.max(12, Math.min(start.left - 7, window.innerWidth - 242));
+    const left = Math.max(12, Math.min(start.left, window.innerWidth - 242));
     suggest({ from: from - match[1].length - 1, to: from, query, names, index: 0,
       left, top: rect.top });
   };

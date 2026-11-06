@@ -23,10 +23,17 @@ const Header = styled.div`
 const Day = styled.div`
   grid-column: 2; display: grid; justify-items: center; gap: 8px; font-variant-numeric: tabular-nums;
 `;
-// The day's focus and habits, under its name. The line holds its height
-// empty, so the panel keeps still as the day changes.
+// The day's focus and habits, under its name. The line is always as large as
+// it would be with every habit done and the longest focus: an unseen copy of
+// that fullest day sits in the same place, so the panel keeps its size as the
+// pointer moves from day to day.
+const DayDetails = styled.div`
+  display: grid; justify-items: center;
+  > * { grid-area: 1 / 1; }
+`;
 const DayDetail = styled.div`
   min-height: 28px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0 10px;
+  &[aria-hidden="true"] { visibility: hidden; }
 `;
 // The day as a heading, which leads to it in the logbook.
 const DayTitle = styled.button`
@@ -286,6 +293,13 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
     <Header>
       {loaded && <Day aria-live="polite">
         <DayTitle type="button" aria-label={`Open ${longLabel(day)} in the logbook`} onClick={() => { onClose(); openDate(day); }}>{longLabel(day)}</DayTitle>
+        <DayDetails>
+        <DayDetail aria-hidden="true">
+          {(() => { const seconds = Math.max(0, ...stats.daily.map(row => row.focused_seconds)); return seconds > 0 && <DayFocus>{duration(seconds, false)}</DayFocus>; })()}
+          <DayPills>{habits.map(habit => <li key={habit.id}><Pill as="span" $fresh={false}>
+            <Check size={11} strokeWidth={2.25} />{habit.name}
+          </Pill></li>)}</DayPills>
+        </DayDetail>
         <DayDetail>
         {(() => { const seconds = stats.daily.find(row => row.date === day)?.focused_seconds ?? 0; return seconds > 0 && <DayFocus>{duration(seconds, false)}</DayFocus>; })()}
         {/* The habits done that day, taken back the way they are in the logbook. */}
@@ -295,6 +309,7 @@ export function StatsModal({ open, onClose, onChange, openDate }: {
             <Check size={11} strokeWidth={2.25} aria-hidden="true" /><X size={11} strokeWidth={2.25} aria-hidden="true" />{habit.name}
           </Pill></li>)}</DayPills>
         </DayDetail>
+        </DayDetails>
       </Day>}
       <DownloadLink href="/api/backup" download aria-label="Download SQLite backup" title="Download SQLite backup">
         <Download size={14} aria-hidden="true" />

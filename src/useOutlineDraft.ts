@@ -11,12 +11,10 @@ type DraftContext = {
   key: string; documentStore: OutlineDocument; items: OutlineItem[]; defaultKind: EntryKind;
   // Called when a saved edit drops the tag this view filters by.
   onUnfiled?: (id: number) => void;
-  // Called when a saved edit gives an entry its first tag in the unfiltered view.
-  onFiled?: (id: number) => void;
   composer: boolean; day?: string; activeTag: string | null;
 };
 
-export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled, onFiled }: DraftContext) {
+export function useOutlineDraft({ key, documentStore, items, defaultKind, composer, day, activeTag, onUnfiled }: DraftContext) {
   const mounted = useRef(true);
   // Empty writing areas carry no content. A root gets the current tag once
   // writing starts; children already belong through their tagged ancestor.
@@ -86,10 +84,9 @@ export function useOutlineDraft({ key, documentStore, items, defaultKind, compos
     // takes its leave of this view.
     if (activeTag && value.savedTags.includes(activeTag) && !value.tags.includes(activeTag)
       && !inheritsTag(records.current, value.parentId, activeTag)) onUnfiled?.(id);
-    if (!activeTag && value.tags.length && !value.savedTags.length) onFiled?.(id);
     persist({ ...value, id, saved: value.content, savedTags: value.tags });
     return id;
-  }, [activeTag, day, documentStore, onUnfiled, onFiled, persist]);
+  }, [activeTag, day, documentStore, onUnfiled, persist]);
   const save = useCallback(() => {
     const id = stageDraft();
     if (mounted.current) setSaving(true);

@@ -26,6 +26,9 @@ export const GlobalStyle = createGlobalStyle`
        the base, so the roles that carry words take a deeper step of each. */
     --paper: #faf4ed; --ink: #575279; --muted: #6e6a86; --line: #dfdad9; --sage: #6e6a86; --soft: #f2e9e1;
     --surface: #fffaf3; --field: #fffaf3; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #f2e9e1; --tag-ink: #6e6a86; --tag-selected: #286983;
+    /* Tags are the entry's own ink, dimmed as far as it reads at AA on every
+       ground the day theme uses; the night ink has more to give. */
+    --tag-text-strength: 88%;
     --code-bg: #f2e9e1; --code-ink: #286983; --quote: #6e6a86; --selection: #dfdad9; --focus: #907aa9;
     --link: #286983; --url: #6e5e85; --checkbox: #9893a5; --scrollbar: #cecacd;
     --timer-ring: #9893a5; --timer: #6e6a86; --timer-hover: #575279; --timer-ink: #fffaf3;
@@ -33,12 +36,12 @@ export const GlobalStyle = createGlobalStyle`
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 16%);
     --chrome-opacity: 1; --focus-chrome-opacity: .78;
     --primary: #575279; --primary-hover: #6e6a86; --primary-ink: #fffaf3;
-    --danger: #8f556d; --backdrop: #57527933; --chart: #b5cfd3; --chart-today: #286983; --chart-hover: #56949f; --chart-select: var(--ink); --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
+    --danger: #8f556d; --backdrop: #57527933; --chart: #b5cfd3; --chart-today: #286983; --chart-hover: #56949f; --chart-select: var(--ink);
   }
   :root[data-theme='night'] {
     color-scheme: dark;
     --paper: #011627; --ink: #c0c7d1; --muted: #a3b0bf; --line: #294559; --sage: #b1c4cc; --soft: #193447;
-    --surface: #0a2133; --field: #102a3f; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #26394a; --tag-ink: #c0c7d1; --tag-selected: #75d1c4;
+    --surface: #0a2133; --field: #102a3f; --date-bg: color-mix(in srgb, var(--muted) 22%, transparent); --tag-bg: #26394a; --tag-ink: #c0c7d1; --tag-selected: #75d1c4; --tag-text-strength: 71%;
     --code-bg: #183340; --code-ink: #9bc2b9; --quote: #a3b9be; --selection: #315366; --focus: #75d1c4;
     --link: #75d1c4; --url: #b7a4dd; --checkbox: #8ca0b0; --scrollbar: #35556a;
     --timer-ring: #486578; --timer: #24394a; --timer-hover: #304b60; --timer-ink: #dbe4ea;
@@ -46,7 +49,7 @@ export const GlobalStyle = createGlobalStyle`
     --page-paper: var(--paper); --page-focus-paper: color-mix(in srgb, var(--paper), #000 20%);
     --chrome-opacity: 1; --focus-chrome-opacity: .78;
     --primary: #75d1c4; --primary-hover: #9ddece; --primary-ink: #011627;
-    --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5; --chart-select: #ffffff; --habit-pill: color-mix(in srgb, var(--link) 25%, transparent); --habit-pill-ink: var(--ink);
+    --danger: #efaa9c; --backdrop: #000b16aa; --chart: #355e65; --chart-today: #75d1c4; --chart-hover: #96e0d5; --chart-select: #ffffff;
   }
   * { box-sizing: border-box; }
   /* A pull at the top of a pane is the pane's own, never a reload in the

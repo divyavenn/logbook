@@ -8,12 +8,17 @@ export const TagDecorations = Extension.create({
   addProseMirrorPlugins() {
     return [new Plugin({ props: { decorations(state) {
       const decorations: Decoration[] = [];
-      const { empty, from, $from } = state.selection;
+      const { empty, from, to, $from } = state.selection;
+      const ranged = !empty && !(state.selection instanceof NodeSelection);
       const before = empty && $from.parent.type.name !== 'codeBlock' ? $from.parent.textBetween(0, $from.parentOffset, '', '\ufffc') : '';
       const activeMatch = /(?:^|[^\p{L}\p{N}_/#&])#([\p{L}\p{N}_-]{0,64})$/u.exec(before);
       const activeFrom = activeMatch ? from - activeMatch[1].length - 1 : -1;
       state.doc.descendants((node, position) => {
         if (node.type.name === 'codeBlock') return false;
+        if (ranged && node.type.name === 'journalTag' && position >= from && position + node.nodeSize <= to) {
+          decorations.push(Decoration.node(position, position + node.nodeSize, { class: 'journal-tag-selected' }));
+          return;
+        }
         if (!node.isText || node.marks.some(mark => mark.type.name === 'code' || mark.type.name === 'link')) return;
         for (const tag of tagMatches(node.text ?? '')) {
           const tagFrom = position + tag.from, tagTo = position + tag.to;
