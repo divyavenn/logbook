@@ -37,19 +37,18 @@ for (const kind of ['notes', 'tasks'] as const) {
     await expect.poll(async () => Number(await preview.locator('xpath=ancestor::li[1]').getAttribute('data-item-id'))).toBeGreaterThan(0);
     const tagTypography = await tag.evaluate(element => {
       const style = getComputedStyle(element), parent = getComputedStyle(element.parentElement!);
-      const background = getComputedStyle(element, '::before');
       return { fontFamily: style.fontFamily, parentFontFamily: parent.fontFamily,
         fontSize: style.fontSize, parentFontSize: parent.fontSize,
-        verticalAlign: style.verticalAlign,
+        verticalAlign: style.verticalAlign, background: style.backgroundColor,
         paddingLeft: style.paddingLeft, paddingRight: style.paddingRight,
-        marginLeft: style.marginLeft, marginRight: style.marginRight,
-        transform: style.transform, backgroundTransform: background.transform };
+        marginLeft: style.marginLeft, marginRight: style.marginRight, transform: style.transform };
     });
+    // Set in the text's own type, with no pill around it.
     expect(tagTypography).toMatchObject({
-      fontFamily: tagTypography.parentFontFamily, paddingLeft: '7px', paddingRight: '8px', marginLeft: '0px', marginRight: '0px',
-      verticalAlign: 'baseline', transform: 'none', backgroundTransform: 'none',
+      fontFamily: tagTypography.parentFontFamily, fontSize: tagTypography.parentFontSize,
+      paddingLeft: '0px', paddingRight: '0px', marginLeft: '0px', marginRight: '0px',
+      verticalAlign: 'baseline', transform: 'none', background: 'rgba(0, 0, 0, 0)',
     });
-    expect(parseFloat(tagTypography.parentFontSize) - parseFloat(tagTypography.fontSize)).toBeCloseTo(.5, 1);
     let data = await (await request.get('/api/export')).json();
     const row = data[kind].find((item: { content: string }) => item.content === `A tagged ${kind} #unique-${kind}`);
     expect(row.tags).toEqual([`unique-${kind}`]);

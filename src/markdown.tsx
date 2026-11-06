@@ -326,15 +326,13 @@ export function serializeEntry(document: JSONContent): { content: string; tags: 
   return { content: markdownSerializer.serialize(schema.nodeFromJSON(clean)).trim(), tags: [...tags] };
 }
 
+// A tag reads as the words around it, dimmed, and still moves as one piece:
+// the line breaks around it, never through it.
 const inlineTagStyles = css`
-  display: inline-block; position: relative; isolation: isolate; max-width: 100%; vertical-align: baseline; translate: 0 0;
-  padding: 0 8px 0 7px; margin: 0; color: var(--tag-ink);
-  font: inherit; font-size: calc(1em - .5px); white-space: normal; overflow-wrap: anywhere;
-  /* The pill keeps its place on the line while its text rides 1px higher. */
-  &::before {
-    content: ''; position: absolute; z-index: -1; inset: 0 0 -2px;
-    border-radius: 999px; background: var(--tag-bg);
-  }
+  display: inline-block; max-width: 100%; vertical-align: baseline; padding: 0; margin: 0;
+  color: color-mix(in srgb, currentColor var(--tag-text-strength), transparent);
+  font: inherit; white-space: normal; overflow-wrap: anywhere;
+  transition: color 120ms ease;
 `;
 const TagBubble = styled.span`${inlineTagStyles}`;
 // A reference to another entry: a hollow pill holding a glimpse of what it
@@ -357,8 +355,8 @@ export const richTextStyles = css`
   font-size: var(--entry-size, 18px); line-height: var(--entry-line-height, 1.4); overflow-wrap: anywhere; white-space: pre-wrap;
   .journal-tag { ${inlineTagStyles} }
   .journal-tag-query::after { content: var(--tag-completion, ''); color: var(--link); }
-  .journal-tag.ProseMirror-selectednode { outline: none; color: var(--paper); }
-  .journal-tag.ProseMirror-selectednode::before { background: var(--tag-ink); }
+  /* A selected tag, on its own or within a selection, takes the accent. */
+  .journal-tag.ProseMirror-selectednode, .journal-tag.journal-tag-selected { outline: none; color: var(--link); }
   p { margin: 0; }
   p + p { margin-top: var(--entry-paragraph-gap, .4em); }
   strong { font-weight: 700; }

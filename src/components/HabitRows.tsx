@@ -91,7 +91,8 @@ export const Pill = styled.button<{ $fresh: boolean }>`
   position: relative; display: inline-flex; align-items: center; gap: 4px; height: 22px; margin: 2px ${PILL_GAP}px 2px 0;
   /* The bottom inset lifts the text to the middle of the marks beside it. */
   padding: 0 9px 2px 7px; border: 0; border-radius: 999px; white-space: nowrap; overflow: hidden;
-  font-size: 12px; color: var(--habit-pill-ink); background: var(--habit-pill);
+  /* Quieter than the entries around it: read if wanted, never the first thing seen. */
+  font-size: 12px; color: var(--tag-ink); background: var(--tag-bg);
   transition: background-color 140ms ease, scale 120ms ease-out;
   ${({ $fresh }) => $fresh ? css`
     transition-property: background-color, scale, opacity; transition-duration: 140ms, 120ms, 200ms;
@@ -105,7 +106,7 @@ export const Pill = styled.button<{ $fresh: boolean }>`
   /* A finger sees the cross the moment it lands. */
   &:active:not(:disabled) { > svg:first-of-type { opacity: 0; scale: .6; } > svg + svg { opacity: 1; scale: 1; } }
   @media (hover: hover) and (pointer: fine) { &:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--link) 38%, transparent);
+    background: color-mix(in srgb, var(--tag-bg), var(--tag-ink) 14%);
     > svg:first-of-type { opacity: 0; scale: .6; }
     > svg + svg { opacity: 1; scale: 1; }
   } }

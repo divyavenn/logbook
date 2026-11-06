@@ -492,25 +492,45 @@ for (const kind of ['notes', 'tasks'] as const) {
   });
 }
 
-test('inline tag text rides higher than the pill around it, saved and in the editor', async ({ page, request }) => {
+test('a tag reads as dimmed text, and takes the accent when selected', async ({ page, request }) => {
   const { today } = await (await request.get('/api/journal?timezone=America/Los_Angeles')).json();
   await request.post('/api/notes', { data: { date: today, content: 'Text with #focus tag', tags: ['focus'] } });
   await page.goto('/');
   const saved = page.getByRole('group', { name: 'Text with #focus tag', exact: true });
-  // The text sits 1px above the centre of its own pill background.
-  const offsets = (tag: Locator) => tag.evaluate(element => {
-    const pill = getComputedStyle(element, '::before');
-    const top = parseFloat(pill.top), bottom = parseFloat(pill.bottom);
-    return { top, bottom, raised: (top + bottom) / -2 };
+  // Colours are compared as the pixels they paint, whatever form they are written in.
+  const colours = (tag: Locator) => tag.evaluate(element => {
+    const paint = (colour: string) => {
+      const context = Object.assign(document.createElement('canvas'), { width: 1, height: 1 }).getContext('2d')!;
+      context.fillStyle = colour; context.fillRect(0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].join(',');
+    };
+    const probe = document.createElement('span');
+    probe.style.color = 'color-mix(in srgb, currentColor var(--tag-text-strength), transparent)';
+    element.parentElement!.append(probe);
+    const half = paint(getComputedStyle(probe).color);
+    probe.style.color = 'var(--link)';
+    const accent = paint(getComputedStyle(probe).color);
+    probe.remove();
+    return { colour: paint(getComputedStyle(element).color), half, accent };
   });
-  const savedTag = await offsets(saved.locator('[data-tag="focus"]'));
-  expect(savedTag.raised).toBeCloseTo(1, 1);
+  const savedTag = await colours(saved.locator('[data-tag="focus"]'));
+  expect(savedTag.colour).toBe(savedTag.half);
   await saved.click();
   const editor = page.getByRole('textbox', { name: 'Edit note', exact: true });
-  const editorTag = await offsets(editor.locator('[data-tag="focus"]'));
-  expect(editorTag).toEqual(savedTag);
-  await expect(page.getByTestId('tag-backdrop')).toHaveCSS('opacity', '0');
-  await editor.screenshot({ path: 'test-results/inline-tag-alignment.png' });
+  const tag = editor.locator('[data-tag="focus"]');
+  // The entry's ink eases over as it opens, so the tag is read once both have settled.
+  await expect.poll(async () => { const now = await colours(tag); return now.colour === now.half; }).toBe(true);
+  const editing = await colours(tag);
+  // Selected on its own, as the caret steps onto it.
+  await page.keyboard.press('End');
+  for (let i = 0; i < ' tag'.length; i++) await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(async () => (await colours(tag)).colour).toBe(editing.accent);
+  // And within a wider selection.
+  await page.keyboard.press('ControlOrMeta+a');
+  await expect.poll(async () => (await colours(tag)).colour).toBe(editing.accent);
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => { const now = await colours(tag); return now.colour === now.half; }).toBe(true);
 });
 
 test('search can reopen during its exit transition without losing keyboard focus', async ({ page }) => {
