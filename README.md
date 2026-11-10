@@ -58,8 +58,6 @@ I personally like to live and die honestly. If you don't want your lack of actio
   - Top left is stats icon. Click to see trends in your total focus time + longest continuous focus session over days
 
 
-    <img width="883" height="598" alt="image" src="https://github.com/user-attachments/assets/6653ef6c-7017-4691-bebb-3b5c0fdc89a3" />
-
 
 #### calendar context
   - Open the calendar icon in the sidebar and paste public or private ICS/webcal subscription URLs, including public calendars you do not own.
