@@ -31,8 +31,6 @@ You will need a Render Account. If you wanna have my updates and fixes come in a
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/divyavenn/logbook)
 
-<img height="500" alt="image" src="https://github.com/user-attachments/assets/581c6451-91bd-46b6-ad59-6fea882915fd" /> 
-
 
 #### set a password if you want
 I personally like to live and die honestly. If you don't want your lack of action and subpar thinking out there on a link on the web for anyone to find, go to this deployment in Render, and add/modify these environment variables in Render settings.
